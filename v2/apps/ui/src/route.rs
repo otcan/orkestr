@@ -11,6 +11,8 @@
 //!   own settings stay at `#conversation/<id>/settings` (ORK-789).
 //! - `#credentials`: the owner's passwords, tokens and API keys (ORK-826),
 //!   opened from Orkestr settings.
+//! - `#sites`: the sites and apps the owner's chats published (ORK-834),
+//!   opened from Orkestr settings or a chat's Site link.
 //!
 //! Navigation groups (ORK-786): a conversation shows [`Tab::PRIMARY`] and
 //! keeps the rest under "More" ([`Tab::MORE`]); [`Tab::GLOBAL`] views belong
@@ -33,10 +35,11 @@ pub enum Tab {
     Settings,
     OrkestrSettings,
     Credentials,
+    Sites,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 14] = [
+    pub const ALL: [Tab; 15] = [
         Tab::Chat,
         Tab::Work,
         Tab::Files,
@@ -51,6 +54,7 @@ impl Tab {
         Tab::Settings,
         Tab::OrkestrSettings,
         Tab::Credentials,
+        Tab::Sites,
     ];
     /// Always visible in a conversation's heading.
     pub const PRIMARY: [Tab; 3] = [Tab::Chat, Tab::Work, Tab::Files];
@@ -64,13 +68,14 @@ impl Tab {
         Tab::LiveMap,
         Tab::Settings,
     ];
-    /// Owner-wide views, opened from the app header (Credentials from
-    /// Orkestr settings).
-    pub const GLOBAL: [Tab; 4] = [
+    /// Owner-wide views, opened from the app header (Credentials and Sites
+    /// from Orkestr settings).
+    pub const GLOBAL: [Tab; 5] = [
         Tab::VirtualDesks,
         Tab::Host,
         Tab::OrkestrSettings,
         Tab::Credentials,
+        Tab::Sites,
     ];
 
     /// Shows the chat: Chat itself, and Files, whose panel opens beside or
@@ -101,6 +106,7 @@ impl Tab {
             Tab::Settings => "Chat settings",
             Tab::OrkestrSettings => "Orkestr settings",
             Tab::Credentials => "Credentials",
+            Tab::Sites => "Sites",
         }
     }
     pub fn slug(self) -> &'static str {
@@ -119,6 +125,7 @@ impl Tab {
             Tab::Settings => "settings",
             Tab::OrkestrSettings => "orkestr-settings",
             Tab::Credentials => "credentials",
+            Tab::Sites => "sites",
         }
     }
     pub fn from_label(label: &str) -> Option<Tab> {
@@ -136,6 +143,7 @@ pub enum Route {
     VirtualDesks,
     OrkestrSettings,
     Credentials,
+    Sites,
     Conversation {
         id: String,
         tab: Tab,
@@ -191,6 +199,7 @@ impl Route {
             }
             ["settings"] => Some(Route::OrkestrSettings),
             ["credentials"] => Some(Route::Credentials),
+            ["sites"] => Some(Route::Sites),
             ["conversation", id, slug] => Some(Route::Conversation {
                 id: uuid(id)?,
                 tab: Tab::from_slug(slug)?,
@@ -220,6 +229,7 @@ impl Route {
             Route::VirtualDesks => "/virtual-desks".into(),
             Route::OrkestrSettings => "#settings".into(),
             Route::Credentials => "#credentials".into(),
+            Route::Sites => "#sites".into(),
             Route::Conversation { id, tab: Tab::Chat } => format!("#conversation/{id}"),
             Route::Conversation { id, tab } => format!("#conversation/{id}/{}", tab.slug()),
             Route::V1Thread { thread } => format!("#v1/{thread}"),

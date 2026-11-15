@@ -14,6 +14,7 @@ pub mod provider_handoff;
 mod reconcile;
 pub mod run_state;
 pub mod session_scope;
+pub mod sites;
 pub mod stop;
 pub mod tracker_setup;
 pub mod tracker_table;

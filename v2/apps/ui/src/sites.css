@@ -1,0 +1,42 @@
+/* Sites (ORK-834): one table on wide screens, one card per site on phones. */
+.sites-page { max-width: 72rem; margin: 0 auto; padding: 1rem 1.1rem 2rem; display: flex; flex-direction: column; gap: .75rem; }
+.sites-intro { margin: 0; color: var(--muted); }
+.sites-notice { margin: 0; padding: .5rem .75rem; border: 1px solid var(--warn-border); border-radius: var(--radius-sm); background: var(--warn-soft); color: var(--warn-text); font-size: .88rem; }
+.sites-count { margin: 0; color: var(--muted); font-size: .85rem; }
+.sites-empty { margin: 0; padding: 1.5rem 1rem; text-align: center; color: var(--muted); border: 1px dashed var(--border-strong); border-radius: var(--radius); }
+.sites-empty code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .88em; padding: .05rem .3rem; border-radius: .3rem; background: var(--surface-3); color: var(--text); white-space: nowrap; }
+
+.sites-table-wrap { overflow-x: auto; }
+.sites-table { width: 100%; border-collapse: separate; border-spacing: 0; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow); }
+.sites-table th { text-align: left; font-size: .78rem; font-weight: 600; letter-spacing: .02em; color: var(--muted); padding: .6rem .75rem; background: var(--surface-2); border-bottom: 1px solid var(--border); }
+.sites-table td { padding: .65rem .75rem; vertical-align: top; border-bottom: 1px solid var(--border); font-size: .9rem; }
+.sites-table tbody tr:last-child td { border-bottom: none; }
+.site-name strong { display: block; overflow-wrap: anywhere; }
+.site-address { display: block; color: var(--muted); font-size: .8rem; overflow-wrap: anywhere; }
+.site-chat { overflow-wrap: anywhere; }
+.site-none, .site-disabled { color: var(--faint); }
+.site-kind { display: inline-block; padding: .1rem .5rem; border-radius: 999px; font-size: .75rem; white-space: nowrap; background: var(--surface-3); color: var(--text); }
+.site-kind[data-kind=app] { background: var(--info-soft); color: var(--info-text); }
+.site-published time { white-space: nowrap; }
+.site-version { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.site-open { text-align: right; white-space: nowrap; }
+.site-open-link { display: inline-flex; align-items: center; min-height: 2.25rem; padding: .3rem .8rem; border-radius: var(--radius-sm); background: var(--accent); color: var(--accent-contrast); font-size: .85rem; font-weight: 600; text-decoration: none; }
+.site-open-link:hover { background: var(--accent-strong); color: var(--accent-contrast); }
+.site-row[data-status=disabled] td { color: var(--faint); }
+.site-row[data-status=disabled] .site-name strong, .site-row[data-status=disabled] .site-kind { opacity: .7; }
+
+/* Phones: each site is a card; every cell names its column. */
+@media (max-width: 720px) {
+  .sites-page { padding: .75rem .75rem 1.5rem; }
+  .sites-table, .sites-table tbody, .sites-table tr, .sites-table td { display: block; width: 100%; box-sizing: border-box; }
+  .sites-table-wrap { overflow-x: visible; }
+  .sites-table { border: none; background: transparent; box-shadow: none; overflow: visible; }
+  .sites-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .sites-table tr.site-row { margin-top: .6rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow); }
+  .sites-table td { border-bottom: none; padding: .35rem .85rem; }
+  .sites-table td[data-label]::before { content: attr(data-label); display: block; font-size: .72rem; color: var(--faint); text-transform: uppercase; letter-spacing: .04em; }
+  .sites-table td.site-name::before, .sites-table td.site-open::before { content: none; }
+  .sites-table td.site-name { padding-top: .75rem; font-size: 1rem; }
+  .site-open { text-align: left; padding-bottom: .75rem !important; }
+  .site-open-link { min-height: 2.75rem; }
+}

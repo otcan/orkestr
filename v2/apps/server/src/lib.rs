@@ -75,6 +75,7 @@ pub mod offline_python;
 pub mod owned_children;
 pub mod owned_execution;
 mod owner_password;
+mod private_file;
 #[cfg(test)]
 mod provider_handoff_http_tests;
 mod provider_payload;
@@ -92,6 +93,7 @@ mod routes;
 mod service_credentials;
 mod sidebar_http;
 mod sidebar_v1;
+mod sites_http;
 mod source_intake_http;
 mod source_receipts_http;
 mod steering_http;
@@ -165,6 +167,8 @@ pub struct AppState {
     vault_reader: Arc<vault_http::ReaderState>,
     /// The credentials page's store (ORK-826): the built-in vault by default.
     credentials: credentials_http::Backend,
+    /// Where the host's sites catalog is read (ORK-834); none until startup names it.
+    sites: sites_http::SitesCatalog,
 }
 impl AppState {
     /// Trusted operator assertion after all unattended consumers use service credentials.
@@ -411,6 +415,7 @@ impl AppState {
             provider_policy: None,
             vault_reader: Arc::default(),
             credentials: Default::default(),
+            sites: Default::default(),
             v1_timers: Default::default(),
             claude_turns: false,
             restricted: None,
@@ -654,7 +659,7 @@ pub fn router_with_google_catalog(
     catalog: google_registry_metadata::RegistryCatalog,
 ) -> Router {
     Router::new()
-        .route("/api/v2/health",get(|| async { Json(serde_json::json!({"status":"ok","product":"orkestr-v2","contract_version":0,"fixture_mode":false,"features":["message_author","message_revisions_v1","message_retries_v1","thread_asks","agent_timers","source_receipts_v1","root_intake_v1","fast_run_receipts_v1","provider_quotas_v1","provider_sign_in_v1","local_files_v1","local_file_writes_waiting_v1","vault_v1","held_input_lookup_v1","credentials_v1"],"build":build_identity::identity(),"deployment":deployment_identity::identity()})) }))
+        .route("/api/v2/health",get(|| async { Json(serde_json::json!({"status":"ok","product":"orkestr-v2","contract_version":0,"fixture_mode":false,"features":["message_author","message_revisions_v1","message_retries_v1","thread_asks","agent_timers","source_receipts_v1","root_intake_v1","fast_run_receipts_v1","provider_quotas_v1","provider_sign_in_v1","local_files_v1","local_file_writes_waiting_v1","vault_v1","held_input_lookup_v1","credentials_v1","sites_v1"],"build":build_identity::identity(),"deployment":deployment_identity::identity()})) }))
         .route("/api/v2/setup",get(auth::setup_status).post(auth::setup))
         .route("/api/v2/session",post(auth::session))
         .route("/api/v2/machine/session",post(auth::session))
@@ -741,6 +746,7 @@ pub fn router_with_google_catalog(
         .merge(google_registry_metadata::router(catalog))
         .merge(vault_http::router())
         .merge(credentials_http::router())
+        .merge(sites_http::router())
         // Labels each matched request with its route template for logs and metrics.
         .route_layer(middleware::from_fn(observability::record_route))
         .fallback(|| async { Error(StatusCode::NOT_FOUND,"not_found","Endpoint not found") })

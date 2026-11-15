@@ -102,7 +102,7 @@ impl Summary {
     }
 
     pub(crate) fn load(path: &std::path::Path) -> Summary {
-        match super::private_file::read(path, MAX_FILE, false) {
+        match crate::private_file::read(path, MAX_FILE, false) {
             Ok(Some(text)) => Summary::parse(&text),
             _ => Summary::default(),
         }

@@ -74,7 +74,7 @@ impl Catalog {
     }
 
     pub(crate) fn load(path: &std::path::Path, now_ms: i64) -> Option<Catalog> {
-        match super::private_file::read(path, MAX_FILE, false) {
+        match crate::private_file::read(path, MAX_FILE, false) {
             Ok(Some(text)) => Catalog::parse(&text, now_ms),
             _ => None,
         }

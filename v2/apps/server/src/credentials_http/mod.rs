@@ -25,7 +25,6 @@ mod catalog;
 mod loopback;
 mod model;
 mod openbao;
-mod private_file;
 #[cfg(test)]
 mod tests;
 mod usage;
@@ -128,10 +127,7 @@ fn no_store(status: StatusCode, value: impl serde::Serialize) -> Response {
 
 /// The exact credential of a password-signed-in owner browser session.
 async fn session(state: &AppState, headers: &HeaderMap) -> Result<String, Error> {
-    browser::owner(state, headers).await?;
-    let credential = browser::credential(headers)?;
-    state.store.vault_owner(&credential).await.map_err(vault)?;
-    Ok(credential)
+    browser::password_session(state, headers).await
 }
 
 fn reader(state: &AppState) -> Option<&str> {

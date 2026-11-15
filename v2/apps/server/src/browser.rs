@@ -84,6 +84,22 @@ pub(crate) async fn owner(state: &AppState, headers: &HeaderMap) -> Result<Owner
         .await?
         .ok_or_else(unauthorized)
 }
+/// The exact credential of a password-signed-in owner browser session: a
+/// machine token or a service session is refused. The check of the owner's
+/// credentials (ORK-826) and sites (ORK-834) pages.
+pub(crate) async fn password_session(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<String, Error> {
+    owner(state, headers).await?;
+    let credential = credential(headers)?;
+    state
+        .store
+        .vault_owner(&credential)
+        .await
+        .map_err(crate::vault_http::failure)?;
+    Ok(credential)
+}
 pub(crate) async fn guard(
     state: &AppState,
     method: &Method,

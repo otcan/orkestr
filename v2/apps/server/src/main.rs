@@ -213,6 +213,9 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         ),
         None => eprintln!("credentials: store {}", state.credentials_backend()),
     }
+    // Optional: the host's sites catalog (ORK-834), read per request; a
+    // missing file lists no sites.
+    state = state.with_sites_catalog(&home);
     let listener = tokio::net::TcpListener::bind(bind).await?;
     let catalog = match std::env::var_os("ORKESTR_V2_GOOGLE_CATALOG") {
         Some(path) => {

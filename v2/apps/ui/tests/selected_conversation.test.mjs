@@ -33,3 +33,8 @@ test('Orkestr settings are global: no conversation pointer, kept when the defaul
  for(const hash of ['#settings/x','#settingsx',`#conversation/${id}/orkestr-settings`]) assert.equal(keepsFragment(hash,id),false,hash);
  assert.equal(selectedConversation(`#conversation/${id}/orkestr-settings`),null);
 });
+test('the Sites page is global: kept when the default conversation is selected on reload (ORK-834)',()=>{
+ assert.equal(selectedConversation('#sites'),null);
+ for(const selected of [null,id]) assert.equal(keepsFragment('#sites',selected),true);
+ for(const hash of ['#sites/x','#sitesx',`#conversation/${id}/sites`]) assert.equal(keepsFragment(hash,id),false,hash);
+});

@@ -60,6 +60,7 @@ mod restricted_view;
 mod rich_text_view;
 mod scroll_pin;
 mod sidebar_resize;
+mod sites_view;
 mod steering_view;
 mod stop_button;
 mod timer_bridge;
@@ -111,6 +112,8 @@ pub struct GlobalViews {
     pub settings: Signal<u64>,
     /// Bumped by Orkestr settings' "Open credentials" (ORK-826).
     pub credentials: Signal<u64>,
+    /// Bumped by Orkestr settings' "Open sites" (ORK-834).
+    pub sites: Signal<u64>,
     pub shown: Signal<Option<orkestr_v2_ui::route::Tab>>,
 }
 
@@ -148,6 +151,7 @@ fn App() -> Element {
         desks: Signal::new(0),
         settings: Signal::new(0),
         credentials: Signal::new(0),
+        sites: Signal::new(0),
         shown: Signal::new(None),
     });
     // The view named by the URL at load; the workspace opens it once mounted.
@@ -271,7 +275,7 @@ fn App() -> Element {
                         }
                         // Account and server-wide settings; a chat's own settings stay under its More menu.
                         button { r#type: "button", class: "global-link global-settings", title: "Orkestr settings: account, credentials, provider sign-in and this installation",
-                            "aria-current": if matches!((global_views.shown)(), Some(orkestr_v2_ui::route::Tab::OrkestrSettings | orkestr_v2_ui::route::Tab::Credentials)) { "page" } else { "false" },
+                            "aria-current": if matches!((global_views.shown)(), Some(orkestr_v2_ui::route::Tab::OrkestrSettings | orkestr_v2_ui::route::Tab::Credentials | orkestr_v2_ui::route::Tab::Sites)) { "page" } else { "false" },
                             onclick: move |_| { let mut settings = global_views.settings; settings += 1; },
                             svg { "aria-hidden": "true", view_box: "0 0 20 20", width: "18", height: "18",
                                 circle { cx: "10", cy: "10", r: "2.6", fill: "none", stroke: "currentColor", stroke_width: "1.5" }

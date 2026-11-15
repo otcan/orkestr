@@ -32,6 +32,7 @@ pub fn Workspace(
         Some(Route::VirtualDesks) => Tab::VirtualDesks,
         Some(Route::OrkestrSettings) => Tab::OrkestrSettings,
         Some(Route::Credentials) => Tab::Credentials,
+        Some(Route::Sites) => Tab::Sites,
         _ => Tab::Chat,
     });
     let mut host_charts = use_signal(|| matches!(initial, Some(Route::Host { charts: true, .. })));
@@ -92,34 +93,25 @@ pub fn Workspace(
         Some(Route::V1Thread { thread }) => Some(thread.clone()),
         _ => None,
     });
-    // The header's Settings button opens Orkestr settings (ORK-789). It also
-    // drops a V1 chat the URL named but the list has not shown yet, so that
-    // chat cannot replace the settings page when it appears.
-    let open_settings = global_views.settings;
-    let mut seen_settings = use_signal(|| *open_settings.peek());
-    use_effect(move || {
-        let requested = open_settings();
-        if requested != *seen_settings.peek() {
-            seen_settings.set(requested);
-            wanted.set(None);
-            linked.set(None);
-            execution.write().select(&current.peek(), "");
-            tab.set(Tab::OrkestrSettings);
-        }
+    // The header's Settings button opens Orkestr settings (ORK-789), and
+    // Orkestr settings opens Credentials (ORK-826) and Sites (ORK-834). Each
+    // also drops a V1 chat the URL named but the list has not shown yet, so
+    // that chat cannot replace the page when it appears.
+    let mut open_page = move |page: Tab| {
+        wanted.set(None);
+        linked.set(None);
+        execution.write().select(&current.peek(), "");
+        tab.set(page);
+    };
+    use_page_request(global_views.settings, move || {
+        open_page(Tab::OrkestrSettings)
     });
-    // Orkestr settings opens Credentials (ORK-826) the same way.
-    let open_credentials = global_views.credentials;
-    let mut seen_credentials = use_signal(|| *open_credentials.peek());
-    use_effect(move || {
-        let requested = open_credentials();
-        if requested != *seen_credentials.peek() {
-            seen_credentials.set(requested);
-            wanted.set(None);
-            linked.set(None);
-            execution.write().select(&current.peek(), "");
-            tab.set(Tab::Credentials);
-        }
+    use_page_request(global_views.credentials, move || {
+        open_page(Tab::Credentials)
     });
+    use_page_request(global_views.sites, move || open_page(Tab::Sites));
+    // Published sites (ORK-834): the open chat's Site link and the Sites page.
+    let sites = crate::sites_view::use_sites_catalog(session_scope);
     // The URL follows the view: each change the owner makes is a history entry.
     let mut shown = use_signal(|| None::<Route>);
     use_effect(move || {
@@ -131,6 +123,7 @@ pub fn Workspace(
             None if tab() == Tab::VirtualDesks => Route::VirtualDesks,
             None if tab() == Tab::OrkestrSettings => Route::OrkestrSettings,
             None if tab() == Tab::Credentials => Route::Credentials,
+            None if tab() == Tab::Sites => Route::Sites,
             None if tab() == Tab::Host => Route::Host {
                 charts: host_charts(),
                 range: host_range(),
@@ -178,15 +171,14 @@ pub fn Workspace(
                     linked.set(None);
                     tab.set(Tab::VirtualDesks);
                 }
-                Route::OrkestrSettings => {
+                page @ (Route::OrkestrSettings | Route::Credentials | Route::Sites) => {
                     wanted.set(None);
                     linked.set(None);
-                    tab.set(Tab::OrkestrSettings);
-                }
-                Route::Credentials => {
-                    wanted.set(None);
-                    linked.set(None);
-                    tab.set(Tab::Credentials);
+                    tab.set(match page {
+                        Route::Credentials => Tab::Credentials,
+                        Route::Sites => Tab::Sites,
+                        _ => Tab::OrkestrSettings,
+                    });
                 }
                 Route::Host { charts, range } => {
                     linked.set(None);
@@ -346,6 +338,7 @@ pub fn Workspace(
                             }
                         }
                         if linked().is_none() {
+                            crate::sites_view::HeaderSiteLink { sites, conversation: current(), onall: move |_| open_page(Tab::Sites) }
                             ConversationNav { tab: tab(), onpick: move |name: Tab| {
                                 if tab() == name { return; }
                                 // Chat and Files are one mounted chat (the Files
@@ -406,6 +399,8 @@ pub fn Workspace(
                         } else if tab() == Tab::Credentials {
                             // Owner-wide like Orkestr settings, never under a chat (ORK-826).
                             crate::credentials_view::Credentials { key: "credentials-{session_scope.read().generation()}", csrf, session_scope, onexpired }
+                        } else if tab() == Tab::Sites {
+                            crate::sites_view::Sites { key: "sites-{session_scope.read().generation()}", sites, session_scope }
                         } else {
                             crate::chat_settings_view::ChatSettings { key: "settings-{current()}-{session_scope.read().generation()}", conversation: current(), csrf, session_scope, onexpired }
                         }
@@ -414,6 +409,19 @@ pub fn Workspace(
             }
         }
     }
+}
+
+/// Runs `open` each time `requests` is bumped after mount (a page opened
+/// from a button elsewhere in the app).
+fn use_page_request(requests: Signal<u64>, mut open: impl FnMut() + 'static) {
+    let mut seen = use_signal(|| *requests.peek());
+    use_effect(move || {
+        let requested = requests();
+        if requested != *seen.peek() {
+            seen.set(requested);
+            open();
+        }
+    });
 }
 
 #[component]
