@@ -179,6 +179,17 @@ JSON cannot authorize cancellation, bypass readiness or create a grant. Typed
 Worker orchestration and activation remain separate gates. Claude role admission
 is unchanged pending its separate typed composition.
 
+### Execution window lifetime and follow-up joins (ORK-840)
+
+A window opens with a fixed 15-minute lifetime (`ledger.py` enforces exactly that for new windows).
+While a turn keeps working, the server extends it (`extend_while_working`) up to the 4-hour ceiling
+(`MAX_LIFETIME_SECONDS`, the same bound as the server's wire check). Follow-up joins into an
+extended window, such as host-tool results, timers or owner messages, are checked against the window's
+*current* deadline: `contract.py` accepts any lifetime from 15 minutes up to the ceiling, with
+`work_deadline == expires - DRAIN`. A refused request gets the requesting conversation's own window
+status, never the newest window of another chat. Until ORK-840, every join after the first extension
+was refused with `window_deadlines`, and its host result was retired unseen.
+
 ## Diagnostics on an installed service
 
 Installed service packages have a closed, protected inventory. Use `python3 -I -S -B` and `PYTHONDONTWRITEBYTECODE=1` when importing their modules for diagnostics; store scripts, caches and output outside the package. Root-owned bytecode is still an unexpected file. The running manager rechecks inventory before admission and child binding, refuses immediately on invalid inventory, and emits one value-free `ALERT orkestr-v2-manager package_inventory_invalid` journal record per invalid episode. Route that record to the operator alert sink. It does not delete files, modify the manifest, accept extra files or weaken child ownership checks.
