@@ -19,7 +19,7 @@ const grant = { id: "grant-a", ownerUserId: "owner-a", agentId: "agent-a", issue
   expiresAt: "2099-01-01T00:00:00Z", observe: "all", reply: "all", message: "all" };
 const TOKEN = "synthetic-adapter-token";
 
-const role = (phase, extra = {}) => ({ phase, runId: "00000000-0000-4000-8000-00000000000a", observedAtMs: Date.now(), ...extra });
+const role = (phase, extra = {}) => ({ phase, runId: "00000000-0000-4000-8000-00000000000a", observedAtMs: Date.now(), queueObserved: true, queueAgeMs: null, ...extra });
 const projection = (publicThreadId, deep, fast = null, queuedInputs = []) => ({ ok: true, version: 1, source: "core", publicThreadId,
   conversationId: "00000000-0000-4000-8000-0000000000c1", observedAtMs: Date.now(), roles: { deep, fast }, queuedInputs, taskOutcome: "unknown" });
 
@@ -98,6 +98,36 @@ test("a running native Claude run, a queued input and a completed run are report
   assert.equal(done.execution.phase, "completed", "native completion, accepted by Core");
   assert.equal(done.taskOutcome, "unknown", "not proof that the task succeeded");
   assert.equal(done.lastAnswer.messageId, answer.id);
+});
+
+test("eligible pending Core input is reported next to a running or finished run", async (t) => {
+  const { env, remote } = await fixture(t);
+  const answer = await mirroredHistory(env);
+  // Running Deep run with more eligible input behind it.
+  remote.answer(200, projection("thread-a", role("running", { provider: "codex", queueAgeMs: 30_000 })));
+  const running = await bridgeThreadStatus("thread-a", principal, env);
+  assert.equal(running.state, "working");
+  assert.deepEqual(running.execution.pendingInput, { observed: true, pending: true, oldestAgeMs: 30_000 });
+  assert.equal(running.queuedMessages, null, "an age is not a count");
+  // Finished run; inputs dispatched into the open window are no longer
+  // window-queued but still pending in Core's inbox.
+  remote.answer(200, projection("thread-a", role("completed", { queueAgeMs: 600_000 })));
+  const finished = await bridgeThreadStatus("thread-a", principal, env);
+  assert.equal(finished.state, "queued", "not idle while Core has eligible input");
+  assert.equal(finished.queuedMessages, null);
+  assert.equal(finished.execution.phase, "completed");
+  assert.equal(finished.lastAnswer.messageId, answer.id);
+  // Held or consumed input: Core reports no eligible age.
+  remote.answer(200, projection("thread-a", role("completed", { queueAgeMs: null })));
+  const settled = await bridgeThreadStatus("thread-a", principal, env);
+  assert.equal(settled.state, "idle");
+  assert.equal(settled.queuedMessages, 0);
+  // An adapter or Core without the field: unobserved, never idle.
+  remote.answer(200, projection("thread-a", role("completed", { queueObserved: undefined, queueAgeMs: undefined })));
+  const older = await bridgeThreadStatus("thread-a", principal, env);
+  assert.equal(older.state, "unknown");
+  assert.equal(older.lastError, "native_queue_unobserved");
+  assert.equal(older.queuedMessages, null);
 });
 
 test("failed, blocked and cancelled native runs are not idle", async (t) => {

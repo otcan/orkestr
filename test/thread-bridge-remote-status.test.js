@@ -5,7 +5,10 @@ import { remoteBridgeStatus, remoteInputActivity } from "../packages/core/src/th
 const stamp = 1_800_000_000_000;
 const thread = { id: "synthetic-thread", runtime: { activeTurnId: "obsolete" }, binding: { remoteThreadId: "remote-thread", remoteBackend: "rust" } };
 const env = { ORKESTR_REMOTE_THREAD_BACKENDS_JSON: JSON.stringify({ rust: { baseUrl: "http://127.0.0.1:12345", token: "synthetic-token" } }) };
-const role = (phase, extra = {}) => ({ phase, runId: "00000000-0000-4000-8000-00000000000a", observedAtMs: stamp, lastProgressAtMs: stamp - 100, ...extra });
+// As the adapter projects Core: Deep reads carry the eligible inbox age
+// (null when nothing eligible is pending).
+const role = (phase, extra = {}) => ({ phase, runId: "00000000-0000-4000-8000-00000000000a", observedAtMs: stamp, lastProgressAtMs: stamp - 100,
+  queueObserved: true, queueAgeMs: null, ...extra });
 const projection = () => ({ version: 1, source: "core", publicThreadId: thread.id, conversationId: "00000000-0000-4000-8000-0000000000c1", observedAtMs: stamp,
   roles: { fast: null, deep: role("running") }, queuedInputs: [], taskOutcome: "unknown" });
 const options = (value, calls = [], extra = {}) => ({ now: () => stamp, ...extra, fetchImpl: async (url, init) => {
@@ -57,11 +60,70 @@ test("queued native input is queued, with a count only where Core gives one", as
   const windowed = await remoteBridgeStatus(thread, env, options(value));
   assert.equal(windowed.state, "queued");
   assert.equal(windowed.queuedMessages, 1);
-  const inbox = projection(); inbox.roles.deep = { phase: "queued", runId: null, observedAtMs: stamp };
+  const inbox = projection(); inbox.roles.deep = { phase: "queued", runId: null, observedAtMs: stamp, queueObserved: true, queueAgeMs: 2500 };
   const status = await remoteBridgeStatus(thread, env, options(inbox));
   assert.equal(status.state, "queued");
   assert.equal(status.queuedMessages, null, "queued, count not observed - never zero");
   assert.equal(status.execution.phase, "queued");
+  assert.deepEqual(status.execution.pendingInput, { observed: true, pending: true, oldestAgeMs: 2500 });
+});
+
+test("a running run with eligible pending input stays working and reports the pending input", async () => {
+  const value = projection(); value.roles.deep = role("running", { queueAgeMs: 4000 });
+  const status = await remoteBridgeStatus(thread, env, options(value));
+  assert.equal(status.state, "working");
+  assert.deepEqual(status.execution.pendingInput, { observed: true, pending: true, oldestAgeMs: 4000 });
+  assert.equal(status.queuedMessages, null, "Core gives an age, not a count: never a guessed number");
+  const fast = projection(); fast.roles.deep = role("completed", { queueAgeMs: 900 }); fast.roles.fast = role("running", { queueAgeMs: null });
+  const both = await remoteBridgeStatus(thread, env, options(fast));
+  assert.equal(both.state, "working");
+  assert.equal(both.execution.pendingInput.pending, true, "the inbox is read from the Deep status");
+});
+
+test("a finished run with eligible pending input is queued, not idle", async () => {
+  // Inputs dispatched into an open window are no longer window-queued, yet
+  // still pending in Core's inbox.
+  for (const phase of ["completed", "awaiting_acceptance", "failed", "blocked", "cancelled"]) {
+    const value = projection(); value.roles.deep = role(phase, { queueAgeMs: 120_000 });
+    const status = await remoteBridgeStatus(thread, env, options(value));
+    assert.equal(status.state, "queued", phase);
+    assert.equal(status.queuedMessages, null, phase);
+    assert.equal(status.lastError, null, phase);
+    assert.equal(status.execution.phase, phase, "the run's own phase stays visible");
+    assert.deepEqual(status.execution.pendingInput, { observed: true, pending: true, oldestAgeMs: 120_000 });
+    assert.equal(status.taskOutcome, "unknown");
+  }
+});
+
+test("held or consumed input (no eligible age from Core) leaves an exact count", async () => {
+  // Core's age excludes held inputs and steers that consumed their input; a
+  // null age is its observation that nothing eligible is pending.
+  const value = projection(); value.roles.deep = role("completed", { queueAgeMs: null });
+  const status = await remoteBridgeStatus(thread, env, options(value));
+  assert.equal(status.state, "idle");
+  assert.equal(status.queuedMessages, 0);
+  assert.deepEqual(status.execution.pendingInput, { observed: true, pending: false, oldestAgeMs: null });
+  const noRun = projection(); noRun.roles.deep = null;
+  const empty = await remoteBridgeStatus(thread, env, options(noRun));
+  assert.equal(empty.state, "idle", "no Deep status at all means no run and nothing eligible queued");
+  assert.equal(empty.queuedMessages, 0);
+});
+
+test("a missing or malformed Core age is unobserved, never idle or zero", async () => {
+  for (const deep of [role("completed", { queueObserved: undefined, queueAgeMs: undefined }), role("completed", { queueObserved: false, queueAgeMs: 50 }),
+    role("completed", { queueAgeMs: -1 }), role("completed", { queueAgeMs: "60" })]) {
+    const value = projection(); value.roles.deep = deep;
+    const status = await remoteBridgeStatus(thread, env, options(value));
+    assert.equal(status.state, "unknown", JSON.stringify(deep));
+    assert.equal(status.lastError, "native_queue_unobserved");
+    assert.equal(status.queuedMessages, null);
+    assert.deepEqual(status.execution.pendingInput, { observed: false, pending: null, oldestAgeMs: null });
+    assert.equal(status.execution.available, true, "the rest of the native status still stands");
+  }
+  const running = projection(); running.roles.deep = role("running", { queueObserved: undefined });
+  assert.equal((await remoteBridgeStatus(thread, env, options(running))).state, "working");
+  const failed = projection(); failed.roles.deep = role("failed", { queueObserved: undefined, failure: "quota" });
+  assert.equal((await remoteBridgeStatus(thread, env, options(failed))).state, "last_turn_failed");
 });
 
 test("completion, acceptance and failures stay distinct from task success", async () => {
