@@ -105,7 +105,7 @@ const tools = {
   },
   get_thread_status: {
     title: "Get an Orkestr thread's status",
-    description: "Whether a thread's agent is working, has queued messages, or is idle, plus its runtime/model and the start of its last answer.",
+    description: "Whether a thread's agent is working, has queued messages, or is idle, plus its runtime/model and the start of its last answer. For a thread delegated to Orkestr V2 the state comes from the native execution (`execution`): it is unknown, never idle, when that cannot be read, and taskOutcome stays unknown because a finished run is not proof the task succeeded.",
     inputSchema: { thread_id: z.string().min(1).max(128) },
     readOnly: true,
     run: (input, principal, env) => bridgeThreadStatus(input.thread_id, principal, env),
