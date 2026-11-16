@@ -38,7 +38,8 @@ class BuildAssetTransportTests(unittest.TestCase):
         lines = [line.strip() for line in workflow.splitlines()
                  if line.strip().startswith('curl ') and 'gitleaks' in line]
         self.assertEqual(len(lines), 2)
-        self.assertTrue(lines[0].endswith('||'))
+        self.assertTrue(lines[0].endswith('&& api_ok=yes'))
+        self.assertNotIn('||', workflow[workflow.index(lines[0]):workflow.index('sha256sum --check --status')])
         fallback = shlex.split(lines[1])
         self.assertIn('https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz',
                       fallback)
