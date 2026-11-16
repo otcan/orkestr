@@ -8,6 +8,8 @@ import threading
 import io
 import json
 import os
+import socket
+import struct
 import subprocess
 import unittest
 from unittest.mock import patch
@@ -19,7 +21,7 @@ from codex_bounded.trust import process
 import codex_service.manager as module
 import codex_service.manager_uncertain as uncertain
 import codex_service.ownership as ownership
-from codex_service.contract import Refused
+from codex_service.contract import Refused, encode
 from codex_service.ledger import Ledger
 from codex_service.manager import Manager
 from test_codex_service_ledger import Clock, uid
@@ -203,6 +205,57 @@ class Windows(unittest.TestCase):
         self.manager.windows[a["window_id"]].egress_closed = True
         with self.assertRaisesRegex(Refused, "window_not_extendable"):
             self.manager.dispatch({**extend, "request_id": uid(), "expires_at_ms": a["opened_at_ms"] + 2_700_000})
+
+    def join(self, request, expires):
+        return {**request, "request_id": uid(), "input_message_id": uid(), "input_event_id": uid(),
+                "input_request_key": uid(), "expected_generation": 1,
+                "work_deadline_ms": expires - 30_000, "expires_at_ms": expires}
+
+    def exchange(self, frame):
+        """One control request through Manager.once(): real framing, decode,
+        dispatch and ledger; only the server peer check is synthetic."""
+        server, client = socket.socketpair()
+        self.addCleanup(client.close)
+        client.sendall(frame)
+        self.manager.peer = SimpleNamespace(accepts=lambda _connection: True)
+        self.manager.control = SimpleNamespace(socket=SimpleNamespace(accept=lambda: (server, None)))
+        self.manager.due = lambda: False
+        self.manager.once()
+        client.settimeout(1)
+        raw = b""
+        while chunk := client.recv(65536):
+            raw += chunk
+        self.assertEqual(struct.unpack("!I", raw[:4])[0], len(raw) - 4)
+        return json.loads(raw[4:])
+
+    def test_a_join_after_extension_is_admitted_through_the_control_socket(self):
+        # ORK-840: before, decode refused every join naming an extended deadline.
+        a = self.admit(self.home)
+        extended = a["opened_at_ms"] + 1_800_000
+        self.clock.advance(270)
+        scope = ("version", "owner_id", "conversation_id", "window_id", "generation")
+        self.manager.dispatch({**{k: a[k] for k in scope}, "operation": "extend",
+                               "request_id": uid(), "expires_at_ms": extended})
+        self.clock.advance(630)  # Past the original 15-minute deadline.
+        answer = self.exchange(encode(self.join(a, extended)))
+        self.assertEqual((answer["ok"], answer["fresh_window"]), (True, False))
+        self.assertEqual((answer["receipt"]["window_id"], answer["receipt"]["state"],
+                          answer["receipt"]["expires_at_ms"]), (a["window_id"], "active", extended))
+
+    def test_a_refused_join_answers_with_its_own_conversations_window(self):
+        a = self.admit(self.home)
+        b = self.admit(uid(), "second")  # Another chat's window is the newest of all.
+        self.ledger.drain(a["window_id"], 1)
+        answer = self.exchange(encode(self.join(a, a["expires_at_ms"])))
+        self.assertEqual((answer["ok"], answer["code"]), (False, "control_refused"))
+        self.assertEqual((answer["receipt"]["conversation_id"], answer["receipt"]["window_id"],
+                          answer["receipt"]["state"]), (self.home, a["window_id"], "draining"))
+        # A request that never parsed names no conversation: the newest window, as before.
+        unparsed = self.join(a, a["opened_at_ms"] + 14_400_001)
+        answer = self.exchange(encode(unparsed))
+        self.assertEqual((answer["ok"], answer["code"]), (False, "control_refused"))
+        self.assertEqual((answer["receipt"]["conversation_id"], answer["receipt"]["window_id"]),
+                         (b["conversation_id"], b["window_id"]))
 
     def test_server_loss_marks_every_live_window(self):
         a, b = self.admit(self.home), self.admit(uid())

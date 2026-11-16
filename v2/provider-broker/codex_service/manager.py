@@ -513,7 +513,13 @@ class Manager:
                     # retried refusal (uncertain cleanup) logged every attempt.
                     from .manager_uncertain import refusal_notice
                     refusal_notice(self, operation, request, error)
-                answer = {"ok": False, "code": "control_refused", "receipt": self.ledger.status()}
+                # The requesting chat's own window: Core refuses a receipt for
+                # any other conversation as a protocol error, which kept a
+                # refused join without acknowledgement. A request that never
+                # parsed names no conversation and keeps the newest window.
+                conversation = request.get("conversation_id") if isinstance(request, dict) else None
+                answer = {"ok": False, "code": "control_refused",
+                          "receipt": self.ledger.status(conversation)}
             except (OSError, ValueError):
                 answer = {"ok": False, "code": "control_unavailable"}
             finally:
