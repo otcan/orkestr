@@ -297,6 +297,13 @@ server for clients such as ChatGPT plugins:
   adapter binding (`GET threads/<remote id>/status`, the backend's existing
   bearer token, 3 s timeout) and checked to answer for this thread. It adds
   `execution` (native phase, active role, per-role run, provider and model),
+  `execution.pendingInput` (Core's eligible pending inbox input: the age of
+  the oldest queued or claimed input that is not held; reserved steering has
+  consumed its input, deferred steering stays pending. Core gives an age, not
+  a count, so pending input makes `queuedMessages` null instead of a guessed
+  number; a running run with pending input stays `working`, a finished run
+  with pending input is `queued`; without Core's field the inbox is
+  unobserved and a thread with nothing running is `unknown`, not idle),
   `pendingForwardMessages` (V1 inputs the adapter has not acknowledged) and
   `taskOutcome: "unknown"`: a native run that `completed` (accepted by Core)
   or is `awaiting_acceptance` is not proof that the task succeeded. States
