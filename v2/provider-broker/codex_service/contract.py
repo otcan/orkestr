@@ -135,7 +135,12 @@ def decode(raw):
                 and not any(unicodedata.category(c) == "Cc" for c in value["input_request_key"]), "input_request_key")
         if value["predecessor_window_id"] is not None:
             identifier(value["predecessor_window_id"])
-        require(value["expires_at_ms"] == value["opened_at_ms"] + LIFETIME_SECONDS * 1000 and
+        # A join names its window's current deadline, which an extension may
+        # have moved up to the lifetime ceiling. Ledger.admit still requires
+        # a new window to last exactly LIFETIME_SECONDS and a join to name the
+        # recorded deadline exactly.
+        lifetime = value["expires_at_ms"] - value["opened_at_ms"]
+        require(LIFETIME_SECONDS * 1000 <= lifetime <= MAX_LIFETIME_SECONDS * 1000 and
                 value["work_deadline_ms"] == value["expires_at_ms"] - DRAIN_SECONDS * 1000,
                 "window_deadlines")
     if operation == "retire":

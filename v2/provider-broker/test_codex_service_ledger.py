@@ -160,6 +160,60 @@ class LedgerTests(unittest.TestCase):
         with self.assertRaisesRegex(contract.Refused, "window_not_accepting_inputs"):
             self.ledger.admit(followup)
 
+    def extend(self, request, expires):
+        return self.ledger.extend({**{k: request[k] for k in (
+            "owner_id", "conversation_id", "window_id", "generation")}, "expires_at_ms": expires})
+
+    def join(self, request, expires):
+        """A follow-up into `request`'s window as Core sends it, naming `expires`."""
+        return {**request, "request_id": uid(), "input_message_id": uid(), "input_event_id": uid(),
+                "input_request_key": uid(), "expected_generation": request["generation"],
+                "work_deadline_ms": expires - 30_000, "expires_at_ms": expires}
+
+    def test_join_after_extension_is_admitted_through_the_wire_contract(self):
+        # ORK-840: Core extends a working window at open+4:30; a host-tool
+        # result joining it afterwards names the extended deadline.
+        request = self.admit()
+        opened = request["opened_at_ms"]
+        self.clock.advance(270)
+        self.extend(request, opened + 1_800_000)
+        self.clock.advance(630)  # Past the original 15-minute deadline.
+        join = contract.decode(contract.canonical(self.join(request, opened + 1_800_000)))
+        receipt, fresh = self.ledger.admit(join)
+        self.assertFalse(fresh)
+        self.assertEqual((receipt["window_id"], receipt["state"], receipt["opened_at_ms"],
+                          receipt["work_deadline_ms"], receipt["expires_at_ms"]),
+                         (request["window_id"], "active", opened, opened + 1_770_000, opened + 1_800_000))
+        self.assertFalse(self.ledger.admit(join)[1])  # An exact replay is read evidence only.
+        # The ledger still requires the recorded deadline, never the original one.
+        stale = contract.decode(contract.canonical(self.join(request, opened + 900_000)))
+        with self.assertRaisesRegex(contract.Refused, "window_not_accepting_inputs"):
+            self.ledger.admit(stale)
+
+    def test_join_beyond_the_lifetime_ceiling_is_refused_on_the_wire(self):
+        request = self.admit()
+        opened = request["opened_at_ms"]
+        ceiling = opened + contract.MAX_LIFETIME_SECONDS * 1000
+        self.extend(request, ceiling)
+        at_ceiling = contract.decode(contract.canonical(self.join(request, ceiling)))
+        self.assertFalse(self.ledger.admit(at_ceiling)[1])
+        for bad in (self.join(request, ceiling + 1),
+                    self.join(request, opened + contract.LIFETIME_SECONDS * 1000 - 1),
+                    {**self.join(request, ceiling), "work_deadline_ms": ceiling - 29_999}):
+            with self.subTest(expires=bad["expires_at_ms"], work=bad["work_deadline_ms"]), \
+                    self.assertRaisesRegex(contract.Refused, "window_deadlines"):
+                contract.decode(contract.canonical(bad))
+
+    def test_a_new_window_still_opens_with_exactly_the_initial_lifetime(self):
+        opening = self.request()
+        longer = {**opening, "work_deadline_ms": opening["work_deadline_ms"] + 900_000,
+                  "expires_at_ms": opening["expires_at_ms"] + 900_000}
+        # The wire admits the longer deadline a join may name; an opening never.
+        with self.assertRaisesRegex(contract.Refused, "window_deadlines"):
+            self.ledger.admit(contract.decode(contract.canonical(longer)))
+        self.assertEqual(self.ledger.status()["state"], "idle")
+        self.assertTrue(self.ledger.admit(contract.decode(contract.canonical(opening)))[1])
+
     def test_attempts_margin_and_duplicate_reservation(self):
         request = self.admit()
         for _ in range(28):
