@@ -12,7 +12,7 @@ import { authorization, target } from "./thread-bridge.js";
 import { enqueueThreadInput, getThread, getThreadMessage, listThreadMessageCandidates } from "./threads.js";
 import { currentCodexGenerationMatches } from "./codex-generation.js";
 import { createBridgeReplyDeliveryIntent } from "./reply-delivery-intent.js";
-import { remoteBridgeStatus, remoteInputActivity } from "./thread-bridge-remote-status.js";
+import { remoteBridgeStatus, remoteInputActivity, remoteStatusUnavailable, sameRemoteBinding } from "./thread-bridge-remote-status.js";
 import { remoteWhatsAppRuntimeBinding } from "./thread-remote-runtime-binding.js";
 
 export const BRIDGE_MESSAGE_SOURCE = "thread_bridge_message";
@@ -82,8 +82,12 @@ function summarize(message, limit = 600) {
   return { messageId: message.id, createdAt: message.createdAt || null, text: text.slice(0, limit), truncated: text.length > limit };
 }
 
-// Remote threads use Core; a legacy terminal record cannot describe their work.
-export async function bridgeThreadStatus(threadId, principal, env = process.env) {
+// A delegated (remote) thread's work runs in native Core, which neither the
+// V1 mirror states nor the local runtime record describe: its execution
+// state comes from Core through the thread's own adapter binding, and is
+// "unknown" (never idle) when that cannot be read. History and lastAnswer
+// stay the V1 thread's. `options.fetchImpl`/`now` are for tests.
+export async function bridgeThreadStatus(threadId, principal, env = process.env, options = {}) {
   const grant = await authorization(principal, env);
   const thread = await target(threadId, grant, "observe", env);
   const messages = await listThreadMessageCandidates(threadId, { tailLimit: 200, states: [...QUEUED_INPUT_STATES, "running"] }, env);
@@ -91,7 +95,14 @@ export async function bridgeThreadStatus(threadId, principal, env = process.env)
   const queued = inputs.filter((message) => QUEUED_INPUT_STATES.includes(message.state)).length;
   const running = inputs.some((message) => message.state === "running") || Boolean(thread.runtime?.activeTurnId);
   const lastInput = inputs.at(-1);
-  const remote = await remoteBridgeStatus(thread, env);
+  let remote = await remoteBridgeStatus(thread, env, { ...options, inputs });
+  // The native read takes time: a grant revoked or a thread moved out of
+  // scope meanwhile gets no status, and a delegation disabled or moved to
+  // another remote thread or backend meanwhile makes the answer no evidence.
+  if (remote) {
+    const current = await target(threadId, await authorization(principal, env), "observe", env);
+    if (!sameRemoteBinding(thread, current, env)) remote = remoteStatusUnavailable("native_binding_changed");
+  }
   const state = running ? "working" : queued ? "queued" : lastInput?.state === "failed" ? "last_turn_failed" : "idle";
   return {
     threadId,

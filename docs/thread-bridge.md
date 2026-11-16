@@ -290,7 +290,21 @@ server for clients such as ChatGPT plugins:
   `text/event-stream`, the call is answered as an SSE stream that sends
   keep-alive comments every 2 s, so idle or first-byte timeouts cannot cut it
   off; a client disconnect cancels the wait. `get_thread_status` reports
-  working, queued, idle or last_turn_failed.
+  working, queued, idle or last_turn_failed. For a thread delegated to
+  Orkestr V2 the V1 mirror states and local runtime record say nothing about
+  the work, so the state comes from the native Core execution (Deep and Fast
+  roles plus the window queue), read through the thread's own configured
+  adapter binding (`GET threads/<remote id>/status`, the backend's existing
+  bearer token, 3 s timeout) and checked to answer for this thread. It adds
+  `execution` (native phase, active role, per-role run, provider and model),
+  `pendingForwardMessages` (V1 inputs the adapter has not acknowledged) and
+  `taskOutcome: "unknown"`: a native run that `completed` (accepted by Core)
+  or is `awaiting_acceptance` is not proof that the task succeeded. States
+  add `awaiting_acceptance`, `blocked` and `last_turn_cancelled`. When the
+  native status cannot be read (timeout, adapter or Core unavailable,
+  revoked binding, stale or foreign answer) the state is `unknown` with a
+  closed `lastError` reason, never `idle`. History and `lastAnswer` stay the
+  V1 thread's. The grant and thread scope are checked again after the read.
 - Every `POST /mcp` request is recorded as an `mcp_request` event (protocol
   era, method, tool, duration, outcome, HTTP status, JSON-RPC error code,
   client disconnect). Arguments, message content and raw error messages are
