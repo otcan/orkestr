@@ -9,6 +9,13 @@
 // and waits for that acceptance. Neither says whether the request succeeded,
 // so `taskOutcome` stays "unknown". An unreadable observation is reported
 // as unknown with a closed reason, never as idle.
+//
+// Pending input: Core gives the age of the oldest eligible inbox input
+// (queued or claimed, not held; reserved steering is consumed, deferred
+// steering stays queued) with every current Deep read, even when the latest
+// run decides the phase. It is presence and age, not a count, so a pending
+// inbox leaves `queuedMessages` null (count not observed) rather than a
+// guessed number.
 import { QUEUED_INPUT_STATES } from "./thread-queue-control.js";
 import { backendForBinding, remoteJson } from "./remote-runtime-http.js";
 import { remoteWhatsAppRuntimeBinding } from "./thread-remote-runtime-binding.js";
@@ -71,7 +78,24 @@ function role(value, time) {
     failure: failureClasses.has(value.failure) ? value.failure : null,
     provider: providers.has(value.provider) ? value.provider : null,
     model: modelName(value.model),
+    // Unobserved unless the adapter says Core answered the field with null
+    // (nothing eligible) or an age; anything else is no evidence either way.
+    queueObserved: value.queueObserved === true && (value.queueAgeMs === null || age(value.queueAgeMs)),
+    queueAgeMs: value.queueObserved === true && age(value.queueAgeMs) ? value.queueAgeMs : null,
   };
+}
+
+function age(value) {
+  return Number.isSafeInteger(value) && value >= 0;
+}
+
+// Core's eligible pending inbox for this conversation. No Deep status at all
+// (204) means no run and nothing eligible queued; a Deep status without the
+// field (an older adapter or Core) leaves it unobserved.
+function pendingInbox(deep) {
+  if (deep === null) return { observed: true, pending: false, oldestAgeMs: null };
+  if (!deep.queueObserved) return { observed: false, pending: null, oldestAgeMs: null };
+  return deep.queueAgeMs === null ? { observed: true, pending: false, oldestAgeMs: null } : { observed: true, pending: true, oldestAgeMs: deep.queueAgeMs };
 }
 
 // The adapter's projection, checked and reduced to what a status needs.
@@ -108,17 +132,19 @@ function forwardFailure(inputs = []) {
   return /^[a-z0-9_:-]{1,120}$/i.test(code) ? code : "remote_forward_failed";
 }
 
-function topState(native, waiting, failedForward) {
+function topState(native, inbox, waiting, failedForward) {
   const deep = native.deep;
   if ([native.deep, native.fast].some((entry) => entry && activePhases.has(entry.phase))) return ["working", null];
-  if (native.queued || deep?.phase === "queued" || waiting) return ["queued", null];
+  if (native.queued || deep?.phase === "queued" || inbox.pending || waiting) return ["queued", null];
   if (failedForward) return ["last_turn_failed", failedForward];
   switch (deep?.phase) {
     case "awaiting_acceptance": return ["awaiting_acceptance", null];
     case "failed": return ["last_turn_failed", deep.failure || "native_run_failed"];
     case "blocked": return ["blocked", deep.failure || "native_run_blocked"];
     case "cancelled": return ["last_turn_cancelled", deep.failure];
-    default: return ["idle", null];
+    // Idle claims that nothing is pending; without Core's inbox field that
+    // is not observed.
+    default: return inbox.observed ? ["idle", null] : ["unknown", "native_queue_unobserved"];
   }
 }
 
@@ -155,7 +181,8 @@ export async function remoteBridgeStatus(thread, env, { fetchImpl = globalThis.f
   } catch (error) {
     return remoteStatusUnavailable(error?.reason || unavailableReason(error), waiting);
   }
-  const [state, lastError] = topState(native, waiting, forwardFailure(inputs));
+  const inbox = pendingInbox(native.deep);
+  const [state, lastError] = topState(native, inbox, waiting, forwardFailure(inputs));
   const activeRole = ["deep", "fast"].find((name) => native[name] && activePhases.has(native[name].phase)) || null;
   const reporting = native[activeRole || "deep"] || native.fast;
   return {
@@ -165,9 +192,10 @@ export async function remoteBridgeStatus(thread, env, { fetchImpl = globalThis.f
     provider: reporting?.provider || null,
     model: reporting?.model || null,
     observedAtMs: native.observedAtMs,
-    // Core reports a queued Deep input without a count when no execution
-    // window entry carries it: queued, count not observed.
-    queuedMessages: native.deep?.phase === "queued" && !native.queued ? null : native.queued + waiting,
+    // An exact count only when every part of it was counted: Core's inbox
+    // gives presence and age only, so pending or unobserved inbox input
+    // leaves the total unobserved (null), never a guessed number.
+    queuedMessages: inbox.observed && !inbox.pending && native.deep?.phase !== "queued" ? native.queued + waiting : null,
     pendingForwardMessages: waiting,
     taskOutcome: "unknown",
     lastError,
@@ -176,6 +204,7 @@ export async function remoteBridgeStatus(thread, env, { fetchImpl = globalThis.f
       phase: native.deep?.phase || "none",
       activeRole,
       queuedInputs: native.queued,
+      pendingInput: inbox,
       roles: { deep: present(native.deep), fast: present(native.fast) },
     },
   };

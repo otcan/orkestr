@@ -43,10 +43,31 @@ def _role(client, conversation, route):
     provider, model = _model(value.get('models'))
     run, progress, failure = value.get('run_id'), value.get('progress'), value.get('failure')
     failure = failure.get('class') if isinstance(failure, dict) else None
+    age_observed, age = _queue_age(value)
     return dict(phase=value['phase'], runId=run if isinstance(run, str) and RUN.fullmatch(run) else None,
                 observedAtMs=value['observed_at_ms'], revision=_int(value.get('revision')),
                 lastProgressAtMs=_int(progress.get('observed_at_ms')) if isinstance(progress, dict) else None,
-                failure=failure if isinstance(failure, str) and failure in FAILURES else None, provider=provider, model=model)
+                failure=failure if isinstance(failure, str) and failure in FAILURES else None, provider=provider, model=model,
+                queueObserved=age_observed, queueAgeMs=age)
+
+
+def _queue_age(value):
+    """(observed, age) of Core's eligible pending input for the current Deep read.
+
+    Core's `queue_age_ms` is the age of the conversation's oldest reasoning
+    inbox input that is queued or claimed and not held (ordinary_input_holds);
+    reserved steering has consumed its input, deferred steering stays queued.
+    It is present (null when nothing is pending) even when the latest run
+    decides the phase. It is an age, never a count. A missing or malformed
+    field is unobserved, not "nothing pending"."""
+    if 'queue_age_ms' not in value:
+        return False, None
+    age = value['queue_age_ms']
+    if age is None:
+        return True, None
+    if type(age) is int and age >= 0:
+        return True, age
+    return False, None
 
 
 def read(binding):

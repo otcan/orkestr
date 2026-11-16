@@ -76,6 +76,15 @@ async fn durable_admission_consume_ack_and_original_replay_never_reissue_input()
         .await
         .unwrap();
     assert_eq!(receipt.disposition, SteeringDisposition::Reserved);
+    // The reserved steer consumed its inbox input: nothing eligible pends.
+    let status = f
+        .store
+        .execution_status(&f.owner, &f.conversation)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(status.phase, orkestr_v2_contracts::ExecutionPhase::Running);
+    assert_eq!(status.queue_age_ms, None);
     let (replay, none) = f
         .handle
         .steer_execution_authenticated(&f.token, &f.conversation, &req, Some(&a))
@@ -226,6 +235,16 @@ async fn unsupported_or_older_input_stays_ordered_and_stale_control_has_no_write
     .await
     .unwrap();
     assert_eq!(rows, vec!["queued", "queued"]);
+    // Deferred steers stay queued, so the running Deep run reports eligible
+    // pending input (an age; Core gives no count).
+    let status = f
+        .store
+        .execution_status(&f.owner, &f.conversation)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(status.phase, orkestr_v2_contracts::ExecutionPhase::Running);
+    assert!(status.queue_age_ms.is_some());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

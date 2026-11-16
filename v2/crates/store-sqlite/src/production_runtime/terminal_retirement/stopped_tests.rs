@@ -281,6 +281,19 @@ async fn stopped_deep_fast_and_provider_preserving_restart_never_reissues_input(
                     .unwrap()
                     .eligible_input_available
             );
+            // The held input is still queued in the inbox, yet not eligible:
+            // the Deep status reports no pending age for it.
+            let queued: i64 = sqlx::query_scalar("SELECT count(*) FROM reasoning_inbox i JOIN production_held_inputs h ON h.event_id=i.event_id WHERE i.state IN ('queued','claimed')")
+                .fetch_one(&f.store.pool)
+                .await
+                .unwrap();
+            assert_eq!(queued, 1);
+            let status = f
+                .store
+                .execution_status(&f.owner, &f.conversation)
+                .await
+                .unwrap();
+            assert_eq!(status.and_then(|status| status.queue_age_ms), None);
         }
     }
 }

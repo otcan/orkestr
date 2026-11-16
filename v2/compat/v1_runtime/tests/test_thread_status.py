@@ -139,11 +139,12 @@ class ProjectionTests(unittest.TestCase):
             observed_at_ms=100, failure='quota', models=dict(provider='codex', actual_model='gpt-5.5-codex')))
         value = read(binding_for(client))
         deep, fast = value['roles']['deep'], value['roles']['fast']
-        keys = {'phase', 'runId', 'observedAtMs', 'revision', 'lastProgressAtMs', 'failure', 'provider', 'model'}
+        keys = {'phase', 'runId', 'observedAtMs', 'revision', 'lastProgressAtMs', 'failure', 'provider', 'model',
+                'queueObserved', 'queueAgeMs'}
         self.assertEqual(set(deep), keys)
         self.assertEqual(set(fast), keys)
         self.assertEqual(deep, dict(phase='failed', runId=None, observedAtMs=100, revision=None, lastProgressAtMs=None,
-                                    failure=None, provider=None, model=None))
+                                    failure=None, provider=None, model=None, queueObserved=True, queueAgeMs=5))
         self.assertEqual((fast['runId'], fast['provider'], fast['model'], fast['failure']),
                          ('00000000-0000-4000-8000-000000000003', 'codex', 'gpt-5.5-codex', None))
         text = repr(value)
@@ -152,6 +153,38 @@ class ProjectionTests(unittest.TestCase):
             self.assertNotIn(leaked, text)
         self.assertEqual(set(value), {'version', 'source', 'publicThreadId', 'conversationId', 'observedAtMs', 'roles',
                                       'queuedInputs', 'taskOutcome'})
+
+    def deep_with_age(self, phase, **age):
+        client = Client('synthetic-conversation')
+        client.answers['/execution'] = (200, dict(conversation_id=client.conversation, run_id='run-4', phase=phase,
+                                                  observed_at_ms=100, revision=3, **age))
+        client.answers['/fast/execution'] = (204, None)
+        client.answers['/window/queue'] = (200, dict(conversation_id=client.conversation, entries=[]))
+        return read(binding_for(client))
+
+    def test_running_run_carries_core_eligible_pending_age(self):
+        # Core reports the oldest eligible (unheld) inbox input's age with
+        # the current Deep read even while a run decides the phase.
+        value = self.deep_with_age('running', queue_age_ms=4000)
+        self.assertEqual((value['roles']['deep']['phase'], value['roles']['deep']['queueObserved'],
+                          value['roles']['deep']['queueAgeMs']), ('running', True, 4000))
+        self.assertEqual(value['queuedInputs'], [], 'dispatched inputs are not window-queued')
+
+    def test_finished_run_with_eligible_input_keeps_the_age(self):
+        for phase in ('completed', 'awaiting_acceptance', 'failed', 'cancelled'):
+            deep = self.deep_with_age(phase, queue_age_ms=120000)['roles']['deep']
+            self.assertEqual((deep['queueObserved'], deep['queueAgeMs']), (True, 120000), phase)
+
+    def test_null_age_is_an_observation_that_nothing_eligible_pends(self):
+        # Held inputs and steers that consumed their input are excluded by Core.
+        deep = self.deep_with_age('completed', queue_age_ms=None)['roles']['deep']
+        self.assertEqual((deep['queueObserved'], deep['queueAgeMs']), (True, None))
+
+    def test_missing_or_malformed_age_is_unobserved(self):
+        for age in ({}, dict(queue_age_ms='4000'), dict(queue_age_ms=-1), dict(queue_age_ms=True),
+                    dict(queue_age_ms=1.5), dict(queue_age_ms=[1])):
+            deep = self.deep_with_age('completed', **age)['roles']['deep']
+            self.assertEqual((deep['queueObserved'], deep['queueAgeMs']), (False, None), repr(age))
 
     def test_invalid_phase_is_refused(self):
         client = Client('synthetic-conversation')
