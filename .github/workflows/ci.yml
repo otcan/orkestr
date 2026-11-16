@@ -106,11 +106,15 @@ jobs:
           persist-credentials: false
       - name: Pinned redacted secret scan
         shell: bash
+        env:
+          # Authenticated asset download: anonymous api.github.com calls from shared runner IPs hit the
+          # 60/h limit and fail with 403 (2026-11-16, three attempts in a row).
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           scan_dir=$(mktemp -d)
           # Exact v8.30.1 asset; the existing digest below remains authoritative.
-          curl --fail --silent --show-error --location --max-time 60 --retry 2 --retry-delay 2 --retry-max-time 180 --header 'Accept: application/octet-stream' --header 'X-GitHub-Api-Version: 2022-11-28' https://api.github.com/repos/gitleaks/gitleaks/releases/assets/378332058 -o "$scan_dir/release.tar.gz"
+          curl --fail --silent --show-error --location --max-time 60 --retry 2 --retry-delay 2 --retry-max-time 180 --header 'Accept: application/octet-stream' --header 'X-GitHub-Api-Version: 2022-11-28' --header @<(printf 'Authorization: Bearer %s\n' "$GH_TOKEN") https://api.github.com/repos/gitleaks/gitleaks/releases/assets/378332058 -o "$scan_dir/release.tar.gz"
           printf '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  %s\n' "$scan_dir/release.tar.gz" | sha256sum --check --status
           tar -xzf "$scan_dir/release.tar.gz" -C "$scan_dir" gitleaks
           ORKESTR_TEST_GITLEAKS_BINARY="$scan_dir/gitleaks" node --test test/gitleaks-reviewed-digest.test.js test/secret-scan-coverage.test.js
