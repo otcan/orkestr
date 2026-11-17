@@ -63,6 +63,7 @@ function consentPage({ request, consentId, userId }: any) {
 <body><h1>Connect ${escapeHtml(request.client.clientName)}</h1>
 <p>Signed in to Orkestr as <strong>${escapeHtml(userId)}</strong>. <strong>${escapeHtml(request.client.clientName)}</strong> (returns to ${escapeHtml(request.redirectHost)}) asks to:</p>
 <ul><li>read the visible messages of <strong>all your threads</strong>, including future ones;</li>
+<li>see the Codex and Claude quota readings Orkestr already shows you (remaining percentages, reset times, freshness);</li>
 <li>add comments to your threads, labelled as coming from this assistant;</li>
 <li><strong>send messages to your threads' agents</strong>, which then start work as if asked, labelled as coming from this assistant.</li></ul>
 <p>Comments are context only and are not sent to WhatsApp. Messages start work in the thread; the agent's answer is also sent through the thread's existing eligible WhatsApp binding by default, unless the assistant opts out. No other recipient can be selected, and no WhatsApp message is sent when the thread has no eligible binding. Nothing is ever sent as you. Access lasts 90 days; you can revoke it at any time.</p>

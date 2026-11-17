@@ -11,6 +11,8 @@ const defaultCacheMs = 30 * 1000;
 const snapshotCache = new Map();
 // Internal per-period stamps; keep the established JSON/API schema unchanged.
 const quotaWindowDetails = new WeakMap();
+// Newest projected reading per period whose window has already reset.
+const quotaWindowLapsed = new WeakMap();
 
 function objectValue(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : null;
@@ -274,6 +276,28 @@ export function mergeProjectedProviderQuota(base, observations, { now = Date.now
 
 export const mergeProjectedClaudeQuota = mergeProjectedProviderQuota;
 
+// Keeps only when a lapsed reading was taken and when its window reset; its
+// percentage describes no current window and is dropped.
+function lapsedProjectedWindows(observations, now) {
+  const lapsed = {};
+  for (const entry of observations) {
+    const reset = quotaEpochMs(entry?.record?.resets_at);
+    if (!reset || reset > now || !["fiveHour", "weekly"].includes(entry.period)) continue;
+    if (observedMs(entry) >= observedMs(lapsed[entry.period])) lapsed[entry.period] = { observedAt: entry.observedAt, resetsAt: isoOrNull(reset) };
+  }
+  return lapsed;
+}
+
+// Read-only copies of the per-period selection behind an enrolled account
+// projection entry, plus the newest per-period reading whose window has reset.
+// Null for legacy thread telemetry, which has one aggregate observation only.
+export function providerQuotaWindowDetails(entry) {
+  if (!entry || !quotaWindowDetails.has(entry)) return null;
+  const selected = quotaWindowDetails.get(entry), lapsed = quotaWindowLapsed.get(entry) || {};
+  const copy = value => value ? { ...value } : null;
+  return { fiveHour: copy(selected.fiveHour), weekly: copy(selected.weekly), lapsed: { fiveHour: copy(lapsed.fiveHour), weekly: copy(lapsed.weekly) } };
+}
+
 export async function providerQuotaSnapshot({ ownerUserId = "", now = Date.now(), loadThreads = defaultLoadThreads, loadClaudeProfiles = defaultLoadClaudeProfiles, loadProjections = loadProviderQuotaProjections, useCache = true } = {}, env = process.env) {
   const owner = resourceOwnerUserId({ ownerUserId }, env);
   const staleMs = providerQuotaStaleMs(env);
@@ -293,6 +317,7 @@ export async function providerQuotaSnapshot({ ownerUserId = "", now = Date.now()
     // provider, e.g. Codex work that moved off V1 threads to the V2 broker.
     value[provider] = mergeProjectedProviderQuota({ ...emptyProviderQuota(provider), limited: value[provider].limited }, observed, { now, staleMs });
     if (!quotaWindowDetails.has(value[provider])) quotaWindowDetails.set(value[provider], {});
+    quotaWindowLapsed.set(value[provider], lapsedProjectedWindows(observed, now));
   }
   if (useCache) snapshotCache.set(cacheKey, { at: now, value });
   return value;

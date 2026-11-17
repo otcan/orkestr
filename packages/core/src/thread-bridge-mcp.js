@@ -8,6 +8,7 @@ import * as z from "zod/v4";
 import { listBridgeThreads, readBridgeChanges, readBridgeHistory, replyToBridgeThread } from "./thread-bridge.js";
 import { getThread } from "./threads.js";
 import { bridgeThreadStatus, sendBridgeMessage, waitForBridgeReply } from "./thread-bridge-messaging.js";
+import { bridgeProviderQuotas } from "./thread-bridge-quota.js";
 
 function result(value) {
   return { content: [{ type: "text", text: JSON.stringify(value) }], structuredContent: value };
@@ -121,6 +122,13 @@ const tools = {
     readOnly: true,
     longRunning: true,
     run: (input, principal, env, context = {}) => waitForBridgeReply(input.thread_id, input.message_id, principal, { timeoutSeconds: input.timeout_seconds || 30, signal: context.signal || null }, env),
+  },
+  get_provider_quotas: {
+    title: "Get Codex and Claude quota readings",
+    description: "Remaining subscription quota of the owner's OpenAI/Codex and Claude accounts, from the same passive readings as the WhatsApp footer and web quota display. Per usage window (five_hour, weekly): state current, stale, expired, not_reported or unavailable; used and remaining percent of the window's allowance only when current (older values are under lastObserved); reset time (UTC and owner timezone); observation time, age and source; plus warnings and blockers. Model-specific windows and API-credit balances are not collected and say so. Never contacts a provider; nothing is inferred from active runs. Optional provider filter.",
+    inputSchema: { provider: z.enum(["codex", "claude"]).optional() },
+    readOnly: true,
+    run: (input, principal, env) => bridgeProviderQuotas(principal, { provider: input.provider || "" }, env),
   },
 };
 
