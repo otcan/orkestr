@@ -107,15 +107,16 @@ function issue(code, window, message, extra = {}) {
 }
 
 // Why a reading that has values is not current: by its own age, not its kind.
-function staleIssue(report, label, staleMs) {
+function staleIssue(report, label, { now, staleMs }) {
   if (report.ageSeconds === null) return issue("observation_age_unknown", report.window, `The ${label} reading has no known observation time; its values are not current.`);
-  if (report.ageSeconds * 1000 > staleMs) return issue("stale_observation", report.window, `The newest ${label} reading is older than the freshness limit; its values are not current.`);
+  // Exact milliseconds, as for `current`; ageSeconds is rounded.
+  if (now - quotaEpochMs(report.observedAt) > staleMs) return issue("stale_observation", report.window, `The newest ${label} reading is older than the freshness limit; its values are not current.`);
   return issue("observation_time_estimated", report.window, `The ${label} reading's time is only estimated, not stamped by telemetry; its values are not shown as current.`);
 }
 
 // `windowRejected`: a selected window reading (current or not) had status
 // rejected, which is what sets `limited` for an account projection.
-function providerIssues(entry, reports, { staleMs, windowRejected }) {
+function providerIssues(entry, reports, { now, staleMs, windowRejected }) {
   const warnings = [], blockers = [];
   reports.forEach((report, index) => {
     const label = windowSpecs[index][3];
@@ -125,7 +126,7 @@ function providerIssues(entry, reports, { staleMs, windowRejected }) {
     } else if (report.state === "current" && report.providerStatus === "allowed_warning") {
       warnings.push(issue("near_limit", report.window, `The provider reports the ${label} window as near its limit.`));
     } else if (report.state === "stale") {
-      warnings.push(staleIssue(report, label, staleMs));
+      warnings.push(staleIssue(report, label, { now, staleMs }));
       if (report.lastObserved?.providerStatus === "rejected") {
         warnings.push(issue("last_seen_rate_limited", report.window, `The ${label} window was rate-limited when last read; that reading is not current.`, { observedAt: report.lastObserved.observedAt }));
       }
@@ -165,7 +166,7 @@ export function providerQuotaEntryReport(entry, provider, { now = Date.now(), st
     windows: reports,
     modelSpecificWindows: modelSpecificWindows(),
     apiCredits: apiCredits(),
-    ...providerIssues(entry, reports, { staleMs, windowRejected }),
+    ...providerIssues(entry, reports, { now, staleMs, windowRejected }),
   };
 }
 

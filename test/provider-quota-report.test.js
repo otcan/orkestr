@@ -108,6 +108,13 @@ test("the reason a reading is not current follows its own age and source, and fu
   assert.deepEqual([codexWeekly.state, codexWeekly.ageSeconds], ["current", 0], "skew within a minute still counts");
 });
 
+test("a telemetry reading just past the limit is stale_observation, though its rounded age equals the limit", async () => {
+  const snapshot = await snapshotOf([reading("codex", "weekly", 5, { observed: now - 6 * hour - 400, reset: now + day })]);
+  const codex = providerOf(providerQuotaReport(snapshot, { now }), "codex");
+  assert.deepEqual([windowOf(codex, "weekly").state, windowOf(codex, "weekly").ageSeconds], ["stale", 21600]);
+  assert.deepEqual(codex.warnings.map((warning) => warning.code), ["stale_observation"]);
+});
+
 test("the freshness limit follows the snapshot's configured staleAfterMs", async () => {
   const snapshot = await snapshotOf([reading("codex", "weekly", 5, { observed: now - 2 * hour, reset: now + day })], { env: { ORKESTR_PROVIDER_QUOTA_STALE_MS: String(hour) } });
   const report = providerQuotaReport(snapshot, { now });
