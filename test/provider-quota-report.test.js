@@ -93,6 +93,21 @@ test("a stale reading never reads as current: its values move to lastObserved wi
   assert.deepEqual(claude.warnings.map((warning) => [warning.code, warning.window]), [["stale_observation", "weekly"]]);
 });
 
+test("the reason a reading is not current follows its own age and source, and future times have no known age", async () => {
+  const snapshot = await snapshotOf([
+    { ...reading("claude", "fiveHour", 10, { observed: now - 5 * minute }), source: "thread-activity" },
+    reading("claude", "weekly", 20, { observed: now + 10 * minute, reset: now + day }),
+    reading("codex", "weekly", 30, { observed: now + 30_000, reset: now + day }),
+  ]);
+  const report = providerQuotaReport(snapshot, { now });
+  const claude = providerOf(report, "claude");
+  assert.deepEqual(claude.windows.map((item) => [item.state, item.ageSeconds, item.lastObserved?.remainingPercent]), [["stale", 300, 90], ["stale", null, 80]]);
+  assert.deepEqual(claude.warnings.map((warning) => [warning.code, warning.window]),
+    [["observation_time_estimated", "five_hour"], ["observation_age_unknown", "weekly"]], "a fresh estimate is not 'older than the limit'");
+  const codexWeekly = windowOf(providerOf(report, "codex"), "weekly");
+  assert.deepEqual([codexWeekly.state, codexWeekly.ageSeconds], ["current", 0], "skew within a minute still counts");
+});
+
 test("the freshness limit follows the snapshot's configured staleAfterMs", async () => {
   const snapshot = await snapshotOf([reading("codex", "weekly", 5, { observed: now - 2 * hour, reset: now + day })], { env: { ORKESTR_PROVIDER_QUOTA_STALE_MS: String(hour) } });
   const report = providerQuotaReport(snapshot, { now });
@@ -143,6 +158,17 @@ test("provider-reported limits are blockers until reset; near-limit and unconfir
   const marked = providerOf(providerQuotaReport(profiled, { now }), "claude");
   assert.deepEqual(marked.blockers, []);
   assert.deepEqual(marked.warnings.map((warning) => warning.code), ["account_marked_rate_limited"]);
+
+  // A stale rejected window explains the projection's limited flag with its own time.
+  const staleRejected = await snapshotOf([reading("claude", "fiveHour", 100, { observed: now - 7 * hour, reset: now + 20 * minute, status: "rejected" })]);
+  const seen = providerOf(providerQuotaReport(staleRejected, { now }), "claude");
+  assert.equal(staleRejected.claude.limited, true);
+  assert.deepEqual(seen.blockers, []);
+  assert.deepEqual(seen.warnings.map(({ code, window, observedAt }) => [code, window, observedAt]),
+    [["stale_observation", "five_hour", undefined], ["last_seen_rate_limited", "five_hour", at(now - 7 * hour)]]);
+  // ...and a rejected window that reset after the cache fill is simply over.
+  const lapsed = providerOf(providerQuotaReport(staleRejected, { now: now + 21 * minute }), "claude");
+  assert.deepEqual(lapsed.warnings.map((warning) => warning.code), ["window_expired"]);
 });
 
 test("legacy thread telemetry: stamped readings are current, estimated or unknown observation times are not", () => {
@@ -188,6 +214,7 @@ test("a provider filter returns only that provider", async () => {
 test("timezones: invalid zones fall back to UTC; local times carry the zone offset", () => {
   assert.deepEqual(quotaReportTimezone(""), { name: "UTC", source: "default" });
   assert.deepEqual(quotaReportTimezone("Mars/Base"), { name: "UTC", source: "default" });
+  assert.deepEqual(quotaReportTimezone(null, { unavailable: true }), { name: "UTC", source: "unavailable" });
   assert.equal(localIsoTime(Date.parse("2099-07-01T12:00:00Z"), "Europe/Berlin"), "2099-07-01T14:00:00+02:00");
   assert.equal(localIsoTime(Date.parse("2099-07-01T12:00:00Z"), "Asia/Kathmandu"), "2099-07-01T17:45:00+05:45");
   assert.equal(localIsoTime(Date.parse("2099-07-01T12:00:00Z"), "UTC"), "2099-07-01T12:00:00+00:00");

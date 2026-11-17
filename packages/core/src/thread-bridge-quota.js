@@ -57,12 +57,14 @@ export async function bridgeProviderQuotas(principal, { provider = "" } = {}, en
     bounded(() => loadTimezone(owner, env), TIMEZONE_TIMEOUT_MS),
   ]);
   const timezone = typeof zone === "string" ? zone : null;
+  // A profile that could not be read is not an owner without a zone.
+  const timezoneUnavailable = zone === timedOut || zone === failed;
   // The reads take time: a grant revoked or narrowed meanwhile gets nothing.
   await quotaGrant(principal, env);
   const time = now();
   if (!snapshot || typeof snapshot !== "object") {
     const reason = snapshot === timedOut ? "quota_snapshot_timeout" : "quota_snapshot_unavailable";
-    return providerQuotaUnavailableReport(reason, { now: time, staleMs: providerQuotaStaleMs(env), timezone, provider });
+    return providerQuotaUnavailableReport(reason, { now: time, staleMs: providerQuotaStaleMs(env), timezone, timezoneUnavailable, provider });
   }
-  return providerQuotaReport(snapshot, { now: time, timezone, provider });
+  return providerQuotaReport(snapshot, { now: time, timezone, timezoneUnavailable, provider });
 }

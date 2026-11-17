@@ -27,7 +27,9 @@ const seconds = (ms) => Number.isFinite(ms) ? Math.max(0, Math.round(ms / 1000))
 const percent = (value) => typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 100 ? Math.round(value) : null;
 
 // The owner's IANA zone when valid, else UTC (as in the WhatsApp footer).
-export function quotaReportTimezone(value) {
+// `unavailable`: the profile could not be read, so UTC is not the owner's choice.
+export function quotaReportTimezone(value, { unavailable = false } = {}) {
+  if (unavailable) return { name: "UTC", source: "unavailable" };
   try {
     if (typeof value === "string" && value.trim()) {
       return { name: new Intl.DateTimeFormat("en-GB", { timeZone: value.trim() }).resolvedOptions().timeZone, source: "owner_profile" };
@@ -35,6 +37,10 @@ export function quotaReportTimezone(value) {
   } catch { /* An invalid stored zone falls back to UTC explicitly. */ }
   return { name: "UTC", source: "default" };
 }
+
+// Broker and server clocks may differ slightly (the projection loader allows
+// the same minute); a later observation time is no known age at all.
+const CLOCK_SKEW_MS = 60_000;
 
 // ISO 8601 wall time with the zone's UTC offset, e.g. 2026-11-22T14:00:00+01:00.
 export function localIsoTime(ms, zone = "UTC") {
@@ -73,7 +79,8 @@ function emptyWindow(key, minutes, state) {
 
 function windowReport(entry, details, [period, key, minutes], { now, staleMs, zone, kind }) {
   const reading = selectedReading(entry, details, period);
-  const timing = (observedMs) => ({ observedAt: iso(observedMs), ageSeconds: observedMs ? seconds(now - observedMs) : null, source: kind });
+  const known = (observedMs) => Boolean(observedMs) && observedMs <= now + CLOCK_SKEW_MS;
+  const timing = (observedMs) => ({ observedAt: iso(observedMs), ageSeconds: known(observedMs) ? seconds(now - observedMs) : null, source: kind });
   // A reset window says only when it was read and when it ended.
   const expired = (observedMs, resetMs) => ({ ...emptyWindow(key, minutes, "expired"), ...timing(observedMs),
     lastObserved: { usedPercent: null, remainingPercent: null, providerStatus: null, observedAt: iso(observedMs),
@@ -89,8 +96,8 @@ function windowReport(entry, details, [period, key, minutes], { now, staleMs, zo
   const values = { usedPercent: remaining === null ? null : 100 - remaining, remainingPercent: remaining,
     providerStatus: statuses.has(reading.status) ? reading.status : null };
   const reset = { resetsAt: iso(resetMs), resetsAtLocal: localIsoTime(resetMs, zone), resetsInSeconds: resetMs ? seconds(resetMs - now) : null };
-  // Estimated (thread activity) or unknown observation times are never current.
-  const current = reading.source === "telemetry" && observedMs && now - observedMs <= staleMs;
+  // Estimated (thread activity), unknown or future observation times are never current.
+  const current = reading.source === "telemetry" && known(observedMs) && now - observedMs <= staleMs;
   if (current) return { ...emptyWindow(key, minutes, "current"), ...values, ...reset, ...timing(observedMs) };
   return { ...emptyWindow(key, minutes, "stale"), ...timing(observedMs), lastObserved: { ...values, observedAt: iso(observedMs), ...reset } };
 }
@@ -99,13 +106,16 @@ function issue(code, window, message, extra = {}) {
   return { code, window, message, ...extra };
 }
 
-function staleIssue(report, label, kind) {
-  if (!report.observedAt) return issue("observation_age_unknown", report.window, `The ${label} reading has no known observation time; its values are not current.`);
-  if (kind === "thread_activity_estimate") return issue("observation_time_estimated", report.window, `The ${label} reading's time is only estimated from thread activity; its values are not shown as current.`);
-  return issue("stale_observation", report.window, `The newest ${label} reading is older than the freshness limit; its values are not current.`);
+// Why a reading that has values is not current: by its own age, not its kind.
+function staleIssue(report, label, staleMs) {
+  if (report.ageSeconds === null) return issue("observation_age_unknown", report.window, `The ${label} reading has no known observation time; its values are not current.`);
+  if (report.ageSeconds * 1000 > staleMs) return issue("stale_observation", report.window, `The newest ${label} reading is older than the freshness limit; its values are not current.`);
+  return issue("observation_time_estimated", report.window, `The ${label} reading's time is only estimated, not stamped by telemetry; its values are not shown as current.`);
 }
 
-function providerIssues(entry, reports, kind) {
+// `windowRejected`: a selected window reading (current or not) had status
+// rejected, which is what sets `limited` for an account projection.
+function providerIssues(entry, reports, { staleMs, windowRejected }) {
   const warnings = [], blockers = [];
   reports.forEach((report, index) => {
     const label = windowSpecs[index][3];
@@ -115,13 +125,17 @@ function providerIssues(entry, reports, kind) {
     } else if (report.state === "current" && report.providerStatus === "allowed_warning") {
       warnings.push(issue("near_limit", report.window, `The provider reports the ${label} window as near its limit.`));
     } else if (report.state === "stale") {
-      warnings.push(staleIssue(report, label, kind));
+      warnings.push(staleIssue(report, label, staleMs));
+      if (report.lastObserved?.providerStatus === "rejected") {
+        warnings.push(issue("last_seen_rate_limited", report.window, `The ${label} window was rate-limited when last read; that reading is not current.`, { observedAt: report.lastObserved.observedAt }));
+      }
     } else if (report.state === "expired") {
       warnings.push(issue("window_expired", report.window, `The last ${label} reading belongs to a window that has since reset; current usage is unknown.`));
     }
   });
-  if (entry?.limited === true && !blockers.length) {
-    warnings.push(issue("account_marked_rate_limited", null, "An Orkestr account record marks this provider rate-limited, but no current window reading confirms it; when that mark was set is not recorded."));
+  // Otherwise `limited` comes from an account profile record (a failed turn).
+  if (entry?.limited === true && !blockers.length && !windowRejected) {
+    warnings.push(issue("account_marked_rate_limited", null, "An Orkestr account record marks this provider rate-limited, but no window reading confirms it; when that mark was set is not recorded."));
   }
   if (reports.every((report) => report.state === "not_reported")) warnings.push(issue("no_observation", null, "No quota reading has been observed for this provider's account."));
   return { warnings, blockers };
@@ -139,6 +153,7 @@ export function providerQuotaEntryReport(entry, provider, { now = Date.now(), st
   const details = providerQuotaWindowDetails(entry);
   const kind = sourceKind(entry, details);
   const reports = windowSpecs.map((spec) => windowReport(entry, details, spec, { now, staleMs, zone, kind }));
+  const windowRejected = windowSpecs.some(([period]) => selectedReading(entry, details, period)?.status === "rejected");
   const observed = reports.map((report) => quotaEpochMs(report.observedAt)).filter(Boolean);
   return {
     provider,
@@ -150,7 +165,7 @@ export function providerQuotaEntryReport(entry, provider, { now = Date.now(), st
     windows: reports,
     modelSpecificWindows: modelSpecificWindows(),
     apiCredits: apiCredits(),
-    ...providerIssues(entry, reports, kind),
+    ...providerIssues(entry, reports, { staleMs, windowRejected }),
   };
 }
 
@@ -168,8 +183,8 @@ function reportShell(now, staleMs, timezone) {
 const selectedProviders = (provider) => providerQuotaReportProviders.includes(provider) ? [provider] : providerQuotaReportProviders;
 
 // `snapshot` is providerQuotaSnapshot(...)'s value for the authorized owner.
-export function providerQuotaReport(snapshot, { now = Date.now(), timezone = null, provider = "" } = {}) {
-  const zone = quotaReportTimezone(timezone);
+export function providerQuotaReport(snapshot, { now = Date.now(), timezone = null, timezoneUnavailable = false, provider = "" } = {}) {
+  const zone = quotaReportTimezone(timezone, { unavailable: timezoneUnavailable });
   const configured = snapshot?.staleAfterMs;
   const staleMs = Number.isFinite(configured) && configured >= 0 ? configured : DEFAULT_STALE_MS;
   return {
@@ -182,9 +197,9 @@ export function providerQuotaReport(snapshot, { now = Date.now(), timezone = nul
 }
 
 // The snapshot could not be read: every provider is unavailable, not empty.
-export function providerQuotaUnavailableReport(reason, { now = Date.now(), staleMs = DEFAULT_STALE_MS, timezone = null, provider = "" } = {}) {
+export function providerQuotaUnavailableReport(reason, { now = Date.now(), staleMs = DEFAULT_STALE_MS, timezone = null, timezoneUnavailable = false, provider = "" } = {}) {
   return {
-    ...reportShell(now, staleMs, quotaReportTimezone(timezone)),
+    ...reportShell(now, staleMs, quotaReportTimezone(timezone, { unavailable: timezoneUnavailable })),
     available: false,
     reason,
     snapshotGeneratedAt: null,
