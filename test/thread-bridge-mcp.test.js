@@ -14,7 +14,7 @@ import { closeThreadMessageRegistryCache } from "../packages/storage/src/thread-
 const REDIRECT = "https://chatgpt.com/connector_platform_oauth_redirect";
 const envKeys = ["ORKESTR_HOME", "ORKESTR_ADMIN_USER_ID", "ORKESTR_AUTH_REQUIRED", "ORKESTR_HOST_BOUNDARIES", "ORKESTR_AUTO_RUN_THREAD_INPUT",
   "ORKESTR_RECOVER_RUNNING_ON_START", "ORKESTR_WHATSAPP_AUTOSTART", "WHATSAPP_LOCAL_AUTOSTART", "ORKESTR_THREAD_BRIDGE_ENABLED",
-  "ORKESTR_THREAD_STORE", "ORKESTR_THREAD_MESSAGE_STORE", "ORKESTR_MCP_PUBLIC_URL"];
+  "ORKESTR_THREAD_STORE", "ORKESTR_THREAD_MESSAGE_STORE", "ORKESTR_MCP_PUBLIC_URL", "ORKESTR_PROVIDER_QUOTA_PROJECTION_CONFIG", "ORKESTR_PROVIDER_QUOTA_CACHE_MS"];
 
 test("messageActor never presents machine input as the owner's instruction", () => {
   assert.deepEqual(messageActor({ role: "user", source: "whatsapp_inbound" }), { kind: "human" });
@@ -58,6 +58,7 @@ async function connect(base) {
     code_challenge_method: "S256", state: "xyz", resource: `${base}/mcp`, scope: "threads:read threads:comment" });
   const page = await (await fetch(`${base}/mcp-oauth/authorize?${query}`)).text();
   assert.match(page, /all your threads/);
+  assert.match(page, /Codex and Claude quota readings/);
   const consentId = /name="consent_id" value="([^"]+)"/.exec(page)[1];
   const decision = await fetch(`${base}/mcp-oauth/authorize`, {
     method: "POST", redirect: "manual", headers: { "content-type": "application/x-www-form-urlencoded", origin: "null", "sec-fetch-site": "same-origin" },
@@ -110,7 +111,7 @@ test("ChatGPT-style OAuth connection reads all threads and comments through MCP"
   const client = new Client({ name: "test-dot", version: "1.0.0" });
   await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`), { requestInit: { headers: { authorization: `Bearer ${tokens.access_token}` } } }));
   t.after(() => client.close());
-  assert.deepEqual((await client.listTools()).tools.map((tool) => tool.name).sort(), ["comment_on_thread", "get_thread_status", "list_threads", "read_changes", "read_thread", "send_message", "wait_for_reply"]);
+  assert.deepEqual((await client.listTools()).tools.map((tool) => tool.name).sort(), ["comment_on_thread", "get_provider_quotas", "get_thread_status", "list_threads", "read_changes", "read_thread", "send_message", "wait_for_reply"]);
 
   const listed = (await client.callTool({ name: "list_threads", arguments: {} })).structuredContent;
   assert.deepEqual(listed.threads.map((thread) => thread.name).sort(), ["Jobs", "Sales"]);
@@ -140,7 +141,7 @@ test("ChatGPT-style OAuth connection reads all threads and comments through MCP"
   const modernList = await fetch(`${base}/mcp`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${refreshed.access_token}`, "mcp-protocol-version": "2026-07-28", "mcp-method": "tools/list" },
     body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: { _meta: meta } }) });
   assert.equal(modernList.status, 200);
-  assert.equal((await modernList.json()).result.tools.length, 7);
+  assert.equal((await modernList.json()).result.tools.length, 8);
   const modernNoToken = await fetch(`${base}/mcp`, { method: "POST", headers: { "content-type": "application/json", "mcp-protocol-version": "2026-07-28", "mcp-method": "tools/list" },
     body: JSON.stringify({ jsonrpc: "2.0", id: 3, method: "tools/list", params: { _meta: meta } }) });
   assert.equal(modernNoToken.status, 401);
@@ -165,6 +166,62 @@ test("ChatGPT-style OAuth connection reads all threads and comments through MCP"
   const afterRevoke = await fetch(`${base}/mcp`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${refreshed.access_token}`, "mcp-protocol-version": "2026-07-28", "mcp-method": "tools/list" },
     body: JSON.stringify({ jsonrpc: "2.0", id: 4, method: "tools/list", params: { _meta: meta } }) });
   assert.equal(afterRevoke.status, 401, "revoking deletes the client's tokens");
+});
+
+// The connected assistant's quota tool end to end: real server, OAuth token,
+// MCP SDK client and stateless protocol, real quota snapshot over a synthetic
+// enrolled projection source (the file boundary the V2 broker writes).
+test("a connected assistant reads current Codex and Claude quota over MCP without seeing account data", async (t) => {
+  const { base, home } = await startBridgeServer(t);
+  await createUser({ id: "admin" }, process.env).catch(() => null);
+  const coreOwner = "10000000-0000-4000-8000-0000000000c1", account = "20000000-0000-4000-8000-0000000000c2";
+  const sources = path.join(home, "quota-sources.json"), codexFile = path.join(home, "codex.json"), claudeFile = path.join(home, "claude.json");
+  await fs.writeFile(sources, JSON.stringify({ format: "orkestr-provider-quota-sources-v1", sources: [
+    { ownerUserId: "admin", coreOwnerId: coreOwner, accountRef: account, producerUid: process.getuid(), path: claudeFile },
+    { ownerUserId: "admin", coreOwnerId: coreOwner, accountRef: account, producerUid: process.getuid(), path: codexFile, provider: "codex" },
+  ] }), { mode: 0o600 });
+  const now = Date.now();
+  const projected = (provider, windows) => fs.writeFile(provider === "codex" ? codexFile : claudeFile,
+    JSON.stringify({ format: "orkestr-provider-quota-v1", provider, owner_id: coreOwner, account_ref: account, windows }), { mode: 0o600 });
+  await projected("codex", { seven_day: { used_percent: 21, resets_at: (now + 5 * 86_400_000) / 1000, status: null, observed_at: now - 60_000 } });
+  await projected("claude", { five_hour: { used_percent: 100, resets_at: (now + 1_800_000) / 1000, status: "rejected", observed_at: now - 120_000 } });
+  Object.assign(process.env, { ORKESTR_PROVIDER_QUOTA_PROJECTION_CONFIG: sources, ORKESTR_PROVIDER_QUOTA_CACHE_MS: "0" });
+
+  const { tokens } = await connect(base);
+  const client = new Client({ name: "test-dot", version: "1.0.0" });
+  await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`), { requestInit: { headers: { authorization: `Bearer ${tokens.access_token}` } } }));
+  t.after(() => client.close());
+  const tool = (await client.listTools()).tools.find((entry) => entry.name === "get_provider_quotas");
+  assert.equal(tool.annotations.readOnlyHint, true);
+  assert.deepEqual(Object.keys(tool.inputSchema.properties), ["provider"]);
+
+  const viaSdk = await client.callTool({ name: "get_provider_quotas", arguments: {} });
+  assert.equal(viaSdk.isError, undefined, JSON.stringify(viaSdk.content));
+  const report = viaSdk.structuredContent;
+  assert.equal(report.available, true);
+  const codex = report.providers.find((entry) => entry.provider === "codex");
+  assert.deepEqual(codex.windows.map((entry) => [entry.window, entry.state, entry.remainingPercent]), [["five_hour", "not_reported", null], ["weekly", "current", 79]]);
+  assert.equal(codex.apiCredits.state, "not_collected");
+  const claude = report.providers.find((entry) => entry.provider === "claude");
+  assert.deepEqual(claude.blockers.map((entry) => [entry.code, entry.window, entry.evidence]), [["rate_limited", "five_hour", "provider_status_rejected"]]);
+  assert.equal(claude.windows.find((entry) => entry.window === "weekly").state, "not_reported");
+
+  // The same read over the stateless (2026-07-28) protocol on the same endpoint.
+  const meta = { "io.modelcontextprotocol/protocolVersion": "2026-07-28", "io.modelcontextprotocol/clientCapabilities": {} };
+  const modern = await fetch(`${base}/mcp`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json", authorization: `Bearer ${tokens.access_token}`,
+    "mcp-protocol-version": "2026-07-28", "mcp-method": "tools/call", "mcp-name": "get_provider_quotas" },
+  body: JSON.stringify({ jsonrpc: "2.0", id: 9, method: "tools/call", params: { name: "get_provider_quotas", arguments: { provider: "claude" }, _meta: meta } }) });
+  assert.equal(modern.status, 200);
+  const modernText = await modern.text();
+  const modernReport = JSON.parse(modernText).result.structuredContent;
+  assert.deepEqual(modernReport.providers.map((entry) => entry.provider), ["claude"]);
+  assert.equal(modernReport.providers[0].windows[0].providerStatus, "rejected");
+
+  for (const text of [JSON.stringify(viaSdk), modernText]) {
+    for (const secret of [tokens.access_token, tokens.refresh_token, coreOwner, account, home, "account_ref", "owner_id"]) {
+      assert.ok(!text.includes(secret), "no credential, account reference, owner id or source path in the answer");
+    }
+  }
 });
 
 test("PKCE and one-time codes are enforced", async (t) => {

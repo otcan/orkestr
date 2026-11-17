@@ -19,6 +19,7 @@ const KNOWN_CODES = new Set([
   "bridge_grant_revoked", "bridge_thread_not_found", "bridge_cursor_reset_required", "bridge_limit_invalid",
   "bridge_history_reset_required", "bridge_reply_invalid", "bridge_cause_invalid", "bridge_idempotency_conflict",
   "bridge_message_invalid", "bridge_message_rate_limited", "bridge_message_not_found", "insufficient_scope",
+  "bridge_quota_not_granted",
   "url_invalid", "url_must_be_public_https", "url_address_not_public", "request_timeout", "response_too_large",
 ]);
 
