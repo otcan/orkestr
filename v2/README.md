@@ -2,11 +2,13 @@
 
 Self-hosted conversations with Fast/Deep, Codex and Claude using your own CLI
 logins, timers/digests, result review, Stop and explicit provider handoff.
-The current public beta is **2.0.0-beta.6**, a GitHub pre-release
+The current public beta is **2.0.0-beta.6**, a GitHub release
 ([release notes](../docs/releases/v2.0.0-beta.6.md)). See the [release checklist](../docs/v2/public-beta-checklist.md)
 for its acceptance gates; an image build does not prove a provider answer.
 
 ## Quick start: one docker run
+
+If Docker stalls before Orkestr starts, use the [bounded Docker readiness guide](../docs/v2/tutorials/check-docker-before-orkestr.md).
 
 Needs Docker Engine on Linux (x86_64 or arm64) or Docker Desktop on an Apple
 Silicon Mac. Both architectures are built and smoke-tested natively in CI.
@@ -56,9 +58,9 @@ beta.6 instructions above still use a token.
 
 Requires Docker Engine with Compose v2 on Linux x86_64 or arm64 (aarch64), or
 Docker Desktop on an Apple Silicon Mac (see below), public registry access,
-and your own ChatGPT/Codex login (a Claude login is optional). **No prebuilt image is published: the
-install builds Orkestr from source on your machine, which takes roughly 10–30
-minutes** depending on the machine and registry speed. Allow at least 8 GiB RAM
+and your own ChatGPT/Codex login (a Claude login is optional). This Compose
+path builds from source; the prebuilt image is available in the quick start
+above. Build time depends on your machine and registry speed. Allow at least 8 GiB RAM
 and 25 GiB free disk. Source builds are tested on Linux x86_64/arm64 and Apple Silicon.
 
 ```sh

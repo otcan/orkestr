@@ -21,6 +21,12 @@ high-intent themes include:
 Use these phrases only where a page answers the intent. Do not create thin
 keyword pages or market scraping as the product.
 
+OSS setup and workflow tutorials have a separate [four-week technical editorial
+backlog](v2/oss-editorial-plan.md), starting with the [Docker readiness
+guide](v2/tutorials/check-docker-before-orkestr.md). These pages serve developer
+setup intent. They retain the existing site's ownership, canonical and release
+review boundaries rather than duplicating commercial solution pages.
+
 ## Language and market architecture
 
 - English remains at the root URL.
