@@ -259,7 +259,13 @@ server for clients such as ChatGPT plugins:
   needs no new scope: `threads:read` plus a grant whose `observe` is `"all"`
   (every OAuth connection), because quota is account-wide. A grant limited
   to some threads gets `bridge_quota_not_granted`. The grant is checked again
-  after the read.
+  after the read. Connections approved before this tool existed get it
+  without reconnecting: the readings are the owner's own and add nothing
+  beyond what an all-threads read grant already implies (the same quota is
+  in the owner's footers and web display, and `get_thread_status` already
+  reports provider, model and quota failures). The consent page names the
+  quota readings for connections approved from now on; revoking a connection
+  removes this access with the rest.
 - Messaging (`thread-bridge-messaging.js`) is a separate permission: OAuth
   scope `threads:message` plus grant field `message` (`"all"` or thread IDs).
   `send_message` queues input (`source: thread_bridge_message`, labelled with

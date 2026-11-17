@@ -149,9 +149,14 @@ test("the snapshot is read for the grant's owner only, bounded, and re-authorize
   assert.equal(broken.reason, "quota_snapshot_unavailable");
   assert.ok(!JSON.stringify(broken).includes("synthetic source failure"));
 
+  // An unreadable owner profile is explicit, not mistaken for "no zone set".
   const hangingZone = await bridgeProviderQuotas(principal, {}, f.env, { loadSnapshot: async () => snapshot, loadTimezone: () => new Promise(() => {}) });
   assert.equal(hangingZone.available, true);
-  assert.deepEqual(hangingZone.timezone, { name: "UTC", source: "default" });
+  assert.deepEqual(hangingZone.timezone, { name: "UTC", source: "unavailable" });
+  const brokenZone = await bridgeProviderQuotas(principal, {}, f.env, { loadSnapshot: async () => snapshot, loadTimezone: async () => { throw new Error("synthetic"); } });
+  assert.deepEqual(brokenZone.timezone, { name: "UTC", source: "unavailable" });
+  const noZone = await bridgeProviderQuotas(principal, {}, f.env, { loadSnapshot: async () => snapshot });
+  assert.deepEqual(noZone.timezone, { name: "UTC", source: "default" }, "the real profile read: owner without a zone");
 
   // Revoked while the snapshot was being read: nothing is returned.
   const revoking = async () => { await fs.writeFile(f.grants, JSON.stringify([{ ...grant, enabled: false }])); return snapshot; };

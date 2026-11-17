@@ -68,8 +68,10 @@ otherwise `available: false` with `reason` `quota_snapshot_timeout` or
 `quota_snapshot_unavailable`, and every provider and window is `unavailable`.
 
 The response (`format: "orkestr-provider-quotas-v1"`) has `generatedAt`,
-`snapshotGeneratedAt` (cache fill, up to 30 s earlier), `timezone` (the owner's
-profile zone, else UTC), `staleAfterSeconds` and one entry per provider:
+`snapshotGeneratedAt` (cache fill, up to 30 s earlier), `timezone` (`source`
+`owner_profile`; `default` UTC when no valid zone is set; `unavailable` UTC
+when the profile could not be read within 250 ms), `staleAfterSeconds` and
+one entry per provider:
 
 - `allowanceType: "subscription"`; `source`: `account_projection` (the enrolled
   V2 broker projection), `thread_telemetry`, `thread_activity_estimate` or null.
@@ -79,8 +81,8 @@ profile zone, else UTC), `staleAfterSeconds` and one entry per provider:
   unit `percent_of_window_allowance`) and `providerStatus` (`allowed`,
   `allowed_warning`, `rejected` or null) are set only when `current`: the
   window's own telemetry observation is at most the stale limit old. A stale
-  reading, or one whose time is unknown or only estimated, keeps its values in
-  `lastObserved`. An expired window (reset since its last reading) reports only
+  reading, or one whose time is unknown, more than a minute in the future or
+  only estimated, keeps its values in `lastObserved`. An expired window (reset since its last reading) reports only
   when it was read and when it reset. `resetsAt` is UTC, `resetsAtLocal` the
   same instant in the owner's zone with its offset. `observedAt`, `ageSeconds`
   and `source` are per window.
@@ -90,8 +92,9 @@ profile zone, else UTC), `staleAfterSeconds` and one entry per provider:
 - `blockers`: `rate_limited` for a current window with status `rejected` or 0%
   remaining, with `until` (its reset). `warnings`: `near_limit`,
   `stale_observation`, `observation_age_unknown`, `observation_time_estimated`,
-  `window_expired`, `account_marked_rate_limited` (a V1 profile mark without a
-  confirming current window and without a recorded time), `no_observation`,
-  `quota_unavailable`.
+  `last_seen_rate_limited` (a non-current window that was `rejected` when read
+  at `observedAt`), `window_expired`, `account_marked_rate_limited` (a V1
+  profile mark not explained by any window reading and without a recorded
+  time), `no_observation`, `quota_unavailable`.
 
 Account references, owner ids, source paths and raw telemetry never appear.
