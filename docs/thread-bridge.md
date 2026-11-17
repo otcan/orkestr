@@ -251,7 +251,15 @@ server for clients such as ChatGPT plugins:
 
 - `POST /mcp` (Streamable HTTP, stateless) with tools `list_threads`,
   `read_thread`, `read_changes`, `comment_on_thread`, `send_message`,
-  `get_thread_status` and `wait_for_reply`.
+  `get_thread_status`, `wait_for_reply` and `get_provider_quotas`.
+- `get_provider_quotas` (read-only, optional `provider`: `codex` or
+  `claude`) returns the owner's Codex and Claude subscription quota from the
+  same snapshot as the WhatsApp footer and `GET /api/quota/providers`; see
+  [provider-quota.md](provider-quota.md#mcp-tool-get_provider_quotas). It
+  needs no new scope: `threads:read` plus a grant whose `observe` is `"all"`
+  (every OAuth connection), because quota is account-wide. A grant limited
+  to some threads gets `bridge_quota_not_granted`. The grant is checked again
+  after the read.
 - Messaging (`thread-bridge-messaging.js`) is a separate permission: OAuth
   scope `threads:message` plus grant field `message` (`"all"` or thread IDs).
   `send_message` queues input (`source: thread_bridge_message`, labelled with
