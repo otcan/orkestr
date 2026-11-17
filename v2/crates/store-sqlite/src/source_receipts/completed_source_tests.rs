@@ -90,7 +90,7 @@ async fn completed_source_continues_only_through_its_exact_accepted_binding_rele
         );
         assert!(matches!(
             admit(&f, &message, &query).await,
-            Err(StoreError::ProviderGenerationMismatch)
+            Err(StoreError::SourceSuperseded)
         ));
         sqlx::query(&format!("UPDATE session_bindings SET {restore} WHERE id=?"))
             .bind(source.run.session_id.to_string())
@@ -108,7 +108,10 @@ async fn completed_source_continues_only_through_its_exact_accepted_binding_rele
         receipt.admission.unwrap().source_binding_generation,
         proof.binding_generation
     );
-    // Real reuse occupies a new generation; the old decision cannot cross it.
+    // The admitted decision starts a new turn on the next generation. That
+    // turn only continues this source run (its input is fenced to it), so
+    // the source still takes the run's other continuations (ORK-843). A turn
+    // started by anything else ends them: late_result_tests.rs.
     let binding = f
         .handle
         .ensure_role_bindings(&f.owner, &f.conversation)
@@ -137,7 +140,7 @@ async fn completed_source_continues_only_through_its_exact_accepted_binding_rele
         .await
         .unwrap();
     assert!(
-        !f.store
+        f.store
             .source_context(&f.token, &f.owner, &f.conversation, &context)
             .await
             .unwrap()
@@ -147,9 +150,20 @@ async fn completed_source_continues_only_through_its_exact_accepted_binding_rele
         client_message_id: "another-old-source-decision".into(),
         ..message
     };
+    assert!(!admit(&f, &another, &query).await.unwrap().duplicate);
+    // Its binding changed under the continuing turn: refused again.
+    sqlx::query("UPDATE session_bindings SET native_session_id='foreign-source' WHERE id=?")
+        .bind(source.run.session_id.to_string())
+        .execute(&f.store.pool)
+        .await
+        .unwrap();
+    let third = MessageInput {
+        client_message_id: "third-old-source-decision".into(),
+        ..another
+    };
     assert!(matches!(
-        admit(&f, &another, &query).await,
-        Err(StoreError::ProviderGenerationMismatch)
+        admit(&f, &third, &query).await,
+        Err(StoreError::SourceSuperseded)
     ));
     close(f).await;
 }

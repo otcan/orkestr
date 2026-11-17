@@ -1,11 +1,12 @@
-//! ORK-795: two host results handed back to one running turn, then an owner
-//! follow-up. The first handback runs as its own turn after the source turn
-//! is accepted, which moves the source session on, so the second can never
-//! run. Admission refuses it (that refusal used to end the whole window and
-//! release the follow-up); now Core retires exactly that input and the
-//! follow-up behind it is admitted. (The second is too large to join the
-//! first one's continuation turn, see `continuation_groups`; a smaller one
-//! would be answered in that same turn.)
+//! ORK-795: host results handed back to one running turn, then owner input.
+//! A handback whose source session moved on can never run. Admission refuses
+//! it (that refusal used to end the whole window and release the follow-up);
+//! now Core retires exactly that input and the follow-up behind it is
+//! admitted. ORK-843: a session moved on only when a turn that did not
+//! continue the same source turn used it. A later handback that only follows
+//! the first handback's turn still runs. (The second result is too large to
+//! join the first one's continuation turn, see `continuation_groups`; a
+//! smaller one would be answered in that same turn.)
 use super::*;
 use orkestr_v2_application::{
     runtime::{InboxClaim, RunAdmissionResult},
@@ -99,34 +100,97 @@ async fn inbox(f: &Case, message: &orkestr_v2_contracts::MessageId) -> (String, 
         .unwrap()
 }
 
-#[tokio::test]
-async fn a_superseded_handback_is_retired_alone_and_the_follow_up_is_admitted() {
-    let (f, source, message, query) = fixture().await;
-    // While the source turn runs, two host results come back to it.
-    let first = admit(&f, &message, &query).await.unwrap();
-    let late = MessageInput {
+fn large_result() -> MessageInput {
+    MessageInput {
         client_message_id: "automatic-host-result-synthetic-2".into(),
         text: "Second synthetic host result ".repeat(1024),
-    };
+    }
+}
+
+async fn admit_large(f: &Case, query: &SourceReceiptQuery) -> orkestr_v2_application::Admission {
+    let late = large_result();
     let late_query = SourceReceiptQuery {
         client_message_id: late.client_message_id.clone(),
         text_sha256: crate::digest(&late.text),
         ..query.clone()
     };
-    let second = admit(&f, &late, &late_query).await.unwrap();
-    // The owner writes again before any of them ran.
-    let follow_up = f
-        .store
+    admit(f, &late, &late_query).await.unwrap()
+}
+
+async fn owner_input(f: &Case, key: &str) -> orkestr_v2_application::Admission {
+    f.store
         .admit(
             &f.owner,
             &f.conversation,
             &MessageInput {
-                client_message_id: "owner-follow-up".into(),
-                text: "Synthetic owner follow-up".into(),
+                client_message_id: key.into(),
+                text: format!("Synthetic owner input {key}"),
             },
         )
         .await
+        .unwrap()
+}
+
+async fn runs(f: &Case) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM production_runs")
+        .fetch_one(&f.store.pool)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_later_handback_of_the_same_turn_runs_after_the_first_one() {
+    let (f, source, message, query) = fixture().await;
+    // While the source turn runs, two host results come back to it.
+    let first = admit(&f, &message, &query).await.unwrap();
+    let second = admit_large(&f, &query).await;
+    // The owner writes again before any of them ran.
+    let follow_up = owner_input(&f, "owner-follow-up").await;
+    accept(&f, &source, "accept-source").await;
+
+    let (binding, claim) = claim_head(&f).await;
+    assert_eq!(claim.message_id, first.receipt.message_id);
+    let handback = run(&f, &claim, &binding, "first-handback").await;
+    accept(&f, &handback.provider, "accept-first-handback").await;
+
+    // The first handback's turn only continued the source turn: the second
+    // one is not superseded by it (it was on 2026-11-16, ORK-843).
+    let (binding, claim) = claim_head(&f).await;
+    assert_eq!(claim.message_id, second.receipt.message_id);
+    assert!(!f
+        .handle
+        .retire_superseded_source_claim(&claim)
+        .await
+        .unwrap());
+    let late = run(&f, &claim, &binding, "second-handback").await;
+    assert_eq!(
+        inbox(&f, &second.receipt.message_id).await,
+        ("consumed".into(), None)
+    );
+    accept(&f, &late.provider, "accept-second-handback").await;
+
+    // Then the owner's follow-up, with its own turn.
+    let (binding, claim) = claim_head(&f).await;
+    assert_eq!(claim.message_id, follow_up.receipt.message_id);
+    run(&f, &claim, &binding, "follow-up").await;
+    let retired: i64 = sqlx::query_scalar("SELECT count(*) FROM owner_input_retirements")
+        .fetch_one(&f.store.pool)
+        .await
         .unwrap();
+    assert_eq!(retired, 0);
+    close(f).await;
+}
+
+#[tokio::test]
+async fn a_superseded_handback_is_retired_alone_and_the_follow_up_is_admitted() {
+    let (f, source, message, query) = fixture().await;
+    // While the source turn runs, a host result comes back to it; then the
+    // owner writes, then a second, larger result arrives, then the owner
+    // writes again.
+    let first = admit(&f, &message, &query).await.unwrap();
+    let between = owner_input(&f, "owner-between").await;
+    let second = admit_large(&f, &query).await;
+    let follow_up = owner_input(&f, "owner-follow-up").await;
     accept(&f, &source, "accept-source").await;
 
     // The first handback still passes its fence and runs as its own turn.
@@ -140,6 +204,12 @@ async fn a_superseded_handback_is_retired_alone_and_the_follow_up_is_admitted() 
     let handback = run(&f, &claim, &binding, "first-handback").await;
     accept(&f, &handback.provider, "accept-first-handback").await;
 
+    // The owner's message gets the next turn: the source session moved on.
+    let (binding, claim) = claim_head(&f).await;
+    assert_eq!(claim.message_id, between.receipt.message_id);
+    let owner_turn = run(&f, &claim, &binding, "owner-between").await;
+    accept(&f, &owner_turn.provider, "accept-owner-between").await;
+
     // The second one is fenced for good: the same admission refusal as on
     // 2026-11-11, which used to end the window.
     let (binding, claim) = claim_head(&f).await;
@@ -150,10 +220,7 @@ async fn a_superseded_handback_is_retired_alone_and_the_follow_up_is_admitted() 
             .await,
         Err(RuntimeStoreError::Fenced)
     ));
-    let runs: i64 = sqlx::query_scalar("SELECT count(*) FROM production_runs")
-        .fetch_one(&f.store.pool)
-        .await
-        .unwrap();
+    let before = runs(&f).await;
     assert!(f
         .handle
         .retire_superseded_source_claim(&claim)
@@ -169,11 +236,7 @@ async fn a_superseded_handback_is_retired_alone_and_the_follow_up_is_admitted() 
         .retire_superseded_source_claim(&claim)
         .await
         .unwrap());
-    let after: i64 = sqlx::query_scalar("SELECT count(*) FROM production_runs")
-        .fetch_one(&f.store.pool)
-        .await
-        .unwrap();
-    assert_eq!(after, runs, "nothing is replayed");
+    assert_eq!(runs(&f).await, before, "nothing is replayed");
 
     // The follow-up is next, has no fence, and is admitted normally.
     let (binding, claim) = claim_head(&f).await;

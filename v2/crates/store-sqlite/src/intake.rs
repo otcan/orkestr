@@ -218,7 +218,9 @@ impl Store {
                     _ => false,
                 };
                 if !current && !released {
-                    return Err(StoreError::ProviderGenerationMismatch);
+                    // ORK-843: its own code, not provider_generation_changed:
+                    // the provider generation matched; the source run did not.
+                    return Err(StoreError::SourceSuperseded);
                 }
                 // This is original-transaction evidence, not a later adapter's
                 // claim. A duplicate POST must never acquire missing fences.

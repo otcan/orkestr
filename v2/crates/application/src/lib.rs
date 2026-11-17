@@ -7,6 +7,10 @@ pub enum StoreError {
     Invalid,
     Conflict,
     ProviderGenerationMismatch,
+    /// A continuation names a source run whose session no longer continues
+    /// it: a run that did not continue it used the session since, or the
+    /// binding was retired, reset or replaced (ORK-843). Nothing committed.
+    SourceSuperseded,
     NotFound,
     AlreadySetup,
     Unavailable,

@@ -83,6 +83,11 @@ binding is not retired and still matches the selected provider. A handoff away
 and back cannot revive that retired binding, even with a current generation.
 Core checks it under the same write transaction as fresh input admission.
 If the provider changed, HTTP409 `provider_generation_changed` commits no
-message, event, inbox, outbox or sequence change. Exact-key receipt retries do
+message, event, inbox, outbox or sequence change. If the generation matches but
+the source run no longer takes continuations (its binding was retired, reset or
+replaced, or a turn that did not continue that run used its session since),
+HTTP409 `source_superseded` commits nothing either. A later turn that only
+continued the same source run (another of its host results) does not end its
+continuations. Exact-key receipt retries do
 not create another input. Once guarded admission commits, the ordinary queued
 input fence prevents a concurrent handoff from crossing that continuation.

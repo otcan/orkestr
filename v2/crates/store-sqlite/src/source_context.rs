@@ -43,6 +43,18 @@ impl Store {
 /// Acceptance releases the exact occupied binding and advances its generation
 /// once in the same transaction. Only that recorded completion can explain a
 /// ready binding one generation ahead; reuse, replacement or retirement cannot.
+///
+/// ORK-843: a run is also still current while its session has only continued
+/// it. A turn may file several host requests and end; the first result starts
+/// a follow-up turn fenced to that same run, and a later result of the same
+/// turn used to be refused as "moved on" by that follow-up. So the source run
+/// R stays current when R succeeded and was accepted, every later run on its
+/// session took as its input a message fenced to R (under the provider
+/// generation that is still current), and the latest of those runs meets the
+/// rule above on the same binding, native session and provider. Any other
+/// later run (an owner message, a timer firing, a continuation of another
+/// run) still ends R's continuations, and so does a retired, reset or
+/// replaced binding.
 pub(super) async fn source_binding_is_current(
     tx: &mut sqlx::SqliteConnection,
     owner: &OwnerId,
@@ -50,6 +62,26 @@ pub(super) async fn source_binding_is_current(
     run: &RunId,
 ) -> Result<bool> {
     let valid: i64 = sqlx::query_scalar("SELECT count(*) FROM production_runs r JOIN session_bindings b ON b.id=r.session_id AND b.owner_id=r.owner_id AND b.conversation_id=r.conversation_id LEFT JOIN conversation_settings s ON s.owner_id=r.owner_id AND s.conversation_id=r.conversation_id WHERE r.id=? AND r.owner_id=? AND r.conversation_id=? AND r.role='deep' AND b.role='deep' AND b.provider_kind=r.provider_kind AND b.native_session_id=r.native_session_id AND r.provider_kind=COALESCE(s.provider,'codex') AND ((b.state='busy' AND b.generation=r.binding_generation) OR (b.state='ready' AND b.generation=r.binding_generation+1 AND r.state='succeeded' AND EXISTS(SELECT 1 FROM production_acceptances a WHERE a.run_id=r.id AND a.owner_id=r.owner_id AND a.conversation_id=r.conversation_id))) AND NOT EXISTS(SELECT 1 FROM production_runs other WHERE other.session_id=r.session_id AND other.id!=r.id AND other.binding_generation>=r.binding_generation)")
+        .bind(run.to_string()).bind(owner.to_string()).bind(conversation.to_string())
+        .fetch_one(&mut *tx).await.map_err(db)?;
+    if valid == 1 {
+        return Ok(true);
+    }
+    source_binding_only_continued(tx, owner, conversation, run).await
+}
+
+/// ORK-843: `r` is the source run and `l` the latest later run on its
+/// session. `l` must be fenced to `r`, be the only run at or above its own
+/// generation, and hold the binding exactly as the rule above requires of a
+/// current run; no later run may lack a fence to `r` under the current
+/// provider generation.
+async fn source_binding_only_continued(
+    tx: &mut sqlx::SqliteConnection,
+    owner: &OwnerId,
+    conversation: &ConversationId,
+    run: &RunId,
+) -> Result<bool> {
+    let valid: i64 = sqlx::query_scalar("SELECT count(*) FROM production_runs r JOIN session_bindings b ON b.id=r.session_id AND b.owner_id=r.owner_id AND b.conversation_id=r.conversation_id LEFT JOIN conversation_settings s ON s.owner_id=r.owner_id AND s.conversation_id=r.conversation_id JOIN production_runs l ON l.session_id=r.session_id AND l.owner_id=r.owner_id AND l.conversation_id=r.conversation_id AND l.id!=r.id AND l.binding_generation>r.binding_generation JOIN source_admission_fences lf ON lf.message_id=l.message_id AND lf.source_run_id=r.id WHERE r.id=? AND r.owner_id=? AND r.conversation_id=? AND r.role='deep' AND l.role='deep' AND b.role='deep' AND r.state='succeeded' AND EXISTS(SELECT 1 FROM production_acceptances a WHERE a.run_id=r.id AND a.owner_id=r.owner_id AND a.conversation_id=r.conversation_id) AND b.provider_kind=r.provider_kind AND b.native_session_id=r.native_session_id AND r.provider_kind=COALESCE(s.provider,'codex') AND l.provider_kind=r.provider_kind AND l.native_session_id=r.native_session_id AND lf.expected_provider_generation=COALESCE(s.provider_generation,0) AND ((b.state='busy' AND b.generation=l.binding_generation) OR (b.state='ready' AND b.generation=l.binding_generation+1 AND l.state='succeeded' AND EXISTS(SELECT 1 FROM production_acceptances a WHERE a.run_id=l.id AND a.owner_id=l.owner_id AND a.conversation_id=l.conversation_id))) AND NOT EXISTS(SELECT 1 FROM production_runs other WHERE other.session_id=r.session_id AND other.id!=l.id AND other.binding_generation>=l.binding_generation) AND NOT EXISTS(SELECT 1 FROM production_runs other WHERE other.session_id=r.session_id AND other.id!=r.id AND other.binding_generation>=r.binding_generation AND NOT EXISTS(SELECT 1 FROM source_admission_fences f WHERE f.message_id=other.message_id AND f.source_run_id=r.id AND f.expected_provider_generation=COALESCE(s.provider_generation,0)))")
         .bind(run.to_string()).bind(owner.to_string()).bind(conversation.to_string())
         .fetch_one(&mut *tx).await.map_err(db)?;
     Ok(valid == 1)

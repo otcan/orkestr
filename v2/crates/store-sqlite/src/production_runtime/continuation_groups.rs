@@ -15,8 +15,13 @@
 //! to answer exactly NO_REPLY when its previous answer already used them all:
 //! the session that read them is the only record of that, and a NO_REPLY
 //! answer is never sent to the chat. A result the previous turn did not use
-//! is answered in that one turn. So a source turn gets at most one
-//! continuation, and none of its queued results is retired unseen.
+//! is answered in that one turn. So the results queued when a source turn
+//! ends share one continuation, and none of its queued results is retired
+//! unseen. A result of the same turn that arrives while or after that
+//! continuation runs (one too large to join it, or one whose request took
+//! longer) is not "moved on" by it: the session only continued the source
+//! turn, so it is admitted and runs in the next continuation (ORK-843,
+//! `source_context::source_binding_is_current`).
 //!
 //! Only continuations of an accepted (succeeded) source turn are grouped.
 //! Release and deadline continuations continue a cancelled run (ORK-792):

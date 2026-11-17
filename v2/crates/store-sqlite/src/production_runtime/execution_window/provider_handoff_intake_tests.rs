@@ -84,7 +84,7 @@ async fn continuation_wins_blocks_handoff_and_exact_retired_receipt_never_requeu
                 Some(&p.deep.run.run_id),
             )
             .await,
-        Err(orkestr_v2_application::StoreError::ProviderGenerationMismatch)
+        Err(orkestr_v2_application::StoreError::SourceSuperseded)
     ));
     let admitted = fresh
         .admit_with_provider_generation(&w.f.owner, &w.f.conversation, &input, None, Some(0), None)
@@ -169,7 +169,7 @@ async fn current_generation_and_same_provider_never_revive_a_retired_source_sess
                 Some(&p.deep.run.run_id)
             )
             .await,
-        Err(StoreError::ProviderGenerationMismatch)
+        Err(StoreError::SourceSuperseded)
     ));
     assert_eq!(
         count(

@@ -2,8 +2,10 @@
 //! requested them. The turn could read each one while it ran, and Core has no
 //! record of that, so after the turn is accepted its queued results get one
 //! continuation turn together, which may stay silent (NO_REPLY). A result
-//! that arrives after the turn ended gets that one turn too. A queued result
-//! that can never run is retired with a receipt, never left queued.
+//! that arrives after the turn ended gets that one turn too, and one that
+//! arrives while or after that continuation runs gets the next (ORK-843). A
+//! queued result that can never run is retired with a receipt, never left
+//! queued.
 use super::*;
 use orkestr_v2_application::{
     runtime::{InboxClaim, RunAdmissionResult},
@@ -11,14 +13,18 @@ use orkestr_v2_application::{
 };
 use orkestr_v2_contracts::{ExecutionWindowRequest, MessageId, QueuedWindowWithdrawal, Receipt};
 
-fn result(n: usize) -> MessageInput {
+pub(super) fn result(n: usize) -> MessageInput {
     MessageInput {
         client_message_id: format!("automatic-host-result-synthetic-group-{n}"),
         text: format!("Synthetic host result {n}"),
     }
 }
 
-async fn hand_back(f: &Case, query: &SourceReceiptQuery, input: &MessageInput) -> Receipt {
+pub(super) async fn hand_back(
+    f: &Case,
+    query: &SourceReceiptQuery,
+    input: &MessageInput,
+) -> Receipt {
     let query = SourceReceiptQuery {
         client_message_id: input.client_message_id.clone(),
         text_sha256: crate::digest(&input.text),
@@ -27,7 +33,7 @@ async fn hand_back(f: &Case, query: &SourceReceiptQuery, input: &MessageInput) -
     admit(f, input, &query).await.unwrap().receipt
 }
 
-async fn claim(f: &Case) -> Option<(Binding, InboxClaim)> {
+pub(super) async fn claim(f: &Case) -> Option<(Binding, InboxClaim)> {
     let binding = f
         .handle
         .ensure_role_bindings(&f.owner, &f.conversation)
@@ -49,11 +55,21 @@ async fn claim(f: &Case) -> Option<(Binding, InboxClaim)> {
 
 /// Admit, reserve and consume the claimed input: the run, the exact text the
 /// provider receives, and the claimed (head) input.
-async fn start(f: &Case, key: &str) -> (RunAdmissionResult, String, MessageId) {
+pub(super) async fn start(f: &Case, key: &str) -> (RunAdmissionResult, String, MessageId) {
     let (binding, claim) = claim(f).await.expect("a claimable input");
+    start_claimed(f, &binding, &claim, key).await
+}
+
+/// `start` for an input the caller already claimed.
+pub(super) async fn start_claimed(
+    f: &Case,
+    binding: &Binding,
+    claim: &InboxClaim,
+    key: &str,
+) -> (RunAdmissionResult, String, MessageId) {
     let admitted = f
         .handle
-        .admit_run(&claim, &binding.session_id, binding.generation, key)
+        .admit_run(claim, &binding.session_id, binding.generation, key)
         .await
         .unwrap();
     assert_eq!(admitted.disposition, AdmissionDisposition::FreshCandidate);
@@ -71,10 +87,10 @@ async fn start(f: &Case, key: &str) -> (RunAdmissionResult, String, MessageId) {
         panic!("dispatch")
     };
     let text = capability.text().to_owned();
-    (admitted, text, claim.message_id)
+    (admitted, text, claim.message_id.clone())
 }
 
-async fn accept(f: &Case, run: &ProviderAdmission, key: &str) {
+pub(super) async fn accept(f: &Case, run: &ProviderAdmission, key: &str) {
     for (sequence, event) in [
         (1, ProviderEvent::Started),
         (2, ProviderEvent::CompletedProposal { synthetic: false }),
@@ -111,7 +127,7 @@ async fn accept(f: &Case, run: &ProviderAdmission, key: &str) {
 }
 
 /// Inbox state, the run that consumed it, and a retirement reason.
-async fn inbox(f: &Case, receipt: &Receipt) -> (String, Option<String>, Option<String>) {
+pub(super) async fn inbox(f: &Case, receipt: &Receipt) -> (String, Option<String>, Option<String>) {
     sqlx::query_as("SELECT i.state,i.admitted_run_id,r.reason FROM reasoning_inbox i LEFT JOIN owner_input_retirements r ON r.event_id=i.event_id WHERE i.message_id=?")
         .bind(receipt.message_id.to_string())
         .fetch_one(&f.store.pool)
@@ -119,7 +135,7 @@ async fn inbox(f: &Case, receipt: &Receipt) -> (String, Option<String>, Option<S
         .unwrap()
 }
 
-async fn count(f: &Case, sql: &str) -> i64 {
+pub(super) async fn count(f: &Case, sql: &str) -> i64 {
     sqlx::query_scalar(sql)
         .fetch_one(&f.store.pool)
         .await
@@ -241,7 +257,7 @@ async fn a_release_continuation_keeps_its_own_turn_and_text() {
 }
 
 #[tokio::test]
-async fn results_beyond_the_text_budget_wait_and_are_retired_once_superseded() {
+async fn results_beyond_the_text_budget_wait_for_the_next_continuation() {
     let (f, source, _, query) = fixture().await;
     let first = hand_back(&f, &query, &result(1)).await;
     let big = MessageInput {
@@ -255,17 +271,30 @@ async fn results_beyond_the_text_budget_wait_and_are_retired_once_superseded() {
     assert_eq!(inbox(&f, &first).await.0, "consumed");
     assert_eq!(inbox(&f, &overflow).await.0, "queued");
     accept(&f, &continuation.provider, "accept-continuation").await;
-    // The session moved on: the overflow can never run (ORK-795 retires it).
-    let (_, claim) = claim(&f).await.unwrap();
+    // ORK-843: the session only continued the same source turn, so the
+    // overflow is not superseded (it used to be retired unseen here). It
+    // runs as the next continuation of that turn.
+    let (binding, claim) = claim(&f).await.unwrap();
     assert_eq!(claim.message_id, overflow.message_id);
-    assert!(f
+    assert!(!f
         .handle
         .retire_superseded_source_claim(&claim)
         .await
         .unwrap());
+    let (next, text, head) = start_claimed(&f, &binding, &claim, "overflow-continuation").await;
+    assert_eq!(head, overflow.message_id);
+    assert!(text.starts_with("[Automatic results: 1 result(s) "));
     assert_eq!(
         inbox(&f, &overflow).await,
-        ("retired".into(), None, Some("source_superseded".into()))
+        (
+            "consumed".into(),
+            Some(next.provider.run.run_id.to_string()),
+            None
+        )
+    );
+    assert_eq!(
+        count(&f, "SELECT count(*) FROM owner_input_retirements").await,
+        0
     );
     close(f).await;
 }
