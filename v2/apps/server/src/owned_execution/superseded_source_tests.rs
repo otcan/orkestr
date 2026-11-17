@@ -1,10 +1,12 @@
 //! ORK-795 through the actual Deep input loop against an isolated Store; no
-//! provider runs. One owner turn, two host results handed back to it, then an
-//! owner follow-up. The first handback runs as its own turn, so the second is
-//! fenced for good. That used to end the loop with "execution admission
-//! refused", which aborts the execution window and releases the follow-up.
-//! (The second is too large to join the first one's continuation turn; a
-//! smaller one would be answered in that same turn, ORK-783.)
+//! provider runs. One owner turn and host results handed back to it, then an
+//! owner follow-up. A handback whose source session moved on is fenced for
+//! good. That used to end the loop with "execution admission refused", which
+//! aborts the execution window and releases the follow-up. ORK-843: only a
+//! turn that did not continue the same source turn moves it on; a later
+//! result that only follows the first result's turn still runs.
+//! (The second result is too large to join the first one's continuation
+//! turn; a smaller one would be answered in that same turn, ORK-783.)
 use super::*;
 use orkestr_v2_application::runtime::{
     NativeSessionConfirmation, ProviderAdmission, ProviderEvent, ProviderEventInput, RuntimeStore,
@@ -121,25 +123,60 @@ async fn accept(execution: &ConfiguredExecution, store: &Store, run: &ProviderAd
         .unwrap();
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_superseded_handback_does_not_end_the_loop_and_the_follow_up_runs() {
-    let (execution, store, root) = execution().await;
-    let owner = execution.owner.clone();
-    let conversation = execution.config.conversation_id.clone();
-    let (_sender, mut shutdown) = watch::channel(false);
-    let mut heartbeat = Instant::now();
-    let message = |key: &str, text: &str| MessageInput {
-        client_message_id: key.into(),
-        text: text.into(),
-    };
+/// A host result handed back to `run` while it runs; `large` is too large to
+/// join another result's continuation turn.
+async fn hand_back(
+    store: &Store,
+    execution: &ConfiguredExecution,
+    run: &ProviderAdmission,
+    n: usize,
+    large: bool,
+) -> orkestr_v2_contracts::Receipt {
     store
-        .admit(
-            &owner,
-            &conversation,
-            &message("owner-turn", "Synthetic owner turn"),
+        .admit_authenticated_attributed(
+            TOKEN,
+            &execution.owner,
+            &execution.config.conversation_id,
+            &MessageInput {
+                client_message_id: format!("automatic-host-result-synthetic-{n}"),
+                text: format!("Synthetic host result {n} ").repeat(if large { 1024 } else { 1 }),
+            },
+            None,
+            Some(0),
+            Some(&run.run.run_id),
+            Some(InputAuthor::V1Agent),
+            None,
         )
         .await
-        .unwrap();
+        .unwrap()
+        .receipt
+}
+
+async fn owner_input(
+    store: &Store,
+    execution: &ConfiguredExecution,
+    key: &str,
+) -> orkestr_v2_contracts::Receipt {
+    store
+        .admit(
+            &execution.owner,
+            &execution.config.conversation_id,
+            &MessageInput {
+                client_message_id: key.into(),
+                text: format!("Synthetic owner input {key}"),
+            },
+        )
+        .await
+        .unwrap()
+        .receipt
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_later_handback_of_the_same_turn_runs_after_the_first_one() {
+    let (execution, store, root) = execution().await;
+    let (_sender, mut shutdown) = watch::channel(false);
+    let mut heartbeat = Instant::now();
+    owner_input(&store, &execution, "owner-turn").await;
     let turn = execution
         .next(&mut shutdown, &mut heartbeat)
         .await
@@ -148,52 +185,76 @@ async fn a_superseded_handback_does_not_end_the_loop_and_the_follow_up_runs() {
         .provider()
         .clone();
     // While that turn runs, two host results are handed back to it.
-    let mut handbacks = Vec::new();
-    for n in 1..=2 {
-        handbacks.push(
-            store
-                .admit_authenticated_attributed(
-                    TOKEN,
-                    &owner,
-                    &conversation,
-                    &message(
-                        &format!("automatic-host-result-synthetic-{n}"),
-                        &format!("Synthetic host result {n} ").repeat(if n == 1 {
-                            1
-                        } else {
-                            1024
-                        }),
-                    ),
-                    None,
-                    Some(0),
-                    Some(&turn.run.run_id),
-                    Some(InputAuthor::V1Agent),
-                    None,
-                )
-                .await
-                .unwrap()
-                .receipt,
-        );
-    }
-    let follow_up = store
-        .admit(
-            &owner,
-            &conversation,
-            &message("owner-follow-up", "Synthetic owner follow-up"),
-        )
-        .await
-        .unwrap()
-        .receipt;
+    let first = hand_back(&store, &execution, &turn, 1, false).await;
+    let second = hand_back(&store, &execution, &turn, 2, true).await;
+    let follow_up = owner_input(&store, &execution, "owner-follow-up").await;
     accept(&execution, &store, &turn).await;
 
-    // The first handback still passes its fence and becomes its own turn.
-    let first = execution
+    let handback = execution
         .next(&mut shutdown, &mut heartbeat)
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(first.message_id(), &handbacks[0].message_id);
-    accept(&execution, &store, first.provider()).await;
+    assert_eq!(handback.message_id(), &first.message_id);
+    accept(&execution, &store, handback.provider()).await;
+
+    // ORK-843: that turn only continued the source turn; the second result runs next.
+    let late = execution
+        .next(&mut shutdown, &mut heartbeat)
+        .await
+        .unwrap()
+        .expect("the second result is not superseded by the first one's turn");
+    assert_eq!(late.message_id(), &second.message_id);
+    accept(&execution, &store, late.provider()).await;
+
+    let next = execution
+        .next(&mut shutdown, &mut heartbeat)
+        .await
+        .unwrap()
+        .expect("the owner follow-up is the next input");
+    assert_eq!(next.message_id(), &follow_up.message_id);
+    execution.store.close().await;
+    drop(execution);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_superseded_handback_does_not_end_the_loop_and_the_follow_up_runs() {
+    let (execution, store, root) = execution().await;
+    let (_sender, mut shutdown) = watch::channel(false);
+    let mut heartbeat = Instant::now();
+    owner_input(&store, &execution, "owner-turn").await;
+    let turn = execution
+        .next(&mut shutdown, &mut heartbeat)
+        .await
+        .unwrap()
+        .unwrap()
+        .provider()
+        .clone();
+    // While that turn runs: a host result, an owner message, a second (large)
+    // host result and another owner message.
+    let first = hand_back(&store, &execution, &turn, 1, false).await;
+    let between = owner_input(&store, &execution, "owner-between").await;
+    let second = hand_back(&store, &execution, &turn, 2, true).await;
+    let follow_up = owner_input(&store, &execution, "owner-follow-up").await;
+    accept(&execution, &store, &turn).await;
+
+    // The first handback still passes its fence and becomes its own turn.
+    let handback = execution
+        .next(&mut shutdown, &mut heartbeat)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(handback.message_id(), &first.message_id);
+    accept(&execution, &store, handback.provider()).await;
+    // Then the owner's message: the source session moved on.
+    let owner_turn = execution
+        .next(&mut shutdown, &mut heartbeat)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(owner_turn.message_id(), &between.message_id);
+    accept(&execution, &store, owner_turn.provider()).await;
 
     // The second can never run. The loop goes on and takes the follow-up.
     let next = execution
@@ -202,7 +263,7 @@ async fn a_superseded_handback_does_not_end_the_loop_and_the_follow_up_runs() {
         .expect("a superseded handback must not end the execution loop")
         .expect("the owner follow-up is the next input");
     assert_eq!(next.message_id(), &follow_up.message_id);
-    assert_ne!(next.message_id(), &handbacks[1].message_id);
+    assert_ne!(next.message_id(), &second.message_id);
     execution.store.close().await;
     drop(execution);
     std::fs::remove_dir_all(root).unwrap();

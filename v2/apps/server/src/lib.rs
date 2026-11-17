@@ -449,6 +449,11 @@ impl From<StoreError> for Error {
                 "provider_generation_changed",
                 "Conversation provider changed before input admission",
             ),
+            StoreError::SourceSuperseded => Self(
+                StatusCode::CONFLICT,
+                "source_superseded",
+                "Source run no longer takes continuations",
+            ),
             StoreError::Invalid => Self(
                 StatusCode::BAD_REQUEST,
                 "invalid_input",

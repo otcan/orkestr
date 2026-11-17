@@ -254,7 +254,7 @@ async fn source_context_requires_exact_original_input_and_current_native_binding
     );
     assert!(matches!(
         admit(&f, &message, &receipt_query).await,
-        Err(StoreError::ProviderGenerationMismatch)
+        Err(StoreError::SourceSuperseded)
     ));
     close(f).await;
 }
@@ -444,6 +444,9 @@ mod superseded_source;
 #[path = "continuation_group_tests.rs"]
 mod continuation_groups;
 
+#[path = "late_result_tests.rs"]
+mod late_results;
+
 // ORK-792: a run cut by a Root-recorded release interruption gets exactly one
 // continuation. Stop cancelled the run and released its binding to `ready`
 // one generation ahead (the state the live cut runs showed on 2026-11-11).
@@ -494,7 +497,7 @@ async fn release_record_allows_exactly_one_continuation_of_the_cut_run() {
     // No record: today's refusal.
     assert!(matches!(
         admit(&f, &message, &query).await,
-        Err(StoreError::ProviderGenerationMismatch)
+        Err(StoreError::SourceSuperseded)
     ));
     let recorded = grant(&source.run.run_id, 0);
     let first = admit_released(&f, &message, &query, Some(&recorded))
@@ -522,7 +525,7 @@ async fn release_record_allows_exactly_one_continuation_of_the_cut_run() {
     };
     assert!(matches!(
         admit_released(&f, &second, &query, Some(&recorded)).await,
-        Err(StoreError::ProviderGenerationMismatch)
+        Err(StoreError::SourceSuperseded)
     ));
     close(f).await;
 }
@@ -534,7 +537,7 @@ async fn release_record_must_name_the_exact_run_and_provider_generation() {
     let other = grant(&RunId(Uuid::new_v4()), 0);
     assert!(matches!(
         admit_released(&f, &message, &query, Some(&other)).await,
-        Err(StoreError::ProviderGenerationMismatch)
+        Err(StoreError::SourceSuperseded)
     ));
     let generation = grant(&source.run.run_id, 1);
     assert!(admit_released(&f, &message, &query, Some(&generation))
@@ -550,7 +553,7 @@ async fn release_record_is_refused_after_a_later_turn_used_the_session() {
     release_cut(&f, &source, "busy").await;
     assert!(matches!(
         admit_released(&f, &message, &query, Some(&grant(&source.run.run_id, 0))).await,
-        Err(StoreError::ProviderGenerationMismatch)
+        Err(StoreError::SourceSuperseded)
     ));
     close(f).await;
 }
@@ -565,7 +568,7 @@ async fn release_record_never_applies_to_a_run_that_was_not_cut() {
         .unwrap();
     assert!(matches!(
         admit_released(&f, &message, &query, Some(&grant(&source.run.run_id, 0))).await,
-        Err(StoreError::ProviderGenerationMismatch)
+        Err(StoreError::SourceSuperseded)
     ));
     close(f).await;
 }
@@ -619,7 +622,7 @@ async fn release_continuation_ignores_results_admitted_before_the_cut() {
     // No record: still today's refusal.
     assert!(matches!(
         admit(&f, &message, &query).await,
-        Err(StoreError::ProviderGenerationMismatch)
+        Err(StoreError::SourceSuperseded)
     ));
     // The pre-cut result never dispatches through the release grant.
     let mut tx = f.store.pool.begin().await.unwrap();
@@ -646,7 +649,7 @@ async fn release_continuation_ignores_results_admitted_before_the_cut() {
     };
     assert!(matches!(
         admit_released(&f, &second, &query, Some(&recorded)).await,
-        Err(StoreError::ProviderGenerationMismatch)
+        Err(StoreError::SourceSuperseded)
     ));
     let mut tx = f.store.pool.begin().await.unwrap();
     crate::source_continuation::validate(

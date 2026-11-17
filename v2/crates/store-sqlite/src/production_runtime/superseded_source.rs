@@ -1,8 +1,10 @@
 //! ORK-795: a queued source continuation (for example an automatic host
 //! result handed back to the run that issued it) whose source binding has
 //! moved on can never be dispatched: `source_continuation::validate` refuses
-//! it for good, because a later run already used the source session (or the
-//! provider generation or binding changed). Admission used to report that as
+//! it for good, because a later run that did not continue the source run
+//! already used the source session (or the provider generation or binding
+//! changed). A later run that only continued the same source run (its other
+//! results) does not supersede it (ORK-843). Admission used to report that as
 //! a refused admission, which ended the whole execution window and released
 //! every other input waiting in it: owner follow-ups, timer firings and other
 //! results. Only that one input is retired here, with an immutable retirement

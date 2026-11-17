@@ -33,3 +33,28 @@ async fn guarded_message_http_refuses_changed_provider_without_committing_input(
     assert_eq!(snapshot["messages"].as_array().unwrap().len(), 1);
     case.finish().await;
 }
+
+#[tokio::test]
+async fn continuation_of_a_source_run_that_no_longer_continues_has_its_own_refusal() {
+    let case = case().await;
+    let auth = case.auth();
+    // ORK-843: the provider generation matches; the source run does not.
+    let body = serde_json::json!({"client_message_id":"synthetic:superseded-continuation",
+        "text":"Synthetic late host result","expected_provider_generation":0,
+        "continuation_source_run_id":Uuid::new_v4(),"author":"v1_agent"})
+    .to_string();
+    let (status, value) = send(
+        &case.state,
+        "POST",
+        &case.path("/messages"),
+        &[&auth],
+        &body,
+    )
+    .await;
+    assert_eq!(status, 409);
+    assert_eq!(value["code"], "source_superseded");
+    let (status, snapshot) = send(&case.state, "GET", &case.path(""), &[&auth], "").await;
+    assert_eq!(status, 200);
+    assert_eq!(snapshot["messages"].as_array().unwrap().len(), 0);
+    case.finish().await;
+}
