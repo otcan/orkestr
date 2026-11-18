@@ -61,6 +61,7 @@ mod provider_quota_panel;
 mod provider_sign_in_view;
 mod restricted_view;
 mod rich_text_view;
+mod run_updates_view;
 mod scroll_pin;
 mod sidebar_resize;
 mod sites_view;

@@ -322,6 +322,7 @@ pub mod message_time;
 pub mod outbox;
 pub mod rich_text;
 pub mod route;
+pub mod run_updates;
 pub mod send_intent;
 pub mod sidebar;
 

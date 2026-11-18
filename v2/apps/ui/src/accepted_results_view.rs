@@ -2,7 +2,7 @@ use crate::accepted_payloads_view::Reader;
 use crate::accepted_results_bridge::start;
 use dioxus::prelude::*;
 use orkestr_v2_contracts::{
-    AcceptedResult, AcceptedResults, ConversationPost, ExecutionStatus, RunId,
+    AcceptedResult, AcceptedResults, ConversationPost, ExecutionStatus, RunUpdate,
 };
 use orkestr_v2_ui::chat_timeline::{self, Input, Row};
 use orkestr_v2_ui::{
@@ -10,6 +10,7 @@ use orkestr_v2_ui::{
     accepted_results::{next_chat_page, refresh_cursor, valid_page, CHAT_PAGES},
     execution::Execution,
     live_answer::{LiveAnswer, MessageKind},
+    run_updates,
     session_scope::SessionScope,
 };
 use serde_json::{json, Value};
@@ -32,6 +33,10 @@ pub fn AcceptedReplies(
     id: String,
     #[props(default)] messages: Vec<Input>,
     #[props(default)] posts: Vec<ConversationPost>,
+    /// Every interim update of the chat's runs (owner decision 2026-11-18):
+    /// each is its own message, marked Update.
+    #[props(default)]
+    updates: Vec<RunUpdate>,
     #[props(default)] update: Option<Signal<i64>>,
     #[props(default)] inline: bool,
     #[props(default)] live: Option<LiveContext>,
@@ -62,6 +67,8 @@ pub fn AcceptedReplies(
     let loaded = use_signal(|| 0_u64);
     let failed = use_signal(BTreeSet::<String>::new);
     let mut reading = use_signal(Vec::<AcceptedResult>::new);
+    // The shown updates as rows of the same text reader.
+    let mut update_rows = use_signal(Vec::<AcceptedResult>::new);
     let payload_channel = use_signal(|| None::<document::Eval>);
     let reader = Reader {
         generation: owner,
@@ -201,7 +208,9 @@ pub fn AcceptedReplies(
             busy.set(false);
             // Texts read before show at once; only new answers start a read.
             let shown: Vec<AcceptedResult> = if inline {
-                collected.peek().values().cloned().collect()
+                let mut rows: Vec<AcceptedResult> = collected.peek().values().cloned().collect();
+                rows.extend(update_rows.peek().iter().cloned());
+                rows
             } else {
                 page.peek()
                     .as_ref()
@@ -225,7 +234,32 @@ pub fn AcceptedReplies(
     };
     let _ = loaded();
     let answers = crate::accepted_payloads_view::answers(owner, &id, &results, &failed.read());
-    let rows = chat_timeline::ordered(&messages, &results, &posts);
+    // Updates from the oldest input on screen (an older one belongs to a turn
+    // whose question is not loaded); never a reply's own text.
+    let from = messages.iter().map(|m| m.sequence).min().unwrap_or(0);
+    let shown_updates = if inline {
+        run_updates::shown(&updates, &results, from)
+    } else {
+        Vec::new()
+    };
+    let reader_rows: Vec<AcceptedResult> =
+        shown_updates.iter().map(run_updates::reader_row).collect();
+    let plan_id = id.clone();
+    use_effect(use_reactive((&reader_rows,), move |(rows,)| {
+        if *update_rows.peek() == rows {
+            return;
+        }
+        update_rows.set(rows.clone());
+        let mut all: Vec<AcceptedResult> = collected.peek().values().cloned().collect();
+        all.extend(rows);
+        let todo = reader.plan(&plan_id, &all);
+        if adds_work(&reading.peek(), &todo) {
+            reading.set(todo);
+        }
+    }));
+    let update_answers =
+        crate::accepted_payloads_view::answers(owner, &id, &reader_rows, &failed.read());
+    let rows = chat_timeline::ordered_with_updates(&messages, &results, &posts, &shown_updates);
     // Every file of the shown messages: the owner's attachments and the
     // files of each answer whose text the chat has read.
     let shown_files = match (&rows, files.is_some()) {
@@ -281,7 +315,10 @@ pub fn AcceptedReplies(
             answer.write().unanswered(&run);
         }
     }));
-    let live_rows = answer.read().rows(status_now.as_ref());
+    let working = status_now
+        .as_ref()
+        .filter(|status| status.run_id.is_some())
+        .and_then(|status| orkestr_v2_ui::live_answer::working_line(status.phase));
     let times_now = times.read();
     rsx! { section { class: if inline { "chat-transcript" } else { "accepted-history" }, "aria-label":"Accepted replies",
         if !inline { h2 { "Accepted replies" } }
@@ -289,7 +326,7 @@ pub fn AcceptedReplies(
             if inline && rows.is_empty() && !busy() { p { class: "empty-conversation", "Start a conversation. Your messages and accepted replies will appear here." } }
             ol { class: if inline { "chat-messages" } else { "messages" },
                 for row in rows.into_iter().filter(|row| !row.is_silenced(&silent.read()) && !row.is_silent_notice()) {
-                    li { key: "{row.key()}", hidden: matches!(&row, Row::Reply(reply) if live_rows.covers(&reply.run_id)), class: match &row { _ if row.is_notice() => "revision-notice-row", Row::Input(_) => "user-message", Row::Reply(_) => "assistant-message", Row::Post(_) => "assistant-message post-message" }, "data-replyable": "{inline && row.is_replyable()}",
+                    li { key: "{row.key()}", class: match &row { _ if row.is_notice() => "revision-notice-row", Row::Input(_) => "user-message", Row::Reply(_) => "assistant-message", Row::Post(_) => "assistant-message post-message", Row::Update(_) => "assistant-message update-message" }, "data-replyable": "{inline && row.is_replyable()}",
                         match &row {
                             Row::Input(input) if input.revisions.notice.is_some() => rsx! {
                                 if let Some(notice) = &input.revisions.notice { p { class: "revision-notice", role: "status", "{chat_timeline::notice_line(notice)}" } }
@@ -329,9 +366,13 @@ pub fn AcceptedReplies(
                             Row::Reply(reply) => rsx! { AcceptedReply { conversation:id.clone(), row:reply.clone(), session_scope, onexpired,
                                 answer: answers.get(&reply.acceptance_sequence).cloned().unwrap_or(Answer::Loading) } },
                             Row::Post(post) => rsx! { crate::conversation_posts_view::PostBubble { post: post.clone() } },
+                            Row::Update(update) => rsx! { crate::run_updates_view::UpdateBubble { conversation: id.clone(), update: update.clone(),
+                                answer: update_answers.get(&update.sequence).cloned().unwrap_or(Answer::Loading), onexpired } },
                         }
                         if let Row::Post(post) = &row {
                             crate::message_time_view::MessageTime { at_ms: post.created_ms, now_ms: now() }
+                        } else if let Row::Update(update) = &row {
+                            crate::message_time_view::MessageTime { at_ms: update.observed_at_ms, now_ms: now() }
                         } else if let (false, Some(time)) = (row.is_notice(), times_now.get(&row.sequence())) {
                             crate::message_time_view::MessageTime { at_ms: time.at_ms, now_ms: now(), receipts: time.receipts.clone() }
                         }
@@ -341,22 +382,11 @@ pub fn AcceptedReplies(
         } else { p { role: "alert", "Conversation order could not be verified. Reload history." } }
         if inline {
             crate::outbox_view::OutboxBubbles { target: orkestr_v2_ui::outbox::Target::Native(id.clone()), shown: messages.iter().map(|m| m.id.clone()).collect::<Vec<_>>() }
-            if let Some(shown) = live_rows.finishing.clone() {
-                div { key: "finishing-{shown.run}", class: "chat-messages live-answer-row",
-                    crate::progress_view::LiveBubble { text: Some(shown.text) }
-                }
-            }
-            if let (Some(current), Some(context)) = (live_rows.writing.clone(), live.as_ref()) {
-                div { key: "writing-{current.run_id.as_ref().map(ToString::to_string).unwrap_or_default()}", class: "chat-messages live-answer-row",
-                    // A key only takes effect at the root of a block: each payload is read afresh.
-                    if let Some(progress) = current.progress.clone() {
-                        crate::progress_view::ProgressView { key: "{progress.payload_id}",
-                            retained: current.run_id.as_ref().and_then(|run| answer.read().text(run).map(str::to_owned)),
-                            onobserved: move |(run, text): (RunId, Option<String>)| {
-                                if answer.peek().text(&run) != text.as_deref() { answer.write().observed(&run, text); }
-                            },
-                            status: current.clone(), csrf: context.csrf.clone(), execution: context.execution, session_scope, onexpired, plain: true }
-                    }
+            // Every update is its own message above; while the run still
+            // works, this line says more is coming.
+            if let Some(state) = working {
+                div { key: "working", class: "chat-messages live-answer-row",
+                    crate::progress_view::LiveBubble { text: None, state }
                 }
             }
         }
