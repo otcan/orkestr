@@ -15,6 +15,9 @@ PINS = {
     'amd64': ('692817008', '1f99fb518b83dec2ba8d870a7cc991d82a77e6196295a3d2754ba17ab9f91872'),
     'arm64': ('692818763', '3df43aedc9ff291d1735b5cb576cb97e0b157488796db2e32b28aecabb445775'),
 }
+API_ASSET = 'https://api.github.com/repos/cloudflare/cloudflared/releases/assets/'
+# The same official assets over the public release link (sha256 checked 2026-11-18).
+PUBLIC_LINK = 'https://github.com/cloudflare/cloudflared/releases/download/2026.10.7/cloudflared-linux-'
 
 
 class BuildAssetTransportTests(unittest.TestCase):
@@ -44,10 +47,31 @@ class BuildAssetTransportTests(unittest.TestCase):
         self.assertIn('https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz',
                       fallback)
         self.assertNotIn('Authorization:', lines[1])
+        self.assertNotIn('--header', fallback)
         self.assertIn('--fail', fallback)
+        self.assertLess(workflow.index(lines[0]), workflow.index('if [ "$api_ok" != yes ]; then'))
+        self.assertLess(workflow.index('if [ "$api_ok" != yes ]; then'), workflow.index(lines[1]))
         self.assertLess(workflow.index(lines[1]), workflow.index('sha256sum --check --status'))
 
-    def exercise_cloudflared(self, arch, valid_digest=False, upstream_failure=False):
+    def test_cloudflared_fallback_is_the_same_anonymous_asset_before_the_digest_check(self):
+        source = (ROOT / 'Dockerfile').read_text()
+        lines = [line.strip() for line in source.splitlines() if 'curl -fsSL' in line]
+        self.assertEqual(len(lines), 2)
+        api, public = lines
+        self.assertIn('"' + API_ASSET + '${cloudflared_asset}"', api)
+        self.assertIn("--header 'Accept: application/octet-stream'", api)
+        self.assertIn("--header 'X-GitHub-Api-Version: 2022-11-28'", api)
+        self.assertTrue(api.endswith('; then cloudflared_api_ok=yes; fi \\'))
+        self.assertTrue(public.startswith('&& if [ "$cloudflared_api_ok" != yes ]; then curl '))
+        self.assertIn('"' + PUBLIC_LINK + '${cloudflared_arch}"', public)
+        self.assertNotIn('--header', public)
+        self.assertNotIn('Authorization', source)
+        self.assertNotIn('||', source[source.index(api):source.index('sha256sum --check --status')])
+        self.assertLess(source.index(api), source.index(public))
+        self.assertLess(source.index(public), source.index('sha256sum --check --status'))
+        self.assertLess(source.index('sha256sum --check --status'), source.index('install -m 0755'))
+
+    def exercise_cloudflared(self, arch, valid_digest=False, fail_routes=(), public_payload=None):
         source = (ROOT / 'Dockerfile').read_text()
         anchor = '  && case "${TARGETARCH}" in \\\n'
         self.assertEqual(source.count(anchor), 1)
@@ -67,12 +91,19 @@ class BuildAssetTransportTests(unittest.TestCase):
             data.write_bytes(payload)
             arguments = root / 'request.json'
             curl = binary / 'curl'
+            public = root / 'public-payload'
+            public.write_bytes(payload if public_payload is None else public_payload)
+            # Records every request; fails the routes named in FAIL_ROUTES like curl -f does.
             curl.write_text('#!' + sys.executable + '\n' +
                             'import json,os,sys\nfrom pathlib import Path\n'
                             'args=sys.argv[1:]\n'
-                            'Path(os.environ["REQUEST_ARGS"]).write_text(json.dumps(args))\n'
-                            'if os.environ["UPSTREAM_FAILURE"]=="1":sys.exit(22)\n'
-                            'Path(args[args.index("-o")+1]).write_bytes(Path(os.environ["PAYLOAD"]).read_bytes())\n')
+                            'log=Path(os.environ["REQUEST_ARGS"])\n'
+                            'calls=json.loads(log.read_text()) if log.exists() else []\n'
+                            'log.write_text(json.dumps(calls+[args]))\n'
+                            'route="api" if any(a.startswith("https://api.github.com/") for a in args) else "public"\n'
+                            'if route in os.environ["FAIL_ROUTES"].split(","):sys.exit(22)\n'
+                            'source=os.environ["PAYLOAD"] if route=="api" else os.environ["PUBLIC_PAYLOAD"]\n'
+                            'Path(args[args.index("-o")+1]).write_bytes(Path(source).read_bytes())\n')
             curl.chmod(0o700)
             self.assertEqual(tail.count('/usr/local/bin/cloudflared'), 1)
             tail = tail.replace('/usr/local/bin/cloudflared', shlex.quote(str(binary / 'cloudflared')))
@@ -82,39 +113,71 @@ class BuildAssetTransportTests(unittest.TestCase):
                                     capture_output=True, text=True,
                                     env={'PATH': str(binary) + ':/usr/bin:/bin', 'TMPDIR': str(root),
                                          'TARGETARCH': arch, 'PAYLOAD': str(data),
+                                         'PUBLIC_PAYLOAD': str(public),
                                          'REQUEST_ARGS': str(arguments),
-                                         'UPSTREAM_FAILURE': '1' if upstream_failure else '0'})
-            requested = json.loads(arguments.read_text()) if arguments.exists() else None
-            return result.returncode, (binary / 'cloudflared').exists(), requested, result.stdout
+                                         'FAIL_ROUTES': ','.join(fail_routes)})
+            requests = json.loads(arguments.read_text()) if arguments.exists() else None
+            return result.returncode, (binary / 'cloudflared').exists(), requests, result.stdout
+
+    def assert_api_request(self, request, asset):
+        self.assertIn(API_ASSET + asset, request)
+        self.assertIn('Accept: application/octet-stream', request)
+        self.assertIn('X-GitHub-Api-Version: 2022-11-28', request)
+        self.assertEqual(request[request.index('--retry') + 1], '2')
 
     @unittest.skipUnless(shutil.which('sha256sum') and shutil.which('install'), 'requires Linux shell tools')
     def test_both_architectures_verify_before_installing(self):
         for arch, (asset, _) in PINS.items():
             with self.subTest(architecture=arch):
-                code, installed, request, output = self.exercise_cloudflared(arch, valid_digest=True)
+                code, installed, requests, output = self.exercise_cloudflared(arch, valid_digest=True)
                 self.assertEqual(code, 0)
                 self.assertTrue(installed)
                 self.assertIn('cloudflared synthetic', output)
-                self.assertIn('https://api.github.com/repos/cloudflare/cloudflared/releases/assets/' + asset, request)
-                self.assertIn('Accept: application/octet-stream', request)
-                self.assertIn('X-GitHub-Api-Version: 2022-11-28', request)
-                self.assertEqual(request[request.index('--retry') + 1], '2')
+                # A working API route is the only request; the public link is not touched.
+                self.assertEqual(len(requests), 1)
+                self.assert_api_request(requests[0], asset)
+
+    @unittest.skipUnless(shutil.which('sha256sum') and shutil.which('install'), 'requires Linux shell tools')
+    def test_api_refusal_falls_back_to_the_anonymous_public_link_before_verifying(self):
+        for arch, (asset, _) in PINS.items():
+            with self.subTest(architecture=arch):
+                code, installed, requests, output = self.exercise_cloudflared(
+                    arch, valid_digest=True, fail_routes=('api',))
+                self.assertEqual(code, 0)
+                self.assertTrue(installed)
+                self.assertIn('cloudflared synthetic', output)
+                self.assertEqual(len(requests), 2)
+                self.assert_api_request(requests[0], asset)
+                fallback = requests[1]
+                self.assertEqual([arg for arg in fallback if arg.startswith('https://')], [PUBLIC_LINK + arch])
+                self.assertNotIn('--header', fallback)
+                self.assertFalse(any('Authorization' in arg for arg in fallback))
+                self.assertIn('-fsSL', fallback)
+                self.assertEqual(fallback[fallback.index('--retry') + 1], '2')
+                self.assertEqual(fallback[fallback.index('-o') + 1], requests[0][requests[0].index('-o') + 1])
 
     @unittest.skipUnless(shutil.which('sha256sum') and shutil.which('install'), 'requires Linux shell tools')
     def test_wrong_digest_and_failed_download_never_install_or_execute(self):
-        for failure in (False, True):
-            with self.subTest(upstream_failure=failure):
-                code, installed, _, output = self.exercise_cloudflared('amd64', upstream_failure=failure)
+        cases = {
+            'api digest mismatch': dict(),
+            'both routes refused': dict(valid_digest=True, fail_routes=('api', 'public')),
+            'fallback digest mismatch': dict(valid_digest=True, fail_routes=('api',),
+                                             public_payload=b'#!/bin/sh\nprintf "other asset\\n"\n'),
+        }
+        for name, case in cases.items():
+            with self.subTest(case=name):
+                code, installed, requests, output = self.exercise_cloudflared('amd64', **case)
                 self.assertNotEqual(code, 0)
                 self.assertFalse(installed)
                 self.assertEqual(output, '')
+                self.assertEqual(len(requests), 1 if name == 'api digest mismatch' else 2)
 
     @unittest.skipUnless(shutil.which('sha256sum') and shutil.which('install'), 'requires Linux shell tools')
     def test_unknown_architecture_never_requests_an_asset(self):
-        code, installed, request, _ = self.exercise_cloudflared('unknown')
+        code, installed, requests, _ = self.exercise_cloudflared('unknown')
         self.assertNotEqual(code, 0)
         self.assertFalse(installed)
-        self.assertIsNone(request)
+        self.assertIsNone(requests)
 
 
 if __name__ == '__main__':

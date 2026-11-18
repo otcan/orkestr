@@ -1,9 +1,11 @@
 """Fetch only the official pinned Linux x86_64/aarch64 CLI artifacts; never log in."""
 import base64
 import hashlib
+import http.client
 import io
 from pathlib import Path
 import platform
+import sys
 import tarfile
 import time
 from types import MappingProxyType
@@ -35,7 +37,8 @@ ASSETS = {
 # ELF e_machine of each supported architecture (little-endian, 64-bit).
 ELF_MACHINE = {'x86_64': b'\x3e\x00', 'aarch64': b'\xb7\x00'}
 # Exact official release assets for the unchanged URLs/digests above. The API
-# route avoids the browser-download endpoint; no token or runtime lookup is used.
+# route is tried first; if it fails, download() falls back to the same canonical
+# URL. Both are anonymous; no token or runtime lookup is used.
 GITHUB_ASSET_IDS = MappingProxyType({
     CODEX + 'codex-x86_64-unknown-linux-musl.tar.gz': 645227929,
     CODEX + 'codex-code-mode-host-x86_64-unknown-linux-musl.tar.gz': 645227482,
@@ -56,17 +59,32 @@ def download_request(url):
                  'X-GitHub-Api-Version': '2022-11-28'})
 
 
-def download(url):
-    """Retry transient HTTP failures; keep exact asset and digest validation."""
+def fetch(request):
+    """Retry transient HTTP failures of one route."""
     for attempt in range(3):
         try:
-            with urllib.request.urlopen(download_request(url), timeout=120) as response:
+            with urllib.request.urlopen(request, timeout=120) as response:
                 return response.read(256 * 1024 * 1024 + 1)
         except urllib.error.HTTPError as error:
             error.close()
             if error.code not in (408, 429, 500, 502, 503, 504) or attempt == 2:
                 raise
             time.sleep(attempt + 1)
+
+
+def download(url):
+    """API asset route first, then the same reviewed public link; main() checks the digest."""
+    request = download_request(url)  # refuses unreviewed Codex assets before any request
+    if url not in GITHUB_ASSET_IDS:
+        return fetch(url)
+    try:
+        return fetch(request)
+    except (OSError, http.client.HTTPException) as error:
+        # Shared runner IPs get HTTP 403 from api.github.com for hours at a time.
+        # The fallback is the reviewed canonical URL, also anonymous.
+        print('GitHub API asset route failed (' + str(getattr(error, 'code', type(error).__name__)) +
+              '); using the public release link', file=sys.stderr)
+        return fetch(url)
 
 
 def assets(machine=None):

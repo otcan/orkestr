@@ -31,6 +31,9 @@ ENV NODE_ENV=production \
 WORKDIR /app
 
 # Official 2026.10.7 assets: the release selected by latest when reviewed.
+# The anonymous API asset route comes first. When it fails (shared runner IPs
+# get HTTP 403 from api.github.com), the same asset is fetched anonymously from
+# the public release link. The pinned sha256 check stays authoritative.
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     ca-certificates \
@@ -56,7 +59,9 @@ RUN apt-get update \
   esac \
   && cloudflared_dir="$(mktemp -d)" \
   && cloudflared_file="$cloudflared_dir/cloudflared-linux-${cloudflared_arch}" \
-  && curl -fsSL --connect-timeout 15 --max-time 120 --retry 2 --retry-delay 2 --retry-max-time 360 --header 'Accept: application/octet-stream' --header 'X-GitHub-Api-Version: 2022-11-28' -o "$cloudflared_file" "https://api.github.com/repos/cloudflare/cloudflared/releases/assets/${cloudflared_asset}" \
+  && cloudflared_api_ok=no \
+  && if curl -fsSL --connect-timeout 15 --max-time 120 --retry 2 --retry-delay 2 --retry-max-time 360 --header 'Accept: application/octet-stream' --header 'X-GitHub-Api-Version: 2022-11-28' -o "$cloudflared_file" "https://api.github.com/repos/cloudflare/cloudflared/releases/assets/${cloudflared_asset}"; then cloudflared_api_ok=yes; fi \
+  && if [ "$cloudflared_api_ok" != yes ]; then curl -fsSL --connect-timeout 15 --max-time 120 --retry 2 --retry-delay 2 --retry-max-time 360 -o "$cloudflared_file" "https://github.com/cloudflare/cloudflared/releases/download/2026.10.7/cloudflared-linux-${cloudflared_arch}"; fi \
   && printf '%s  %s\n' "$cloudflared_sha256" "$cloudflared_file" | sha256sum --check --status \
   && install -m 0755 "$cloudflared_file" /usr/local/bin/cloudflared \
   && rm -rf "$cloudflared_dir" \
