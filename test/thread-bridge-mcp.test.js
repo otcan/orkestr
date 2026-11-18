@@ -10,11 +10,13 @@ import { appendThreadMessage, createThread, listThreadMessages } from "../packag
 import { createUser } from "../packages/core/src/users.js";
 import { messageActor } from "../packages/core/src/thread-bridge.js";
 import { closeThreadMessageRegistryCache } from "../packages/storage/src/thread-message-registry.js";
+import { DatabaseSync } from "node:sqlite";
 
 const REDIRECT = "https://chatgpt.com/connector_platform_oauth_redirect";
 const envKeys = ["ORKESTR_HOME", "ORKESTR_ADMIN_USER_ID", "ORKESTR_AUTH_REQUIRED", "ORKESTR_HOST_BOUNDARIES", "ORKESTR_AUTO_RUN_THREAD_INPUT",
   "ORKESTR_RECOVER_RUNNING_ON_START", "ORKESTR_WHATSAPP_AUTOSTART", "WHATSAPP_LOCAL_AUTOSTART", "ORKESTR_THREAD_BRIDGE_ENABLED",
-  "ORKESTR_THREAD_STORE", "ORKESTR_THREAD_MESSAGE_STORE", "ORKESTR_MCP_PUBLIC_URL", "ORKESTR_PROVIDER_QUOTA_PROJECTION_CONFIG", "ORKESTR_PROVIDER_QUOTA_CACHE_MS"];
+  "ORKESTR_THREAD_STORE", "ORKESTR_THREAD_MESSAGE_STORE", "ORKESTR_MCP_PUBLIC_URL", "ORKESTR_PROVIDER_QUOTA_PROJECTION_CONFIG", "ORKESTR_PROVIDER_QUOTA_CACHE_MS",
+  "ORKESTR_WHATSAPP_INCOMING_SOURCES"];
 
 test("messageActor never presents machine input as the owner's instruction", () => {
   assert.deepEqual(messageActor({ role: "user", source: "whatsapp_inbound" }), { kind: "human" });
@@ -75,7 +77,7 @@ async function connect(base) {
       client_id: registration.client_id, code_verifier: verifier, resource: `${base}/mcp` }),
   });
   assert.equal(tokenResponse.status, 200);
-  return { registration, tokens: await tokenResponse.json(), verifier };
+  return { registration, tokens: await tokenResponse.json(), verifier, page };
 }
 
 test("thread MCP rejects oversized JSON before authentication or tool execution", async (t) => {
@@ -107,11 +109,12 @@ test("ChatGPT-style OAuth connection reads all threads and comments through MCP"
     body: JSON.stringify({ redirect_uris: ["https://evil.example/cb"], token_endpoint_auth_method: "none" }) });
   assert.equal(badRedirect.status, 400);
 
-  const { registration, tokens } = await connect(base);
+  const { registration, tokens, page: consent } = await connect(base);
+  assert.doesNotMatch(consent, /WhatsApp messages/, "nothing to consent to while no WhatsApp account is enrolled");
   const client = new Client({ name: "test-dot", version: "1.0.0" });
   await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`), { requestInit: { headers: { authorization: `Bearer ${tokens.access_token}` } } }));
   t.after(() => client.close());
-  assert.deepEqual((await client.listTools()).tools.map((tool) => tool.name).sort(), ["comment_on_thread", "get_provider_quotas", "get_thread_status", "list_threads", "read_changes", "read_thread", "send_message", "wait_for_reply"]);
+  assert.deepEqual((await client.listTools()).tools.map((tool) => tool.name).sort(), ["comment_on_thread", "get_provider_quotas", "get_thread_status", "list_incoming_whatsapp_messages", "list_threads", "read_changes", "read_thread", "send_message", "wait_for_reply"]);
 
   const listed = (await client.callTool({ name: "list_threads", arguments: {} })).structuredContent;
   assert.deepEqual(listed.threads.map((thread) => thread.name).sort(), ["Jobs", "Sales"]);
@@ -141,7 +144,7 @@ test("ChatGPT-style OAuth connection reads all threads and comments through MCP"
   const modernList = await fetch(`${base}/mcp`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${refreshed.access_token}`, "mcp-protocol-version": "2026-07-28", "mcp-method": "tools/list" },
     body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: { _meta: meta } }) });
   assert.equal(modernList.status, 200);
-  assert.equal((await modernList.json()).result.tools.length, 8);
+  assert.equal((await modernList.json()).result.tools.length, 9);
   const modernNoToken = await fetch(`${base}/mcp`, { method: "POST", headers: { "content-type": "application/json", "mcp-protocol-version": "2026-07-28", "mcp-method": "tools/list" },
     body: JSON.stringify({ jsonrpc: "2.0", id: 3, method: "tools/list", params: { _meta: meta } }) });
   assert.equal(modernNoToken.status, 401);
@@ -221,6 +224,65 @@ test("a connected assistant reads current Codex and Claude quota over MCP withou
     for (const secret of [tokens.access_token, tokens.refresh_token, coreOwner, account, home, "account_ref", "owner_id"]) {
       assert.ok(!text.includes(secret), "no credential, account reference, owner id or source path in the answer");
     }
+  }
+});
+
+// WhatsApp reading end to end: the consent page lists the owner's enrolled
+// account, approving grants exactly that account, and the tool reads it over
+// MCP. A connection approved before the enrollment gets nothing.
+test("a connected assistant reads incoming WhatsApp messages only after consenting to the listed account", async (t) => {
+  const { base, home } = await startBridgeServer(t);
+  await createUser({ id: "admin" }, process.env).catch(() => null);
+  const group = "120363000000000077@g.us";
+  await createThread({ id: "thread-wa", ownerUserId: "admin", name: "Clients", binding: { connector: "whatsapp", chatId: group, displayName: "Clients group",
+    additionalParticipantLabels: { "491700000077@c.us": "Client Person" } } }, process.env);
+  const journal = path.join(home, "transport.sqlite");
+  const writer = new DatabaseSync(journal);
+  t.after(() => writer.close());
+  writer.exec(`PRAGMA journal_mode=WAL; CREATE TABLE group_input(id TEXT PRIMARY KEY,chat_id TEXT NOT NULL,body TEXT NOT NULL,created_at TEXT NOT NULL);
+    CREATE TABLE group_input_author(id TEXT PRIMARY KEY,proof TEXT NOT NULL); CREATE TABLE group_input_media(id TEXT PRIMARY KEY,path TEXT NOT NULL,filename TEXT,mimetype TEXT,size INTEGER);`);
+  const id = `false_${group}_3EB0AAAA0001_200000000000077@lid`;
+  const at = new Date(Date.now() - 60_000).toISOString();
+  writer.prepare("INSERT INTO group_input VALUES(?,?,?,?)").run(id, group, "Can you send the offer?", at);
+  writer.prepare("INSERT INTO group_input_author VALUES(?,?)").run(id, JSON.stringify({ version: "1", inputId: id, chatId: group, threadId: "thread-wa",
+    authorId: "200000000000077@lid", phoneId: "491700000077@c.us", createdAt: at }));
+
+  const before = await connect(base);
+  const sources = path.join(home, "whatsapp-incoming-sources.json");
+  await fs.writeFile(sources, JSON.stringify({ format: "orkestr-whatsapp-incoming-sources-v1", accounts: [
+    { account: "orkestr", label: "the Orkestr number", ownerUserId: "admin", kind: "scoped_relay_journal", journalPath: journal }] }), { mode: 0o600 });
+  process.env.ORKESTR_WHATSAPP_INCOMING_SOURCES = sources;
+  const call = (token) => fetch(`${base}/mcp`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json", authorization: `Bearer ${token}`,
+    "mcp-protocol-version": "2026-07-28", "mcp-method": "tools/call", "mcp-name": "list_incoming_whatsapp_messages" },
+  body: JSON.stringify({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "list_incoming_whatsapp_messages", arguments: { account: "orkestr" },
+    _meta: { "io.modelcontextprotocol/protocolVersion": "2026-07-28", "io.modelcontextprotocol/clientCapabilities": {} } } }) }).then((response) => response.json());
+  const denied = await call(before.tokens.access_token);
+  assert.equal(denied.result.isError, true);
+  assert.match(denied.result.content[0].text, /bridge_whatsapp_not_granted/, "approved before the account was listed");
+
+  const { tokens, page } = await connect(base);
+  assert.match(page, /incoming WhatsApp messages<\/strong> of the Orkestr number/);
+  const grants = JSON.parse(await fs.readFile(path.join(home, "thread-bridge-grants.json"), "utf8"));
+  assert.deepEqual(grants.map((entry) => entry.whatsappRead), [undefined, ["orkestr"]], "the earlier connection is not widened; the new one gets the listed account");
+
+  const client = new Client({ name: "test-dot", version: "1.0.0" });
+  await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`), { requestInit: { headers: { authorization: `Bearer ${tokens.access_token}` } } }));
+  t.after(() => client.close());
+  const tool = (await client.listTools()).tools.find((entry) => entry.name === "list_incoming_whatsapp_messages");
+  assert.equal(tool.annotations.readOnlyHint, true);
+  assert.equal(tool.annotations.destructiveHint, false);
+  assert.deepEqual(Object.keys(tool.inputSchema.properties), ["account", "chat", "since", "limit", "cursor"]);
+  assert.deepEqual(tool.inputSchema.required, ["account"]);
+  const viaSdk = await client.callTool({ name: "list_incoming_whatsapp_messages", arguments: { account: "orkestr" } });
+  assert.equal(viaSdk.isError, undefined, JSON.stringify(viaSdk.content));
+  const [message] = viaSdk.structuredContent.messages;
+  assert.deepEqual([message.text, message.sender.name, message.sender.number, message.chat.name, message.chat.threadId], ["Can you send the offer?", "Client Person", "+49…77", "Clients group", "thread-wa"]);
+  const modern = await call(tokens.access_token);
+  assert.deepEqual(modern.result.structuredContent.messages, viaSdk.structuredContent.messages);
+  const german = await client.callTool({ name: "list_incoming_whatsapp_messages", arguments: { account: "german" } });
+  assert.match(german.content[0].text, /bridge_whatsapp_not_granted/);
+  for (const leak of [tokens.access_token, journal, home, "491700000077", "200000000000077", "120363000000000077"]) {
+    assert.ok(!JSON.stringify(viaSdk).includes(leak), `leaked ${leak}`);
   }
 });
 
