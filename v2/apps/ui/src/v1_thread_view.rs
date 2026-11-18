@@ -2,6 +2,7 @@ use dioxus::prelude::*;
 use orkestr_v2_contracts::{SidebarAuthor, SidebarEntry, V1HistoryMessage, V1HistoryPage};
 use orkestr_v2_ui::{
     chat_timeline::{split_reply_line, QuoteAuthor},
+    live_answer::MessageKind,
     outbox::{Outbox, Target},
     session_scope::SessionScope,
     v1_input, Draft,
@@ -131,8 +132,10 @@ pub fn V1ThreadView(
                     for message in messages.read().iter().filter(|message| message.author != SidebarAuthor::Assistant || !orkestr_v2_ui::payload::silent_assistant_reply(&message.text)) {
                         li { key: "{message.cursor}", class: match message.author { SidebarAuthor::Owner => "user-message", _ => "assistant-message" },
                             "data-phase": message.phase.clone().unwrap_or_default(), "data-replyable": "true",
-                            article {
+                            article { "data-message-kind": v1_kind(message).map_or("", MessageKind::slug),
                                 strong { match message.author { SidebarAuthor::Owner => "You", SidebarAuthor::Participant => "Group member", SidebarAuthor::Assistant if message.coordinator => "Coordinator", SidebarAuthor::Assistant => "Assistant" } }
+                                if let Some(kind) = v1_kind(message) { crate::accepted_results_view::KindLabel { kind } }
+                                crate::copy_button::CopyButton { text: message.text.clone(), label: "Copy message", class: "message-copy" }
                                 if let Some((label, snippet, rest)) = split_reply_line(&message.text) {
                                     crate::outbox_view::Quote { label, text: snippet }
                                     crate::rich_text_view::RichText { text: rest }
@@ -219,6 +222,14 @@ fn V1Composer(
             if !status().is_empty() { p { class: "composer-notice", role: "status", "{status}" } }
         }
     }
+}
+
+/// An assistant message's kind by its V1 phase (progress note or answer).
+fn v1_kind(message: &V1HistoryMessage) -> Option<MessageKind> {
+    if message.author != SidebarAuthor::Assistant {
+        return None;
+    }
+    orkestr_v2_ui::live_answer::v1_kind(message.phase.as_deref())
 }
 
 fn merge(list: &mut Vec<V1HistoryMessage>, page: Vec<V1HistoryMessage>) {

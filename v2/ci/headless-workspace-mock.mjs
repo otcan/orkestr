@@ -10,6 +10,7 @@ import { liveAnswerApi } from './headless-live-answer.mjs';
 import { agentAttachmentApi, markedPayload } from './headless-agent-attachments.mjs';
 import { credentialsApi } from './headless-credentials-mock.mjs';
 import { sitesApi } from './headless-sites-mock.mjs';
+import { workspaceFilesApi } from './headless-workspace-files-mock.mjs';
 
 export const A = '00000000-0000-4000-8000-00000000000a';
 export const B = '00000000-0000-4000-8000-00000000000b';
@@ -456,6 +457,7 @@ async function api(state, req, res, url) {
   const [, id, rest = ''] = m;
   if (state.live?.conversation === id && await liveAnswerApi(state, req, res, rest, { json, q })) return;
   if (state.agentAttachments === id && agentAttachmentApi(state, req, res, rest, { json })) return;
+  if (await workspaceFilesApi(state, req, res, id, rest, q, { json, A })) return;
   if (rest === '/intelligence' && req.method === 'GET') {
     const role = (configured, steer, max) => ({ configured, available: false, stop: configured,
       steer: configured && steer, accept: configured, max_parallel: configured ? max : 0 });

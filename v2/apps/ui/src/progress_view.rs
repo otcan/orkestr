@@ -1,20 +1,37 @@
 use dioxus::prelude::*;
 use orkestr_v2_contracts::{ExecutionStatus, ProviderPayload, RunId};
-use orkestr_v2_ui::{execution::Execution, session_scope::SessionScope};
+use orkestr_v2_ui::{execution::Execution, live_answer::MessageKind, session_scope::SessionScope};
 use serde_json::{json, Value};
-/// An unfinished answer, drawn like any other assistant message.
+/// An unfinished answer, drawn like any other assistant message. `kind`
+/// says whether it is an interim update of a run that still works, or the
+/// run's answer before its accepted reply takes over; `state` is the line
+/// under an update ("Still working…").
 #[component]
-pub fn LiveBubble(text: Option<String>, #[props(default)] state: &'static str) -> Element {
+pub fn LiveBubble(
+    text: Option<String>,
+    #[props(default)] state: &'static str,
+    #[props(default)] kind: Option<MessageKind>,
+) -> Element {
     if text.is_none() && state.is_empty() {
         return rsx! {};
     }
+    let slug = kind.map_or("", MessageKind::slug);
     rsx! {
-        article { class: "assistant-message live-answer", "aria-label": "Assistant answer",
+        article { class: "assistant-message live-answer", "aria-label": "Assistant answer", "data-message-kind": "{slug}",
             strong { "Assistant" }
+            if let Some(kind) = kind { crate::accepted_results_view::KindLabel { kind } }
+            if let Some(text) = text.clone() {
+                crate::copy_button::CopyButton { text: orkestr_v2_ui::message_file_refs::display_text(&text), label: "Copy message", class: "message-copy" }
+            }
             if let Some(text) = text {
                 crate::rich_text_view::RichText { text }
             }
-            if !state.is_empty() { p { class: "reply-state", "{state}" } }
+            if !state.is_empty() {
+                p { class: "reply-state live-working", role: "status",
+                    span { class: "working-dots", "aria-hidden": "true" }
+                    "{state}"
+                }
+            }
         }
     }
 }
@@ -139,21 +156,17 @@ pub fn ProgressView(
         }
     });
     if plain {
-        use orkestr_v2_contracts::ExecutionPhase::*;
-        let state = match phase {
-            Queued | Starting | Running => "Writing…",
-            CancelRequested => "Stopping…",
-            Cancelled => "Stopped",
-            Failed | Blocked => "Not finished",
-            AwaitingAcceptance | Completed => "",
-        };
+        // An update while the run works, with a line saying more is coming;
+        // the run's answer once it finished (owner request 2026-11-18).
+        let kind = orkestr_v2_ui::live_answer::live_kind(phase);
+        let state = orkestr_v2_ui::live_answer::working_line(phase).unwrap_or("");
         let text = output
             .read()
             .text
             .clone()
             .filter(|text| !orkestr_v2_ui::payload::silent_assistant_reply(text))
             .or(retained.filter(|_| !output.read().removed()));
-        return rsx! { LiveBubble { text, state } };
+        return rsx! { LiveBubble { text, state, kind: Some(kind) } };
     }
     rsx! {
         section { "aria-label":"Provider output",

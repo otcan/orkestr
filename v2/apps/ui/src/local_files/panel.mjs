@@ -158,6 +158,9 @@ export function mountLocalFiles({conversation, csrf, root, logRoot = null, chipR
       const state = folderState({view, saved, message, writable: writeAccess});
       root.dataset.folderState = state.state;
       controls.replaceChildren(stateNode(state), ...controlNodes(view, connected));
+      // Files keeps this folder under "More"; a connected folder opens it, so
+      // its state and Disconnect are where the composer chip leads.
+      if (connected) root.closest?.('details')?.setAttribute('open', '');
       if (chipRoot) {
         chipRoot.dataset.folderState = state.state;
         chipRoot.replaceChildren(chipNode(state, view));

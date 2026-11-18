@@ -53,6 +53,7 @@ pub fn PostBubble(post: ConversationPost) -> Element {
     rsx! { article { "data-post-id": "{post.id}", "data-post-author": "{post.author.as_str()}",
         strong { "Assistant" }
         span { class: "post-badge", "{post.label}" }
+        crate::copy_button::CopyButton { text: post.text.clone(), label: "Copy message", class: "message-copy" }
         crate::rich_text_view::RichText { text: post.text.clone() }
     } }
 }

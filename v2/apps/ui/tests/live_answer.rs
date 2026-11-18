@@ -1,5 +1,5 @@
 use orkestr_v2_contracts::{ExecutionPhase, ExecutionStatus, RunId};
-use orkestr_v2_ui::live_answer::LiveAnswer;
+use orkestr_v2_ui::live_answer::{live_kind, v1_kind, working_line, LiveAnswer, MessageKind};
 use serde_json::json;
 
 const PAYLOAD: &str = "00000000-0000-4000-8000-000000000010";
@@ -158,4 +158,37 @@ fn a_reply_that_never_comes_does_not_keep_an_old_answer_forever() {
     assert!(answer.rows(Some(&writing)).finishing.is_some());
     answer.settle(&run(2));
     assert_eq!(answer.rows(Some(&writing)).finishing, None);
+}
+
+#[test]
+fn every_assistant_message_says_whether_it_is_an_update_or_the_answer() {
+    use ExecutionPhase::*;
+    // A run that still works shows an update and that more is coming.
+    for phase in [Queued, Starting, Running] {
+        assert_eq!(live_kind(phase), MessageKind::Update);
+        assert_eq!(working_line(phase), Some("Still working…"));
+    }
+    assert_eq!(
+        (live_kind(CancelRequested), working_line(CancelRequested)),
+        (MessageKind::Update, Some("Stopping…"))
+    );
+    // A finished run's text is its answer, before and after acceptance.
+    for phase in [AwaitingAcceptance, Completed] {
+        assert_eq!(
+            (live_kind(phase), working_line(phase)),
+            (MessageKind::Final, None)
+        );
+    }
+    assert_eq!(live_kind(Cancelled), MessageKind::Stopped);
+    assert_eq!(live_kind(Failed), MessageKind::Unfinished);
+    assert_eq!(live_kind(Blocked), MessageKind::Unfinished);
+    assert_eq!(
+        [MessageKind::Update, MessageKind::Final].map(MessageKind::label),
+        ["Update", "Final"]
+    );
+    // V1 history: a progress note is an update, a final answer the answer.
+    assert_eq!(v1_kind(Some("commentary")), Some(MessageKind::Update));
+    assert_eq!(v1_kind(Some("final_answer")), Some(MessageKind::Final));
+    assert_eq!(v1_kind(None), None);
+    assert_eq!(v1_kind(Some("other")), None);
 }

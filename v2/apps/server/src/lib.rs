@@ -123,6 +123,7 @@ mod worker_discovery;
 pub mod worker_execution;
 pub mod worker_tasks;
 mod workspace_exec;
+mod workspace_files_http;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -169,6 +170,9 @@ pub struct AppState {
     credentials: credentials_http::Backend,
     /// Where the host's sites catalog is read (ORK-834); none until startup names it.
     sites: sites_http::SitesCatalog,
+    /// Reads a conversation's working folder for the Files panel; none: the
+    /// panel says this host cannot show it.
+    workspace_reader: Option<Arc<dyn workspace_files_http::reader::Reader>>,
 }
 impl AppState {
     /// Trusted operator assertion after all unattended consumers use service credentials.
@@ -416,6 +420,7 @@ impl AppState {
             vault_reader: Arc::default(),
             credentials: Default::default(),
             sites: Default::default(),
+            workspace_reader: None,
             v1_timers: Default::default(),
             claude_turns: false,
             restricted: None,
@@ -664,7 +669,7 @@ pub fn router_with_google_catalog(
     catalog: google_registry_metadata::RegistryCatalog,
 ) -> Router {
     Router::new()
-        .route("/api/v2/health",get(|| async { Json(serde_json::json!({"status":"ok","product":"orkestr-v2","contract_version":0,"fixture_mode":false,"features":["message_author","message_revisions_v1","message_retries_v1","thread_asks","agent_timers","source_receipts_v1","root_intake_v1","fast_run_receipts_v1","provider_quotas_v1","provider_sign_in_v1","local_files_v1","local_file_writes_waiting_v1","vault_v1","held_input_lookup_v1","credentials_v1","sites_v1"],"build":build_identity::identity(),"deployment":deployment_identity::identity()})) }))
+        .route("/api/v2/health",get(|| async { Json(serde_json::json!({"status":"ok","product":"orkestr-v2","contract_version":0,"fixture_mode":false,"features":["message_author","message_revisions_v1","message_retries_v1","thread_asks","agent_timers","source_receipts_v1","root_intake_v1","fast_run_receipts_v1","provider_quotas_v1","provider_sign_in_v1","local_files_v1","local_file_writes_waiting_v1","vault_v1","held_input_lookup_v1","credentials_v1","sites_v1","workspace_files_v1"],"build":build_identity::identity(),"deployment":deployment_identity::identity()})) }))
         .route("/api/v2/setup",get(auth::setup_status).post(auth::setup))
         .route("/api/v2/session",post(auth::session))
         .route("/api/v2/machine/session",post(auth::session))
@@ -752,6 +757,7 @@ pub fn router_with_google_catalog(
         .merge(vault_http::router())
         .merge(credentials_http::router())
         .merge(sites_http::router())
+        .merge(workspace_files_http::router())
         // Labels each matched request with its route template for logs and metrics.
         .route_layer(middleware::from_fn(observability::record_route))
         .fallback(|| async { Error(StatusCode::NOT_FOUND,"not_found","Endpoint not found") })

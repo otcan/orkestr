@@ -1,5 +1,5 @@
 use orkestr_v2_ui::rich_text::{
-    inlines, parse, plain, safe_href, unescape, Align, Block, Inline, ListItem, Marker,
+    block_text, inlines, parse, plain, safe_href, unescape, Align, Block, Inline, ListItem, Marker,
 };
 
 fn text(s: &str) -> Inline {
@@ -318,4 +318,21 @@ fn local_and_sandbox_paths_are_unavailable_files_never_links() {
     assert_eq!(file_name("sandbox:/mnt/data/report.pdf"), "report.pdf");
     assert_eq!(file_name("C:\\dir\\x.txt"), "x.txt");
     assert_eq!(file_name("out/dir/"), "dir");
+}
+
+#[test]
+fn a_block_copies_its_own_raw_content() {
+    let blocks = parse(
+        "Intro\n\n```rust\nfn main() {}\n  let x = 1;\n```\n\n> quoted **line**\n> second line\n>\n> - one\n> - two",
+    );
+    let texts: Vec<String> = blocks.iter().map(block_text).collect();
+    assert_eq!(texts[0], "Intro");
+    // Code verbatim, without the fences or the language tag.
+    assert_eq!(texts[1], "fn main() {}\n  let x = 1;");
+    // A quote without its `>` markers; inline Markdown becomes its text.
+    assert!(matches!(blocks[2], Block::Quote(_)));
+    assert!(texts[2].starts_with("quoted line"), "{:?}", texts[2]);
+    assert!(texts[2].contains("second line"));
+    assert!(texts[2].ends_with("- one\n- two"), "{:?}", texts[2]);
+    assert!(!texts[2].contains('>'));
 }

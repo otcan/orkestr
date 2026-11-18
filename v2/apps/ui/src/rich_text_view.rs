@@ -24,8 +24,12 @@ fn block(b: &Block, attached: bool) -> Element {
             2 => rsx! { h4 { class: "rt-h2", {inlines(content, attached)} } },
             _ => rsx! { h5 { class: "rt-h3", {inlines(content, attached)} } },
         },
+        // Each code block copies its own raw text, without the fences.
         Block::Code { lang, text } => rsx! {
-            pre { class: "rt-code", "data-lang": "{lang}", code { "{text}" } }
+            div { class: "rt-code-block",
+                pre { class: "rt-code", "data-lang": "{lang}", code { "{text}" } }
+                crate::copy_button::CopyButton { text: text.clone(), label: "Copy code", class: "rt-block-copy" }
+            }
         },
         Block::List(items) => rsx! {
             ul { class: "rt-list",
@@ -40,8 +44,11 @@ fn block(b: &Block, attached: bool) -> Element {
             }
         },
         Block::Quote(inner) => rsx! {
-            blockquote { class: "rt-quote",
-                for (i, b) in inner.iter().enumerate() { Fragment { key: "{i}", {block(b, attached)} } }
+            div { class: "rt-quote-block",
+                blockquote { class: "rt-quote",
+                    for (i, b) in inner.iter().enumerate() { Fragment { key: "{i}", {block(b, attached)} } }
+                }
+                crate::copy_button::CopyButton { text: rich_text::block_text(b), label: "Copy quote", class: "rt-block-copy" }
             }
         },
         Block::Reply(content) => rsx! {
