@@ -15,6 +15,7 @@ export const scopedRuntimeFiles = Object.freeze([
   'packages/connectors/src/whatsapp-timer-notification-proof.js',
   'packages/connectors/src/whatsapp-delivery-route-fence.js',
   'packages/connectors/src/whatsapp-scoped-group-media.js',
+  'packages/connectors/src/whatsapp-scoped-group-inbound-media.js',
   'packages/connectors/src/whatsapp-inbound-media-browser.js',
   'packages/connectors/src/whatsapp-inbound-media-diagnostics.js',
   'packages/connectors/src/whatsapp-media-self-decrypt.js',
