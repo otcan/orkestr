@@ -22,13 +22,14 @@ are bounded; every window has a durable claim bound. An exact retry finds the
 same claim; changed content conflicts. Loss of the caller or manager produces
 an unknown outcome. Journal files alone never reconstruct live caller proof.
 
-Root indexes the claim journal (`managed-requests`) in memory: a pending poll
-reads only the live callers' own claims, and per-window checks read only that
-window's claims, so poll cost does not grow with the journal. A completed,
-unknown or cancelled claim of a window the manager no longer holds is removed
-seven days after its last change (at most 256 per pass, checked hourly). Claims
-of held windows, live callers and unfinished claims are kept. No later caller
-can replay a removed claim: its key includes the window and original broker.
+Root indexes the claim journal (`managed-requests`) in memory by window and by
+run: a pending poll reads only the live callers' own claims, and run close and
+the Worker waiter count read only that run's claims, so their cost does not
+grow with the journal. A completed, unknown or cancelled claim of a window the
+manager no longer holds is removed seven days after its last change (at most
+256 per pass, checked hourly). Claims of held windows, live callers and
+unfinished claims are kept. No later caller can replay a removed claim: its
+key includes the window and original broker.
 
 Migration 0093 records a durable one-use operation only after Core verifies the
 currently consumed canonical Deep dispatch, original metadata setup (including
@@ -139,3 +140,44 @@ adds source-bound task create/status and bounded observation over the existing
 Core Worker scheduler. It does not use the Desk/Root one-use operation table or
 change their wire contracts. Current Core capability observation is required;
 registration alone does not establish Worker readiness.
+
+## Admission limits
+
+Root admits a new claim only within three window bounds and paces each
+original native's HTTP requests (`codex_service/managed_budget.py`). An exact
+retry finds its existing claim and is never refused by the window bounds.
+
+| Bound | Default | Refusal |
+| --- | --- | --- |
+| Claims of one window whose caller still waits (in flight) | 8 | 429 `managed_window_busy`, `retry_after_s` 2 |
+| New claims per window: token bucket | 60 a minute, burst 20 | 429 `managed_window_busy`, `retry_after_s` until the next token |
+| HTTP requests per original native: token bucket | 240 a minute, burst 60 | 429 `managed_native_busy`, `retry_after_s` |
+| Claims one window keeps in the journal (backstop) | 2000 | 409 `managed_window_budget_exhausted` until the window closes |
+
+The in-flight bound keeps one window from taking the manager's 32 shared
+connection slots; Core serves a window's claims one at a time. The backstop
+counts kept claims, including those of earlier manager lives, because held
+windows' claims are never removed early. Before 2026-11-18 the only bounds were
+32 claims per window and 128 HTTP requests per native for their whole life, and
+a refused caller's connection was closed without an answer.
+
+A refused call creates no claim and runs nothing. The caller is answered: a
+tool call receives an MCP tool error (`isError`, HTTP 200, because MCP clients
+treat a non-2xx status as a transport failure) whose structured content is
+`{"state": "refused", "result": {"kind": "managed_refusal", "reason", "limit",
+"status", "retryable", "retry_after_s", "message"}}`; other JSON-RPC requests
+receive error -32000 with the same data; the CLI transport receives state
+`refused`. Every other refusal of an authenticated caller is answered the same
+way with its fixed reason instead of a closed connection, and a call whose claim
+already exists is answered `unknown` (for example after its deadline or when
+the manager stops). An unauthenticated connection is still closed unanswered.
+The manager writes one stderr line per window and reason a minute
+(`manager managed_refusal reason=... refusals=N`); an exhausted window budget is
+an `ALERT orkestr-v2-manager managed_refusal` line.
+
+A sealed selected plan may tune the limits with `managed_limits` (requires
+`managed_operations`), for example `{"window_in_flight_max": 4}`. Fields are
+closed and bounded: `window_in_flight_max` 1-32, `window_requests_per_minute`
+and `window_request_burst` 1-600, `window_requests_max` 32-10000,
+`native_http_requests_per_minute` and `native_http_request_burst` 1-3600. The
+capability manifest reports the active limits.

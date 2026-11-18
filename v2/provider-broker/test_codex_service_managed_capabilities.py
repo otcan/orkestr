@@ -7,7 +7,8 @@ import unittest
 from codex_service import managed_capabilities as capabilities
 from codex_service.contract import Refused
 from codex_service.managed_http import Peer, tools
-from codex_service.managed_ingress import MAX_CONNECTIONS, MAX_WINDOW_REQUESTS
+from codex_service.managed_budget import DEFAULTS
+from codex_service.managed_ingress import MAX_CONNECTIONS
 
 CONVERSATION = '11111111-1111-4111-8111-111111111111'
 FOREIGN = '22222222-2222-4222-8222-222222222222'
@@ -39,7 +40,13 @@ class ManifestTests(unittest.TestCase):
         self.assertEqual(login['status'], 'ready')
         self.assertEqual(login['operations'], ['request_scoped_login'])
         self.assertTrue(login['requires_operation_authorization'])
-        self.assertEqual(value['limits']['operation_requests_per_window_max'], MAX_WINDOW_REQUESTS)
+        self.assertEqual(value['limits']['operation_requests_per_window_max'], DEFAULTS['window_requests_max'])
+        self.assertEqual(value['limits']['operations_in_flight_per_window_max'], DEFAULTS['window_in_flight_max'])
+        self.assertEqual(value['limits']['operation_requests_per_window_per_minute'],
+                         DEFAULTS['window_requests_per_minute'])
+        self.assertEqual(value['limits']['http_requests_per_native_per_minute'],
+                         DEFAULTS['native_http_requests_per_minute'])
+        self.assertNotIn('http_requests_per_native_max', value['limits'])
         self.assertEqual(value['limits']['concurrent_connections_max'], MAX_CONNECTIONS)
         self.assertTrue(value['limits']['requires_service_uptime'])
         self.assertFalse(value['complete'])

@@ -17,13 +17,16 @@ import uuid
 from codex_bounded.trust import metadata, process
 from codex_service.contract import Refused
 import codex_service.managed_ingress as ingress_module
+from codex_service.managed_budget import Admission, Busy, limits
 from codex_service.managed_ingress import Ingress
+from codex_service.managed_runs import Runs
 from codex_service import managed_journal
 from codex_service.managed_journal import Journal
 from codex_service.manager import MANAGED_REPLY_SECONDS
 
 # 2026-11-10: 857 claims on disk; this test uses more, sized like the live ones.
 CLAIMS = 2000
+RUN = str(uuid.UUID(int=4))
 POLLERS = 8
 SUMMARY = 'x' * 3500
 
@@ -67,6 +70,8 @@ class Fixture:
                                           windows={window: None for window in self.windows})
         ingress.directory, ingress.peers, ingress.journal = self.directory, self.peers, self.journal
         ingress.runs = SimpleNamespace(attach=lambda peer: None)
+        ingress.limits = limits()
+        ingress.admission = Admission(ingress.limits)
         self.ingress = ingress
 
     def write(self, request, window, state, age_s=0):
@@ -145,12 +150,12 @@ class Index(unittest.TestCase):
         f.ingress.journal = f.journal = Journal.open(f.directory, custody=lambda path: path)
         counted = CountedReads(self)
         caller = SimpleNamespace(source=source(window))
-        with patch.object(ingress_module, 'MAX_WINDOW_REQUESTS', 3):
+        with patch.dict(f.ingress.admission.limits, window_requests_max=3):
             f.ingress._record(caller, {'version': 1, 'request_key': 'third', 'operation': 'worker_status',
                                        'arguments': {}})
             self.assertEqual(f.journal.count(window), 3)
             self.assertIn(caller.request, f.journal.unsettled)
-            with self.assertRaisesRegex(Refused, 'managed_window_bound'):
+            with self.assertRaisesRegex(Refused, 'managed_window_budget_exhausted'):
                 f.ingress._record(SimpleNamespace(source=source(window)),
                                   {'version': 1, 'request_key': 'fourth', 'operation': 'worker_status',
                                    'arguments': {}})
@@ -220,6 +225,81 @@ class Retention(unittest.TestCase):
         self.assertFalse(list(f.directory.glob('*.json')))
         self.assertEqual((journal.claims, journal.windows), ({}, {}))
         self.assertEqual(journal.next_prune, 100 + managed_journal.PRUNE_RETRY_S + managed_journal.PRUNE_EVERY_S)
+
+
+class RunIndexAndBackstop(unittest.TestCase):
+    """The raised window backstop stays cheap and never needs early pruning."""
+
+    def write(self, directory, window, state, run=RUN):
+        request = str(uuid.uuid4())
+        record = claim(request, window, state)
+        record['source']['run_id'] = run
+        (directory / (request + '.json')).write_text(json.dumps(record))
+        return request
+
+    def test_held_window_claims_are_kept_and_counted_across_restart(self):
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+            held = str(uuid.uuid4())
+            for _ in range(40):
+                path = directory / (self.write(directory, held, 'completed') + '.json')
+                os.utime(path, (0, 0))  # Far older than the retention.
+            journal = Journal.open(directory, custody=lambda path: path)
+            self.assertEqual(journal.prune({held}, set(), now=0), 0)
+            self.assertEqual(len(list(directory.glob('*.json'))), 40)
+            restarted = Journal.open(directory, custody=lambda path: path)
+            self.assertEqual(restarted.count(held), 40)
+            admission = Admission(limits({'window_requests_max': 40}))
+            with self.assertRaises(Busy):
+                admission.admit(held, 0, restarted.count(held))
+
+    def test_run_index_survives_restart_and_pruning_forgets_it(self):
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+            closed, other_run = str(uuid.uuid4()), str(uuid.uuid4())
+            mine = {self.write(directory, closed, 'completed') for _ in range(3)}
+            theirs = self.write(directory, closed, 'completed', other_run)
+            journal = Journal.open(directory, custody=lambda path: path)
+            self.assertEqual({p.stem for p in journal.run_paths(RUN)}, mine)
+            self.assertEqual([p.stem for p in journal.run_paths(other_run)], [theirs])
+            for path in directory.glob('*.json'):
+                os.utime(path, (0, 0))
+            self.assertEqual(journal.prune(set(), set(), now=0), 4)
+            self.assertEqual((journal.runs, journal.claim_runs), ({}, {}))
+
+    def test_run_close_reads_only_its_own_claims_of_a_large_window(self):
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+            window = str(uuid.uuid4())
+            for _ in range(500):  # Earlier runs' claims, kept while the window is held.
+                self.write(directory, window, 'completed', str(uuid.uuid4()))
+            waiting = self.write(directory, window, 'pending')
+            undelivered = self.write(directory, window, 'completed')
+            journal = Journal.open(directory, custody=lambda path: path)
+            # Journal.open marks unfinished claims unknown; make one pending again.
+            record = json.loads((directory / (waiting + '.json')).read_text())
+            record['state'] = 'pending'
+            (directory / (waiting + '.json')).write_text(json.dumps(record))
+            runs = Runs.__new__(Runs)
+            runs.ingress = SimpleNamespace(journal=journal)
+            runs.directory = directory / 'runs'
+            runs.directory.mkdir()
+            runs.contexts = {}
+            scope = source(window)
+            (runs.directory / (RUN + '.json')).write_text(json.dumps({'scope': scope, 'state': 'open'}))
+            reads = []
+
+            def read(path, maximum=32768):
+                reads.append(Path(path).stem)
+                return metadata(path, maximum)
+            with patch('codex_service.managed_runs.protected', side_effect=lambda p: p), \
+                 patch('codex_service.managed_runs.metadata', side_effect=read):
+                runs.close(window, 1, RUN)
+            self.assertEqual(sorted(reads), sorted([RUN, waiting, undelivered]))
+            self.assertEqual(json.loads((directory / (waiting + '.json')).read_text())['state'], 'cancelled')
+            self.assertTrue(json.loads((directory / (undelivered + '.json')).read_text())['delivery_cancelled'])
+            self.assertEqual(journal.count(window), 502)
+
 
 
 if __name__ == '__main__':

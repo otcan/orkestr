@@ -88,7 +88,7 @@ def pair_bytes(plan):
     return pair
 
 
-OPTIONAL = {'resource_namespace', 'agent_timer_grants', 'qualification_record', 'deploy_maintenance_marker', 'release_interruption_dir', 'managed_host', 'operator_recovery', 'desk_login', 'managed_operations', 'managed_workers', 'managed_worker_execution_budget_ms', 'attachment_export_dir', 'password_rotation_ready', 'authority_uid', 'authority_gid', 'executor_uid', 'executor_gid', 'provider_home', 'roles', 'preserve_state', 'workspace_exec', 'additional_workspace_exec', 'max_active_windows', 'host_full_access',
+OPTIONAL = {'resource_namespace', 'agent_timer_grants', 'qualification_record', 'deploy_maintenance_marker', 'release_interruption_dir', 'managed_host', 'operator_recovery', 'desk_login', 'managed_operations', 'managed_limits', 'managed_workers', 'managed_worker_execution_budget_ms', 'attachment_export_dir', 'password_rotation_ready', 'authority_uid', 'authority_gid', 'executor_uid', 'executor_gid', 'provider_home', 'roles', 'preserve_state', 'workspace_exec', 'additional_workspace_exec', 'max_active_windows', 'host_full_access',
             'window_max_minutes', 'conversation_window_max_minutes', 'conversation_workspaces', 'provider_routing',
             'code_mode_host', 'code_mode_host_sha256', 'claude', 'claude_quota_projection', 'codex_quota_projection', 'live_map', 'desktop_broker', 'provider_quota', 'timer_config', 'whatsapp_chats', 'v1_chat_icons_dir', 'metrics_port'}
 CLAUDE_PATHS = ('executable', 'account', 'workspace', 'home', 'temporary')
@@ -239,6 +239,8 @@ def prepare(plan):
     worker_runtime=selected_native_workers.runtime(plan)
     if 'managed_operations' in plan:
         require('authority_uid' in plan and plan['managed_operations'] is True,'closed split managed operations required')
+    require('managed_limits' not in plan or plan.get('managed_operations') is True,
+            'managed limits require managed operations')
     if 'desk_login' in plan:
         desk=plan['desk_login']
         require('authority_uid' in plan and type(desk) is dict and set(desk)=={'path','sha256'} and
@@ -297,6 +299,12 @@ def prepare(plan):
                     'selected source does not support operator recovery')
             from codex_service.password_recovery import configuration as recovery_configuration
             recovery_configuration(plan['operator_recovery'])
+        if 'managed_limits' in plan:
+            # The selected source owns the closed fields and their bounds.
+            require('codex_service/managed_budget.py' in manager.FILES,
+                    'selected source does not support managed limits')
+            from codex_service.managed_budget import limits as managed_limits
+            managed_limits(plan['managed_limits'])
         # Stat canonical credentials only. Never open, copy or hash these files.
         IDENTITY_FIELDS = {'authority_uid', 'authority_gid', 'executor_uid', 'executor_gid', 'provider_home'}
         if IDENTITY_FIELDS.intersection(plan):
@@ -444,6 +452,8 @@ def prepare(plan):
                 runtime['desk_login']=plan['desk_login']
             if 'managed_operations' in plan:
                 runtime['managed_operations']=True
+            if 'managed_limits' in plan:
+                runtime['managed_limits']=plan['managed_limits']
             runtime.update(worker_runtime)
             if 'timer_config' in plan:
                 runtime['timer_config']=plan['timer_config']

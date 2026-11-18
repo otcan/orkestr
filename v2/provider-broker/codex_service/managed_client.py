@@ -48,7 +48,8 @@ def exchange(path,raw):
     value=json.loads(reply.decode('utf-8','strict'),object_pairs_hook=unique)
     require(type(value) is dict and set(value)=={'version','request_key','request_id','state','result'} and
             type(value['version']) is int and value['version']==1 and value['request_key']==request['request_key'] and
-            value['state'] in ('completed','unknown','cancelled'))
+            value['state'] in ('completed','unknown','cancelled','refused'))
+    # `refused`: Root ran nothing and created no claim; the result names why.
     return value
 
 

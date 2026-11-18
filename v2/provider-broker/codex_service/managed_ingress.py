@@ -15,14 +15,17 @@ import struct
 import time
 import uuid
 from codex_bounded.trust import belongs,exists,metadata,process,protected
-from .contract import canonical,key,require,unique
+from .contract import Refused,canonical,key,require,unique
 from .custody import OwnedSocket
 from .launch import atomic
+from .managed_budget import Admission,limits,refusal
 from .ownership import Process
 
 MAX_PACKET=16384
+# Connection slots shared by every window; `managed_budget` bounds one
+# window's share (in flight) and its pace. There is no lifetime call count.
 MAX_CONNECTIONS=32
-MAX_WINDOW_REQUESTS=32
+TERMINAL=('completed','unknown','cancelled')
 
 
 def packet(raw):
@@ -80,7 +83,7 @@ def source(manager,pid,uid):
 
 class Peer:
     def __init__(self,manager,connection):
-        self.connection=connection;self.path=None;self.request=None
+        self.connection=connection;self.path=None;self.request=None;self.received=None;self.answered=False
         pid,uid,_=struct.unpack('3i',connection.getsockopt(socket.SOL_SOCKET,socket.SO_PEERCRED,12))
         self.source,self.proof=source(manager,pid,uid)
         connection.setsockopt(socket.SOL_SOCKET,socket.SO_PASSCRED,1);connection.setblocking(False)
@@ -108,13 +111,22 @@ class Peer:
         self.connection.close();self.proof.close()
 
     def reply(self,value):
-        raw=canonical(value);require(self.connection.send(raw)==len(raw),'managed_reply_unknown')
+        raw=canonical(value);self.answered=True
+        require(self.connection.send(raw)==len(raw),'managed_reply_unknown')
+
+    def refuse(self,state,answer):
+        """Answer a received packet Root will not complete; never a result."""
+        if self.received is None or self.answered:return
+        self.reply({'version':1,'request_key':self.received['request_key'],'request_id':self.request,
+                    'state':state,'result':answer})
 
 
 class Ingress:
     def __init__(self,manager):
         require(os.geteuid()==0 and manager.package.identity_split,'managed_root_split')
         self.manager=manager;self.peers=[]
+        self.limits=limits(getattr(manager.package,'runtime',{}).get('managed_limits'))
+        self.admission=Admission(self.limits)
         self.directory=manager.package.ledger_directory/'managed-requests';self.directory.mkdir(mode=0o700,exist_ok=True)
         protected(self.directory,True)
         require(stat.S_IMODE(self.directory.stat().st_mode)==0o700,'managed_journal_custody')
@@ -149,16 +161,41 @@ class Ingress:
             if value['operation'] in ('worker_capability','worker_submit','worker_status','worker_wait'):
                 require(record['source']==peer.source,'managed_worker_original_caller_required')
         else:
-            require(self.journal.count(peer.source['window_id'])<MAX_WINDOW_REQUESTS,'managed_window_bound')
+            # An exact retry above is never refused: it finds its own claim.
+            window=peer.source['window_id']
+            self.admission.admit(window,self.in_flight(window),self.journal.count(window))
             record={'request_id':request,'source':peer.source,'request':value,'payload_sha256':payload,
                     'created_at_ms':time.time_ns()//1000000,'state':'pending'}
-            self.journal.add(request,peer.source['window_id'])
+            self.journal.add(request,window,peer.source.get('run_id'))
             atomic(path,record)
         peer.path=path;peer.request=request
 
+    def in_flight(self,window):
+        """Claims of `window` whose caller still holds a connection."""
+        return sum(1 for p in self.peers if getattr(p,'request',None) and type(getattr(p,'source',None)) is dict
+                   and p.source.get('window_id')==window)
+
+    def _refuse(self,peer,error,state):
+        """Answer a caller Root will not serve instead of closing it silently.
+
+        Only an authenticated caller that sent a complete request is answered,
+        and never with a result: `refused` when no claim exists (nothing ran),
+        otherwise the claim's caller-visible outcome. Never raises."""
+        try:
+            if getattr(peer,'proof',None) is None or not hasattr(peer,'refuse'):return
+            state='refused' if state is None else 'cancelled' if state=='cancelled' else 'unknown'
+            answer=refusal(error,state)
+            received=getattr(peer,'received',None)
+            operation=received.get('operation') if type(received) is dict else getattr(peer,'tool',None)
+            self.admission.report(getattr(peer,'source',None),operation,state,answer)
+            peer.refuse(state,answer)
+        except Exception:pass
+
     def tick(self):
         self.natives.prune()
-        self.journal.prune(set(getattr(self.manager,'windows',())),{p.request for p in self.peers if getattr(p,'request',None)})
+        held=set(getattr(self.manager,'windows',()))
+        self.journal.prune(held,{p.request for p in self.peers if getattr(p,'request',None)})
+        self.admission.prune(held)
         while len(self.peers)<MAX_CONNECTIONS:
             try:connection,_=self.socket.socket.accept()
             except BlockingIOError:break
@@ -166,7 +203,7 @@ class Ingress:
             except Exception:connection.close()
         for peer in list(self.peers):
             try:
-                require(time.monotonic()<peer.deadline,'managed_caller_gone')
+                require(time.monotonic()<peer.deadline,'managed_call_deadline')
                 if peer.proof is not None:
                     require(exists(peer.proof.identity) and not peer.proof.exited(),'managed_caller_gone')
                     require(self.manager._desk_window_active(peer.source['window_id'],peer.source['window_generation']),
@@ -177,6 +214,7 @@ class Ingress:
                     except BlockingIOError:continue
                     if getattr(peer,'metadata_done',False):
                         peer.close();self.peers.remove(peer);continue
+                    peer.received=value
                     if value['operation']=='native_register':
                         identifier=self.natives.register(peer,value)
                         peer.connection.send(canonical({'version':1,'request_key':value['request_key'],'request_id':identifier,
@@ -184,7 +222,7 @@ class Ingress:
                         peer.close();self.peers.remove(peer);continue
                     self._record(peer,value)
                 record=metadata(peer.path,32768)
-                if record['state'] in ('completed','unknown','cancelled'):
+                if record['state'] in TERMINAL:
                     if record['state']=='completed' and not record.get('delivery_cancelled'):
                         if not record.get('result_authorization'):continue
                         require(record['result_expires_at_ms']>int(time.time()*1000),'managed_result_expired')
@@ -196,13 +234,15 @@ class Ingress:
                     record['result_sent']=True;atomic(peer.path,record)
                     peer.close();self.peers.remove(peer)
             except BlockingIOError:continue
-            except Exception:
+            except Exception as error:
+                state=None
                 if peer.path and peer.path.exists():
-                    record=metadata(peer.path,32768)
-                    if record['state'] not in ('completed','unknown','cancelled'):
-                        record['state']='unknown';atomic(peer.path,record)
+                    record=metadata(peer.path,32768);state=record['state']
+                    if record['state'] not in TERMINAL:
+                        record['state']=state='unknown';atomic(peer.path,record)
                         if record['request']['operation']=='desk_login' and self.manager.desk:
                             self.manager.desk.cancel(record['request_id'])
+                self._refuse(peer,error,state)
                 peer.close();self.peers.remove(peer)
         # Process metadata-only original-broker registrations before accepting
         # native HTTP connections created during that same startup interval.
@@ -238,10 +278,13 @@ class Ingress:
 
     def close(self):
         for peer in self.peers:
+            state=None
             if peer.path:
-                record=metadata(peer.path,32768)
-                if record['state'] not in ('completed','unknown','cancelled'):
-                    record['state']='unknown';atomic(peer.path,record)
+                record=metadata(peer.path,32768);state=record['state']
+                if record['state'] not in TERMINAL:
+                    record['state']=state='unknown';atomic(peer.path,record)
+            # A waiting caller learns the manager stopped instead of losing its connection.
+            self._refuse(peer,Refused('managed_manager_stopping'),state)
             peer.close()
         self.peers=[];self.socket.close();self.natives.close()
         if self.http is not None:self.http.close()

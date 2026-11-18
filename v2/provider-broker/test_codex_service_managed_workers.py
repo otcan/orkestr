@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 from codex_service.contract import Refused,canonical
+from codex_service.managed_budget import Admission,limits
 from codex_service.managed_ingress import Ingress,packet
 from codex_service.managed_journal import Journal
 from codex_service.managed_workers import advertisements,validate
@@ -95,7 +96,7 @@ class WorkerReplyTests(unittest.TestCase):
         self.record={'request_id':UUID,'source':self.source,'state':'pending',
             'request':{'operation':'worker_status'},'payload_sha256':'a'*64}
         self.path=self.directory/(UUID+'.json');self.path.write_text(json.dumps(self.record))
-        self.journal=Journal(self.directory);self.journal.add(UUID,UUID)
+        self.journal=Journal(self.directory);self.journal.add(UUID,UUID,UUID)
         self.ingress=SimpleNamespace(directory=self.directory,journal=self.journal,
             runs=SimpleNamespace(contexts={key(self.source):{'run_id':UUID}}),
             manager=SimpleNamespace(_desk_window_active=lambda *_:True),pending=lambda *_:[self.record])
@@ -139,7 +140,7 @@ class WorkerReplyTests(unittest.TestCase):
         for n in range(1,6):
             operation=f'{n:08x}-1111-4111-8111-111111111111'
             record=copy.deepcopy(self.record);record['request_id']=operation;record['request']['operation']='worker_wait'
-            (self.directory/(operation+'.json')).write_text(json.dumps(record));self.journal.add(operation,UUID)
+            (self.directory/(operation+'.json')).write_text(json.dumps(record));self.journal.add(operation,UUID,UUID)
             request=copy.deepcopy(self.request);request['result'].update(operation_id=operation)
             request['result'].pop('result');request['result']['task_id']=operation;requests.append(request)
         for request in requests[:4]:
@@ -156,7 +157,7 @@ class WorkerReplyTests(unittest.TestCase):
 
     def test_bound_native_retry_cannot_transfer_original_caller_identity(self):
         ingress=Ingress.__new__(Ingress);ingress.directory=self.directory;ingress.journal=Journal(self.directory)
-        ingress.runs=SimpleNamespace(attach=lambda peer:None)
+        ingress.runs=SimpleNamespace(attach=lambda peer:None);ingress.peers=[];ingress.admission=Admission(limits())
         caller=SimpleNamespace(source={**self.source,'caller_pid':10002,'caller_start':10002,'caller_uid':10003})
         request={'version':1,'request_key':'mcp:original-native','operation':'worker_wait','arguments':{'task_id':UUID}}
         with patch('codex_service.managed_ingress.metadata',side_effect=lambda p,_:json.loads(p.read_text())):

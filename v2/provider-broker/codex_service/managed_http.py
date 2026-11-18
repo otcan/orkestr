@@ -39,7 +39,7 @@ def tools(ingress,scope):
 
 
 def discovery(ingress,scope):
-    value=managed_capabilities.manifest(scope,tools(ingress,scope))
+    value=managed_capabilities.manifest(scope,tools(ingress,scope),getattr(ingress,'limits',None))
     value['application_instructions']=managed_context.instructions()
     return value
 
@@ -65,6 +65,7 @@ class Peer:
         self.source=self.proof=self.path=self.request=None
         self.deadline=time.monotonic()+35;self.registration_deadline=time.monotonic()+2
         self.buffer=bytearray();self.call=None;self.tool=None;self.metadata_done=False
+        self.received=None;self.answered=False;self.busy=None
 
     def authenticate(self):
         try:identity=socket_owner(self.ingress,self.connection)
@@ -73,11 +74,14 @@ class Peer:
             raise
         if self.proof is not None:
             require(identity==self.proof.identity,'managed_http_actor_changed')
-            return  # Rechecks do not consume the per-native request budget.
+            return  # Rechecks do not consume the per-native request pace.
         self.source,self.proof=source(self.ingress.manager,identity['pid'],identity['uid'])
         record=self.ingress.natives.actor(identity['pid'])
-        count=record.get('http_requests',0)+1
-        require(count<=managed_capabilities.HTTP_REQUESTS_MAX,'managed_http_request_bound');record['http_requests']=count
+        # Each connection takes one token of its native's pace (the count is
+        # diagnostic only). Over the pace, the request is still read so that
+        # its refusal can be answered.
+        record['http_requests']=record.get('http_requests',0)+1
+        self.busy=self.ingress.admission.native(record)
 
     def receive(self):
         self.authenticate()
@@ -113,6 +117,7 @@ class Peer:
             require('id' not in value,'managed_mcp_notification');self.send_http(202,b'');self.metadata_done=True;return None
         require(type(self.call) in (str,int) and not isinstance(self.call,bool)
                 and len(str(self.call).encode())<=128,'managed_mcp_request_id')
+        if self.busy is not None and method!='tools/call':raise self.busy
         if method=='initialize':
             version=params.get('protocolVersion')
             require(type(version) is str and re.fullmatch('[0-9]{4}-[0-9]{2}-[0-9]{2}',version),'managed_mcp_version')
@@ -136,6 +141,7 @@ class Peer:
         require(method=='tools/call' and set(params)<={'name','arguments','_meta'} and
                 {'name','arguments'}<=set(params),'managed_mcp_method')
         name=params['name'];arguments=params['arguments'];self.tool=name
+        if self.busy is not None:raise self.busy
         if name==managed_capabilities.NAME:
             require(type(arguments) is dict and not arguments,'managed_capability_arguments')
             value=discovery(self.ingress,self.source)
@@ -162,6 +168,7 @@ class Peer:
         headers=('HTTP/1.1 '+str(status)+' '+names[status]+'\r\nCache-Control: no-store\r\nContent-Type: application/json\r\nContent-Length: '+
             str(len(body))+'\r\nConnection: close\r\n\r\n').encode()
         frame=headers+body;require(len(frame)<=MAX_PACKET,'managed_http_reply_bound')
+        self.answered=True  # One answer per connection, even after a partial send.
         require(self.connection.send(frame)==len(frame),'managed_http_reply_unknown')
 
     def result(self,value):
@@ -178,6 +185,23 @@ class Peer:
                 result['isError']=value['state']!='completed' or (self.tool=='orkestr_worker_submit'
                     and value['result'].get('state')!='ready')
         self.result(result)
+
+    def refuse(self,state,answer):
+        """Answer a parsed request Root will not complete; never a result.
+
+        A tool call gets a tool error, which the model reads: MCP clients
+        treat a non-2xx HTTP status as a transport error, not a tool result.
+        Other requests get a JSON-RPC error. `answer['status']` is the
+        HTTP-like code (429 busy, 409 budget exhausted).
+        """
+        if self.call is None or self.answered:return
+        value={'state':state,'result':answer}
+        if self.tool is None:
+            self.send_http(200,canonical({'jsonrpc':'2.0','id':self.call,
+                'error':{'code':-32000,'message':answer['reason'],'data':value}}))
+        else:
+            self.result({'content':[{'type':'text','text':canonical(value).decode()}],
+                         'structuredContent':value,'isError':True})
 
     def close(self):
         self.connection.close()

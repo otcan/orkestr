@@ -18,7 +18,7 @@ MODULES_SERVICE = ("__init__.py", "contract.py", "ledger.py", "budget.py", "cust
                    "claude_broker.py", "identity.py", "launch.py", "launch_child.py", "proxy.py", "attachment_exports.py",
                    "password_recovery.py", "managed_resume.py", "managed_host.py", "native_io.py", "desk_operations.py", "desk_anchor.py", "provider_login.py", "provider_login_files.py", "provider_login_anchor.py",
     "workspace_custody.py", "workspace_setup.py", "workspace_environment.py", "workspace_cgroup.py", "workspace_anchor.py", "workspace_command.py", "workspace_ops.py", "workspace_acl.py",
-                   "managed_ingress.py", "managed_journal.py", "managed_workers.py", "managed_worker_reply.py", "managed_control.py", "managed_client.py", "managed_native.py", "managed_runs.py",
+                   "managed_ingress.py", "managed_journal.py", "managed_budget.py", "managed_workers.py", "managed_worker_reply.py", "managed_control.py", "managed_client.py", "managed_native.py", "managed_runs.py",
                    "managed_socket_owner.py", "managed_http.py", "managed_advertisement.py", "managed_capabilities.py", "managed_context.py",
                    "qualification.py", "qualification_publish.py", "fast_sampler.py", "fast_sample_kernel.py", "fast_sample_evidence.py")
 # Shared with the server and packager: room for many per-conversation
@@ -176,7 +176,7 @@ class Package:
 
     def _bind(self):
         value = self.runtime
-        require(set(value) - IDENTITY_FIELDS - {"resource_namespace", "agent_timer_grants", "qualification_record", "operator_recovery", "desk_login", "managed_operations", "managed_workers", "managed_worker_execution_budget_ms", "password_rotation_ready", "attachment_export_dir", "live_map", "desktop_broker", "provider_quota", "timer_config", "v1_chat_icons_dir", "whatsapp_chats", "claude_quota_projection", "codex_quota_projection", "metrics_port"} == {"format", "uid", "gid", "owner_id", "conversation_id", "home",
+        require(set(value) - IDENTITY_FIELDS - {"resource_namespace", "agent_timer_grants", "qualification_record", "operator_recovery", "desk_login", "managed_operations", "managed_limits", "managed_workers", "managed_worker_execution_budget_ms", "password_rotation_ready", "attachment_export_dir", "live_map", "desktop_broker", "provider_quota", "timer_config", "v1_chat_icons_dir", "whatsapp_chats", "claude_quota_projection", "codex_quota_projection", "metrics_port"} == {"format", "uid", "gid", "owner_id", "conversation_id", "home",
                 "bootstrap_file", "ledger_directory", "endpoint_directory", "port", "trusted_origin"}
                 and value["format"] == "orkestr-v2-codex-service-v1", "service_format")
         require("password_rotation_ready" not in value or type(value["password_rotation_ready"]) is bool,
@@ -222,6 +222,11 @@ class Package:
         self.executor_uid, self.executor_gid = identity["executor_uid"], identity["executor_gid"]
         if 'managed_operations' in value:
             require(self.identity_split and value['managed_operations'] is True,'managed_split_configuration')
+        if 'managed_limits' in value:
+            # Tunes the managed admission defaults; it can never remove a bound.
+            require(value.get('managed_operations') is True,'managed_limits_configuration')
+            from .managed_budget import limits as managed_limits
+            managed_limits(value['managed_limits'])
         if 'managed_workers' in value:
             require(self.identity_split and value.get('managed_operations') is True
                     and value['managed_workers'] is True,'managed_workers_configuration')

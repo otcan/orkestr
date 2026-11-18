@@ -4,11 +4,13 @@ Every claim stays one file, `<request_id>.json`, in the 0700 Root directory;
 this manager is that directory's only writer, and only `Ingress._record`
 creates a claim. The index therefore never has to read a claim to find one:
 
-* `windows` maps a window to its claim ids, so per-window work (the claim
-  bound, run close, Worker waiter count) reads at most that window's claims
-  instead of the whole directory (2026-11-10: 857 claims took 110-160 ms per
+* `windows` maps a window to its claim ids, so the window's claim backstop
+  is a count and never a scan (2026-11-10: 857 claims took 110-160 ms per
   scan, and eight Deep windows' `managed_pending` calls missed their 5 s
   deadline).
+* `runs` maps a consumed run to its claim ids: run close and the Worker
+  waiter count read only that run's claims, not every claim the window kept
+  (a held window keeps up to `window_requests_max` of them).
 * `unsettled` holds every claim that may still change state. A claim only
   moves forward (pending, consumed, worker_waiting, then completed, unknown or
   cancelled) and never back, so a superset that drops a claim once it reads
@@ -18,7 +20,9 @@ Retention: a terminal claim of a window this manager no longer holds is
 removed RETENTION_S after its last change. Idempotence never needs it then:
 the claim key includes the window and its original broker identity, so no
 later caller can replay it. Claims of held windows, unsettled claims and
-claims of live callers are always kept.
+claims of live callers are always kept: an operator's negative-stop proof
+may read every claim of the current manager life. The window claim
+backstop (`managed_budget`) therefore counts kept claims, not live ones.
 """
 import os
 import time
@@ -40,6 +44,8 @@ class Journal:
         self.directory = directory
         self.windows = {}  # window_id -> {request_id}
         self.claims = {}  # request_id -> window_id
+        self.runs = {}  # run_id -> {request_id}
+        self.claim_runs = {}  # request_id -> run_id
         self.unsettled = set()
         self.next_prune = 0.0  # Monotonic; the first tick prunes a previous life's claims.
 
@@ -54,17 +60,21 @@ class Journal:
             if record['state'] not in TERMINAL:
                 record['state'] = 'unknown'
                 atomic(path, record)
-            journal.add(path.stem, record['source']['window_id'], settled=True)
+            journal.add(path.stem, record['source']['window_id'], record['source'].get('run_id'), settled=True)
         return journal
 
     def path(self, request):
         return self.directory / (request + '.json')
 
-    def add(self, request, window, settled=False):
+    def add(self, request, window, run=None, settled=False):
         """Index a claim before its file is written: a failed write leaves at
-        most a missing file, which every reader skips."""
+        most a missing file, which every reader skips. `run` is the claim's
+        immutable source run (every claim since run binding has one)."""
         self.claims[request] = window
         self.windows.setdefault(window, set()).add(request)
+        if run is not None:
+            self.claim_runs[request] = run
+            self.runs.setdefault(run, set()).add(request)
         if not settled:
             self.unsettled.add(request)
 
@@ -74,6 +84,10 @@ class Journal:
     def window_paths(self, window):
         """Existing claim files of one window, in a stable order."""
         return [path for path in map(self.path, sorted(self.windows.get(window, ()))) if path.exists()]
+
+    def run_paths(self, run):
+        """Existing claim files of one consumed run, in a stable order."""
+        return [path for path in map(self.path, sorted(self.runs.get(run, ()))) if path.exists()]
 
     def unsettled_records(self):
         """(path, record) of each claim that may still change state."""
@@ -96,6 +110,12 @@ class Journal:
             requests.discard(request)
             if not requests:
                 del self.windows[window]
+        run = self.claim_runs.pop(request, None)
+        requests = self.runs.get(run)
+        if requests is not None:
+            requests.discard(request)
+            if not requests:
+                del self.runs[run]
         self.unsettled.discard(request)
 
     def prune(self, held, live, now=None, wall=None):

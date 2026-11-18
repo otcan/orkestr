@@ -15,5 +15,6 @@ def instructions():
             'Submitting a managed request does not execute it; its configured authorization policy determines execution.',
             'Use the current conversation\'s primary agent and keep Workers within their delegated scope. Provider choice does not change those boundaries.',
             'Call orkestr_worker_capability before delegating Native Worker tasks. Tool registration is not a running scheduler; report the current capability state and actual task phase.',
+            'A managed_refusal with state refused ran nothing: if it is retryable, wait retry_after_s and retry once; otherwise do not repeat it and report it. Never repeat an unknown outcome automatically.',
             'The uncovered capability surfaces have not been assessed here; discover them through their own authorized interfaces.'
         ]}
