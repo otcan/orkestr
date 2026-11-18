@@ -159,6 +159,7 @@ Each binding is `<bindings_dir>/<remote_thread_id>.json`:
 | `enabled` | `false` pauses intake and execution; exports and acknowledgements continue |
 | `revoked` | `true` permanently withdraws the route (intake and export answer 410) |
 | `progress_updates` | Export intermediate Deep progress for this binding |
+| `local_reply_mirror` | Optional, default `true`. Copy each real reply to V1-local input (connected assistant, CLI, thread watch, Worker, mailbox, V1 web UI) to the group, marked as a reply to its requester; see [V1-local input](#v1-local-input). `false` keeps those replies in Orkestr only. Adapters before this field refuse a binding that contains it (`binding_fields`): deploy the adapter first. |
 | `deep_heartbeat` | Optional, default `true`. A running Deep turn for a person's WhatsApp input (owner or member; never timer, post or web-mirror input) without a final gets one short status line from an adapter template (never model text): `🧠 Still working… N min so far, the full answer follows.` (English, Turkish or German). Lines come after a quiet spell with no delivered message for that input of 3, 5, 7, then 15 minutes (3, 8, 15, 30, 45, 60 minutes into an otherwise silent turn), at most 6 per input and at most one per chat every 5 minutes, and stop at the final: none once the input has a final export (pending or delivered) or its final is ready, none while any person's answer final in the chat is still unreported by V1, and a delivered answer in the chat restarts the quiet spell (a follow-up's line never lands right after the previous answer). A final export retires every line V1 has not taken yet (`superseded`, `heartbeat_withdrawn` in the log); a late ACK of one is still recorded. A person's input still queued behind an earlier running turn (fresh proof, at most 120 s old, that the earlier input's own Deep run is running) gets the same lines on the same clock, counted from its arrival, with the template `🧠 Still on it… N min so far. An earlier task is finishing first, then the full answer follows.`; once its own turn is observed the clock continues there. Set `false` for chats where no person waits (health probe, canary); it keeps the legacy 10-minute `activity_running` notice. Adapters before this field refuse a binding that contains it (`binding_fields`): deploy the adapter first. |
 | `fast_reply_policy` | Optional: `legacy` (default) preserves the progress-dependent Fast policy. Explicit `owner_only` enables immediate Fast replies for a group the operator verified has only owner-visible recipients; participant grants do not establish that visibility. `disabled` suppresses Fast replies (for example a coordinator chat). |
 | `owner_only_verified` | Optional, default `false`. Replies in every chat have server-local paths scrubbed (see `outbound_text.py`) unless the operator checked the WhatsApp group holds only the owner and the bot and set this to `true`. `fast_reply_policy` alone does not keep paths. A binding that lists any `participants` (`member` or `none`) is scrubbed even when marked. Adapters before this field refuse a binding that contains it (`binding_fields`): deploy the adapter first. |
@@ -495,8 +496,12 @@ messages, watch results, Worker assignments, mailbox and job signals, CLI
 { "inputKind": "v1_local", "role": "user", "connector": "orkestr-v1",
   "publicThreadId", "publicMessageId", "chatId", "accountId", "externalId",
   "source": "cli|thread_watch|mailbox_route|ui|…", "text",
-  "origin": { "role": "owner|agent|external", "label": "KDP", "senderRef": "<V1 thread or agent id>" } }
+  "origin": { "role": "owner|agent|external", "label": "KDP", "senderRef": "<V1 thread or agent id>",
+              "groupReply": false } }
 ```
+
+`groupReply` is optional (default `true`); `false` keeps the reply private
+(for example a connected assistant's `deliver_to_whatsapp: false`).
 
 The scope (thread, group, account) must match the binding; WhatsApp sources
 are refused (422 `invalid_local_input`). The origin is pinned with the input
@@ -508,7 +513,18 @@ untrusted data. The listed user row carries the V1 `source`, `connector:
 "orkestr-v1"` and `origin: "v1_local"`. The reply is exported like any other;
 V1 keeps it in the V1 thread, where the requester receives it (for example as
 its watch result), and acknowledges it as `suppressed` (or `no_reply`), which
-settles the input. It is never posted to the WhatsApp group. `GET /health` and
+settles the input. A real reply (a final or a refusal notice, never an exact
+`NO_REPLY`, an empty text, progress or a Quick note) is also copied once to the
+group as its own pseudo timer turn (source timer id `local-reply`,
+`local_reply_mirror.py`): the shape V1 materializes for V2 timers, posts and
+web answers, which the scoped relay delivers and acknowledges. The copy starts
+with `↩ Reply to <label> (request via Orkestr)` in the chat's language and,
+except for `external` input, a one-line excerpt of the request (at most 80
+characters); files attached to the reply are named on a last line. The
+decision is pinned with the input (`group_mirror`): it is off when the binding
+sets `local_reply_mirror: false` or the origin states `groupReply: false`, and
+for rows admitted before this rule. The note Rust receives says whether the
+reply is also posted. `GET /health` and
 `GET /threads/<id>/health` list the accepted `inputKinds`; V1 forwards local
 input only when `v1_local` is listed.
 

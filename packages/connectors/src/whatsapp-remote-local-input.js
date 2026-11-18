@@ -6,9 +6,11 @@
 // V1 web UI) is forwarded here as the adapter's `v1_local` input kind, with its
 // source and origin. The reply comes back through the remote mirror import as
 // an ordinary final answer on this thread, so the requester receives it the
-// way V1 delivers any reply (a watch result, a bridge read, the UI). It is not
-// sent to the WhatsApp group, exactly like a V1 reply to such input on a
-// relay-bound thread.
+// way V1 delivers any reply (a watch result, a bridge read, the UI). V1 never
+// sends that reply to the WhatsApp group itself; the V2 adapter posts a
+// separate copy marked as a reply to the requester (`local_reply_mirror`),
+// unless the origin says `groupReply: false` (a connected assistant's
+// `deliver_to_whatsapp: false`).
 //
 // Forwarding is idempotent: the public message id keys the adapter's ledger,
 // the body is deterministic, and the acknowledgement (`remoteMessageId`) is
@@ -78,7 +80,11 @@ export async function localInputOrigin(message = {}, env = process.env) {
   }
   if (clean(message.bridgeAgentId)) {
     const ref = senderRef(message.bridgeAgentId);
-    return { role: "agent", label: sourceLabels.thread_bridge_message, ...(ref ? { senderRef: ref } : {}) };
+    return {
+      role: "agent", label: sourceLabels.thread_bridge_message, ...(ref ? { senderRef: ref } : {}),
+      // The assistant opted out of WhatsApp delivery for this message.
+      ...(message.bridgeWhatsAppReply === false ? { groupReply: false } : {}),
+    };
   }
   if (externalSources.has(source) || clean(message.connector).toLowerCase() === "mailbox") {
     return { role: "external", label: label(sourceLabels[source], "External signal") };
