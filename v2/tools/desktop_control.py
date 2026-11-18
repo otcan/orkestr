@@ -125,12 +125,32 @@ class Lease:
             error.close()
             raise ValueError('controller_lease_refused_' + str(error.code)) from None
 
-    def binding(self):
-        value = self.call()['binding']
+    def inspect_binding(self):
+        document = self.call()
+        value = document.get('binding') or {}
         c = self.config
-        require(value['conversation_id'] == c['conversation_id'] and
-                value['v1_thread_id'] == c['v1_thread_id'] and
-                c['desktop_slug'] in value['desktop_slugs'] and value['grant_issued'],
+        slugs = value.get('desktop_slugs')
+        slugs = slugs if isinstance(slugs, list) and all(isinstance(s, str) for s in slugs) else []
+        # Explicit projection only: never expose grants, lease tokens, provider
+        # state, raw broker responses, or unrelated inventory/session records.
+        return {
+            'conversation_id': c['conversation_id'],
+            'v1_thread_id': c['v1_thread_id'],
+            'desktop_slug': c['desktop_slug'],
+            'binding_conversation_matches': value.get('conversation_id') == c['conversation_id'],
+            'binding_thread_matches': value.get('v1_thread_id') == c['v1_thread_id'],
+            'bound_desktop_slugs': slugs,
+            'grant_issued': value.get('grant_issued') is True,
+            'shared_with_all_chats': document.get('shared_with_all_chats') is True,
+            'configured_slug_bound': c['desktop_slug'] in slugs,
+        }
+
+    def binding(self):
+        value = self.inspect_binding()
+        c = self.config
+        require(value['binding_conversation_matches'] and value['binding_thread_matches'] and
+                value['grant_issued'] and
+                (value['configured_slug_bound'] or value['shared_with_all_chats']),
                 'controller_binding_changed')
         # This existing service-owned integration supplies only the operator
         # API credential. Check current operate rights as well as acquire;
@@ -201,7 +221,7 @@ def framebuffer_identity(config):
 
 
 def argument_shape(operation, values):
-    counts = {'start': 0, 'status': 0, 'screenshot': 0, 'release': 0, 'move': 2, 'click': 3, 'key': 1, 'type': 1}
+    counts = {'inspect-binding': 0, 'start': 0, 'status': 0, 'screenshot': 0, 'release': 0, 'move': 2, 'click': 3, 'key': 1, 'type': 1}
     require(operation in counts and len(values) == counts[operation], 'controller_action_arguments')
     if operation in ('move', 'click'):
         require(all(re.fullmatch(r'[0-9]{1,5}', x) for x in values), 'controller_coordinates_invalid')
@@ -219,8 +239,10 @@ def argument_shape(operation, values):
 def execute(config, operation, values, session_id, request_id):
     argument_shape(operation, values)
     uuid.UUID(request_id)
-    if operation not in ('start', 'status'):
+    if operation not in ('start', 'status', 'inspect-binding'):
         uuid.UUID(session_id)
+    if operation == 'inspect-binding':
+        return {'ok': True, 'operation': operation, **Lease(config).inspect_binding()}
     directory = Path(config['state_directory'])
     journal = directory / ('request-' + request_id + '.json')
     if operation == 'status':
@@ -299,7 +321,7 @@ def main():
     parser.add_argument('--configuration', required=True)
     parser.add_argument('--request-id', required=True)
     parser.add_argument('--session-id', default='')
-    parser.add_argument('operation', choices=['start', 'status', 'screenshot', 'release', 'move', 'click', 'key', 'type'])
+    parser.add_argument('operation', choices=['inspect-binding', 'start', 'status', 'screenshot', 'release', 'move', 'click', 'key', 'type'])
     parser.add_argument('values', nargs='*')
     args = parser.parse_args()
     require(os.geteuid() == 0 and sys.flags.isolated and sys.flags.no_site and sys.flags.dont_write_bytecode,
