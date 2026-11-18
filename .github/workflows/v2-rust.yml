@@ -39,7 +39,7 @@ jobs:
   lint:
     if: ${{ github.event.pull_request.draft != true }}
     # GitHub-hosted: keeps two of a round's AWS runners for the longer jobs (ORK-791).
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     defaults:
       run:
@@ -69,7 +69,7 @@ jobs:
   service:
     if: ${{ github.event.pull_request.draft != true }}
     # GitHub-hosted: keeps two of a round's AWS runners for the longer jobs (ORK-791).
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     defaults:
       run:
@@ -235,7 +235,7 @@ jobs:
       ((github.event_name == 'push' && (github.ref == 'refs/heads/integration' || startsWith(github.ref, 'refs/tags/'))) ||
       github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == 'otcan/orkestr')) &&
-      fromJSON('["self-hosted","orkestr-aws-x64"]') || 'ubuntu-latest' }}
+      fromJSON('["self-hosted","orkestr-aws-x64"]') || 'ubuntu-24.04' }}
     timeout-minutes: 30
     defaults:
       run:
@@ -358,7 +358,7 @@ jobs:
       ((github.event_name == 'push' && (github.ref == 'refs/heads/integration' || startsWith(github.ref, 'refs/tags/'))) ||
       github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == 'otcan/orkestr')) &&
-      fromJSON('["self-hosted","orkestr-aws-x64"]') || 'ubuntu-latest' }}
+      fromJSON('["self-hosted","orkestr-aws-x64"]') || 'ubuntu-24.04' }}
     # Process-failure tests exercise real deadlines; allow every shard to finish.
     timeout-minutes: 45
     strategy:
@@ -445,7 +445,7 @@ jobs:
     # is spent on it, and it reports cancelled or skipped instead.
     if: ${{ always() && !cancelled() && github.event.pull_request.draft != true }}
     needs: [lint, service, http, unit]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -477,7 +477,7 @@ jobs:
         run: python3 v2/tests/ci_test_shards.py verify "$RUNNER_TEMP"/v2-evidence/shards/plan-*.json
 
   cargo-advisories:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
       # PR content cannot supply its own scanner or exception policy.
@@ -527,7 +527,7 @@ jobs:
     # Stable required-check name for the ORK-478 ruleset; skipped is not success.
     if: ${{ always() && !cancelled() }}
     needs: cargo-advisories
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Require complete scan and published evidence
         env:
