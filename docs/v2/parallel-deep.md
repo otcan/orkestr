@@ -384,8 +384,9 @@ Phase 1 (#376, migration 0082) and phases 2 and 3 (the runtime PR, migration
     grants) are stopped only by the network-off sandbox, as for Fast.
 - **Turn content** (Core dispatch):
   - a slot turn gets the bounded history digest plus the read-only note;
-  - it names a Deep model: the owner's, else the writer's last resolved
-    model, else `gpt-6.1-sol`, at `high` effort unless the owner chose one;
+  - it names a Deep model: the owner's, else the Codex default model
+    (`codex_default_model`, built-in `gpt-6.1-sol`), at `high` effort
+    unless the owner chose one;
   - the writer's next turn carries each accepted parallel answer once.
 - **Defer.** An accepted slot answer that is exactly `PARALLEL_DEFER`, or
   a slot turn that failed (for example a provider capacity or quota error),

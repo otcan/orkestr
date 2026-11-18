@@ -60,6 +60,10 @@ pub(crate) struct BetaConfig {
     /// absent means the enabled built-in default.
     #[serde(default)]
     pub capacity_fallback: Option<capacity_fallback::CapacityFallbackConfig>,
+    /// The Codex model a Deep or Worker turn requests when its chat has none
+    /// selected; absent means the built-in `CODEX_DEFAULT_MODEL`.
+    #[serde(default)]
+    pub codex_default_model: Option<String>,
     /// Operator-pinned domain policy, applied before any window admission.
     #[serde(default)]
     pub provider_routing: Option<provider_routing::ProviderRouting>,
@@ -214,6 +218,13 @@ impl BetaConfig {
         if let Some(fallback) = &self.capacity_fallback {
             fallback.policy()?;
         }
+        if self
+            .codex_default_model
+            .as_deref()
+            .is_some_and(|model| !orkestr_v2_store_sqlite::codex_default_valid(model))
+        {
+            return Err("invalid Codex default model");
+        }
         if let Some(routing) = &self.provider_routing {
             routing.validate()?;
         }
@@ -351,6 +362,27 @@ mod tests {
             "workspace":"/srv/example-workspace",
             "namespace":"beta-deep", "supervisor_key":"beta-supervisor"
         })
+    }
+    #[test]
+    fn codex_default_model_is_optional_and_only_a_valid_codex_model() {
+        let config: BetaConfig = serde_json::from_value(input()).unwrap();
+        assert_eq!(config.codex_default_model, None);
+        let mut value = input();
+        value["codex_default_model"] = serde_json::json!("gpt-6-sol");
+        let config: BetaConfig = serde_json::from_value(value.clone()).unwrap();
+        config.validate().unwrap();
+        assert_eq!(config.codex_default_model.as_deref(), Some("gpt-6-sol"));
+        for invalid in ["", "claude-opus-5-5", "fable", "bad model", "openai"] {
+            value["codex_default_model"] = serde_json::json!(invalid);
+            let config: BetaConfig = serde_json::from_value(value.clone()).unwrap();
+            assert_eq!(
+                config.validate().err(),
+                Some("invalid Codex default model"),
+                "{invalid}"
+            );
+        }
+        value["codex_default_model"] = serde_json::json!(5);
+        assert!(serde_json::from_value::<BetaConfig>(value).is_err());
     }
     #[test]
     fn closed_schema_rejects_authority_and_limit_overrides() {

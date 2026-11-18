@@ -19,6 +19,20 @@ MAX_BETA_CONFIG_BYTES = 262144
 MAX_ADDITIONAL_WORKSPACE_EXEC = 128
 
 
+def codex_default_model(value):
+    """Optional Codex model for Deep and Worker turns of chats without one
+    (Core's `codex_default_valid`): a launch model, never Claude or Fable."""
+    if 'codex_default_model' not in value:
+        return
+    model = value['codex_default_model']
+    require(type(model) is str and 0 < len(model) <= 120 and not model.isdigit()
+            and all(c.isascii() and (c.isalnum() or c in '._:-') for c in model)
+            and model.lower() not in ('openai', 'azure', 'openrouter')
+            and not model.lower().startswith('claude')
+            and 'fable' not in re.split('[^a-z0-9]', model.lower()),
+            'Codex default model required')
+
+
 def provider_routing(value):
     """Generic operator vocabulary; never a model-supplied runtime setting."""
     if 'provider_routing' not in value:
@@ -157,7 +171,7 @@ def validate(raw):
     require(type(raw) is bytes and len(raw) <= MAX_BETA_CONFIG_BYTES, 'bounded beta config required')
     value = json.loads(raw.decode('utf-8'), object_pairs_hook=unique,
                        parse_constant=lambda _: (_ for _ in ()).throw(RuntimeError('invalid beta number')))
-    require(type(value) is dict and set(value) - {'roles', 'workspace_exec', 'additional_workspace_exec', 'max_active_windows', 'host_full_access', 'claude', 'window_max_minutes', 'conversation_window_max_minutes', 'conversation_workspaces', 'provider_routing', 'identity_split', 'managed_host', 'deploy_maintenance_marker', 'release_interruption_dir'} == FIELDS, 'closed beta config fields required')
+    require(type(value) is dict and set(value) - {'roles', 'workspace_exec', 'additional_workspace_exec', 'max_active_windows', 'host_full_access', 'claude', 'window_max_minutes', 'conversation_window_max_minutes', 'conversation_workspaces', 'provider_routing', 'codex_default_model', 'identity_split', 'managed_host', 'deploy_maintenance_marker', 'release_interruption_dir'} == FIELDS, 'closed beta config fields required')
     require(type(value['schema_version']) is int and value['schema_version'] == 1, 'beta schema version')
     for name in ('owner_id', 'conversation_id'):
         text = value[name]
@@ -209,6 +223,7 @@ def validate(raw):
     window_lifetimes(value)
     conversation_workspaces(value)
     provider_routing(value)
+    codex_default_model(value)
     if 'managed_host' in value:
         require('identity_split' in value and 'host_full_access' not in value,
                 'managed host requires identity split and excludes legacy full access')

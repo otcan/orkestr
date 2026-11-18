@@ -209,6 +209,10 @@ impl AppState {
             // Validated by loading; operator policy before any provider session.
             orkestr_runtime::capacity_fallback::install(fallback.policy()?);
         }
+        if let Some(model) = &config.codex_default_model {
+            // Validated by loading; before any Deep or Worker dispatch.
+            orkestr_v2_store_sqlite::configure_codex_default_model(model)?;
+        }
         let stat = std::fs::read_to_string("/proc/self/stat")
             .map_err(|_| "beta manager parent unavailable")?;
         let (_, fields) = stat

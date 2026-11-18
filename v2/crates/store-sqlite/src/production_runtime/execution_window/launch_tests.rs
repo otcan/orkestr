@@ -48,6 +48,40 @@ async fn deep_dispatch_carries_settings_read_at_consumption() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_untouched_conversation_names_the_codex_default_at_dispatch() {
+    let w = Window::open().await;
+    w.activate().await;
+    // No settings row: the conversation never chose anything.
+    let dispatch = deep(&w, "launch-default").await;
+    let launch = dispatch.launch().unwrap();
+    assert_eq!(launch.settings_revision, 0);
+    assert_eq!(
+        launch.codex_overrides(),
+        Some((Some(crate::CODEX_DEFAULT_MODEL), None)),
+        "never the native's catalog default"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_unset_deep_model_keeps_the_chosen_effort_with_the_codex_default() {
+    let w = Window::open().await;
+    w.activate().await;
+    sqlx::query("INSERT INTO conversation_settings(conversation_id,owner_id,revision,provider,model,reasoning_effort,honor_no_reply,provider_generation,updated_at_ms) VALUES(?,?,2,'codex',NULL,'high',1,0,1)")
+        .bind(w.f.conversation.to_string())
+        .bind(w.f.owner.to_string())
+        .execute(&w.f.store.pool)
+        .await
+        .unwrap();
+    let dispatch = deep(&w, "launch-default-effort").await;
+    let launch = dispatch.launch().unwrap();
+    assert_eq!(launch.settings_revision, 2);
+    assert_eq!(
+        launch.codex_overrides(),
+        Some((Some(crate::CODEX_DEFAULT_MODEL), Some("high")))
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fast_override_is_read_at_consumption_and_never_replaces_deep_launch() {
     let w = Window::open().await;
     w.activate().await;
