@@ -149,6 +149,20 @@ test("every non-WhatsApp input type is forwarded with its source and origin; V1 
   assert.equal(adapter.posts.length, 8);
 });
 
+test("a connected assistant's WhatsApp opt-out reaches the adapter; the default leaves the group copy on", async t => {
+  const env = await fixture(t);
+  const adapter = fakeAdapter();
+  const quiet = await queue(env, { source: "thread_bridge_message", text: "Example private question", bridgeAgentId: "example-agent",
+    bridgeWhatsAppReply: false });
+  const shared = await queue(env, { source: "thread_bridge_message", text: "Example shared question", bridgeAgentId: "example-agent",
+    bridgeWhatsAppReply: true });
+  const routed = await routeHeldLocalInputs(await thread(env), env, { fetchImpl: adapter.fetch, forward: forwardLocalInputToRemote });
+  assert.equal(routed.forwarded.length, 2);
+  const posted = Object.fromEntries(adapter.posts.map(body => [body.publicMessageId, body]));
+  assert.deepEqual(posted[quiet.id].origin, { role: "agent", label: "Connected assistant", senderRef: "example-agent", groupReply: false });
+  assert.deepEqual(posted[shared.id].origin, { role: "agent", label: "Connected assistant", senderRef: "example-agent" });
+});
+
 test("a lost acknowledgement is re-sent once and the adapter answers with the same remote id", async t => {
   const env = await fixture(t);
   const adapter = fakeAdapter();
