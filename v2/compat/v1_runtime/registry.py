@@ -28,7 +28,7 @@ WORKER_HEALTHY_S = 300
 
 MUTABLE_KEYS = ("enabled", "revoked", "progress_updates", "attachments", "max_outstanding_inputs", "max_input_age_seconds",
                 "participants", "owner_label", "instructions_path", "fast_reply_policy", "auto_steer",
-                "owner_only_verified", "deep_heartbeat")
+                "owner_only_verified", "deep_heartbeat", "local_reply_mirror")
 
 
 class Binding:

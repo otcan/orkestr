@@ -64,6 +64,8 @@ test('conversation transport replies stay plain and are delivered once', async t
     {text: 'Question', timerId: 'post', postAuthor: 'assistant_question'},
     {text: 'Web transport excerpt', timerId: 'web'},
     {text: 'Internal result reference', timerId: 'task-update'},
+    // The V2 adapter's group copy of a reply to V1-local input carries its own header in the text.
+    {text: '↩ Reply to Connected assistant (request via Orkestr)', timerId: 'local-reply'},
     {text: 'Quick reply', timerId: 'fast'},
     {text: 'Status', timerId: 'status'},
   ]) {

@@ -23,10 +23,10 @@ class LocalInputTests(Harness):
         self.assertEqual(status, 202)
         data = self.binding(1).ledger.next_input()
         self.assertEqual(data["author"], {"role": "v1_agent", "id": "v1:cli:thread-kdp", "label": "KDP",
-                                          "labelled": True, "source": "cli"})
+                                          "labelled": True, "source": "cli", "group_mirror": True})
         text = participants.compose(data)
         self.assertTrue(text.startswith("[Orkestr V1: KDP]\n\nstatus please\n\n[Sent by KDP through Orkestr V1 (cli)"))
-        self.assertIn("not posted to the group", text)
+        self.assertIn("also posted to the group, marked as a reply to KDP", text)
         [row] = self.listing(1)["messages"]
         self.assertEqual((row["id"], row["source"], row["connector"], row["origin"], row["authorRole"], row["publicMessageId"]),
                          (reply["message"]["id"], "cli", "orkestr-v1", "v1_local", "v1_agent", "local-1"))
@@ -79,7 +79,9 @@ class LocalInputTests(Harness):
         status, result = self.ack(1, "acceptance-local", parent="local-1", outcome="suppressed", outboxJobId=None,
                                   connectorMessageIds=[], reason="v1_local_input_reply")
         self.assertEqual((status, result["settled"]), (200, True))
-        self.assertEqual(self.listing(1)["messages"], [])
+        # Only the group copy of the reply is still listed (test_local_reply_mirror.py).
+        self.assertEqual([(row["role"], row.get("timerSourceId")) for row in self.listing(1)["messages"]],
+                         [("user", "local-reply"), ("assistant", None)])
 
     def test_health_advertises_the_local_input_kind(self):
         status, health = self.request("GET", "/threads/%s/health" % self.remote(1))

@@ -2,7 +2,7 @@
 import re
 import time
 
-from .ledger import no_reply
+from .ledger import LOCAL_ROLES, no_reply
 from .legacy_first_response import capture_legacy
 
 MAX_CHARS = 3500
@@ -20,10 +20,12 @@ def repeats_fast(data, final_text):
     """Whether a short Deep final is exactly the exported Fast reply after
     normalization. Similar is not enough: "10:00" vs "11:00", "1,250" vs
     "1,520" or "B12" vs "B14" are corrections, so any digit disables it, and
-    a turn that took steered messages always gets its own final."""
+    a turn that took steered messages always gets its own final. A V1-local
+    input's Fast note is only progress (first_response_store.py): neither its
+    requester nor the group received it as an answer, so its final stays."""
     echo = (data.get("first_response") or {}).get("echo")
     final = echo_key(final_text)
-    if not echo or not final or data.get("steered"):
+    if not echo or not final or data.get("steered") or (data.get("author") or {}).get("role") in LOCAL_ROLES:
         return False
     if any(c.isdigit() for c in final_text) or any(c.isdigit() for c in echo):
         return False

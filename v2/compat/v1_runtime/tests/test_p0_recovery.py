@@ -925,6 +925,10 @@ class DuplicateAndStatusTests(unittest.TestCase):
         steered = dict(fast("Thanks, noted."), steered=["other"])
         self.assertFalse(repeats_fast(steered, "Thanks, noted."))
         self.assertFalse(repeats_fast({}, "You're welcome!"))
+        # A V1-local input's Fast note was only progress: its final is the answer.
+        for role in ("v1_agent", "v1_owner", "v1_external"):
+            self.assertFalse(repeats_fast(dict(fast("Thanks, noted."), author={"role": role}), "Thanks, noted."))
+        self.assertTrue(repeats_fast(dict(fast("Thanks, noted."), author={"role": "owner"}), "Thanks, noted."))
 
     def test_missing_run_notice_only_waits_while_this_inputs_match_lags(self):
         from v2.compat.v1_runtime import activity

@@ -343,7 +343,8 @@ class Ledger:
             if quoted:  # Not part of the digest: it is transport context, not identity.
                 data["reply_to"] = quoted
             if author:
-                data["author"] = {k: author[k] for k in ("role", "id", "label", "labelled", "phone", "source") if author.get(k) is not None}
+                data["author"] = {k: author[k] for k in ("role", "id", "label", "labelled", "phone", "source", "group_mirror")
+                                  if author.get(k) is not None}
             if command:
                 data.update(phase="completed", command=dict(command, state="queued"))
                 self.commands_due = True
@@ -822,6 +823,10 @@ class Ledger:
             if kind == "final" and data.get("origin") is None and not data.get("activity_notice"):
                 from .activity import withdraw_heartbeats
                 withdraw_heartbeats(self, db, data["remote_id"])
+            # A real reply to V1-local input also goes to the group, once.
+            from . import local_reply_mirror
+            if local_reply_mirror.wanted(data, kind, message):
+                local_reply_mirror.copy(self, db, data, message)
 
     def complete(self, data, reply):
         """Atomically record the accepted final reply and make it visible to V1."""

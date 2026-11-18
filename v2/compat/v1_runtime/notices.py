@@ -102,6 +102,18 @@ TEMPLATES = {
         "de": "Es geht in einem neuen Durchgang weiter: Der vorherige Durchgang hat sein Zeitlimit "
               "erreicht, bevor er fertig war.",
     },
+    # Header of the group copy of a reply to V1-local input (local_reply_mirror.py):
+    # the request came through Orkestr (connected assistant, CLI, another thread).
+    "local_reply_header": {
+        "en": "↩ Reply to %(label)s (request via Orkestr)",
+        "tr": "↩ %(label)s için yanıt (istek Orkestr üzerinden)",
+        "de": "↩ Antwort an %(label)s (Anfrage über Orkestr)",
+    },
+    "local_reply_files": {
+        "en": "\U0001f4ce In the Orkestr app: %(files)s",
+        "tr": "\U0001f4ce Orkestr uygulamasında: %(files)s",
+        "de": "\U0001f4ce In der Orkestr-App: %(files)s",
+    },
     "release_continue": {
         "en": "Orkestr was updated while this task was running. Continuing it in a new turn.",
         "tr": "Bu görev çalışırken Orkestr güncellendi. Yeni bir turda devam ediliyor.",
