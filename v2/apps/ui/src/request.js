@@ -26,7 +26,10 @@ const signIn = (input.method === "GET" && input.path === "/api/v2/provider-sign-
 const localAccount = input.path === "/api/v2/oss-setup/account" && ["GET", "POST"].includes(input.method);
 // The host's published sites (ORK-834): one fixed read, never a site itself.
 const sites = input.method === "GET" && input.path === "/api/v2/sites";
-if (!deskRequest && !health && !signIn && !localAccount && !sites && !security.test(input.path) && !vault.test(input.path) && !credentials.test(input.path) && !route.test(input.path) && !(manage.test(input.path) && !input.path.includes("..")) && !(sidebar.test(input.path) && !input.path.includes(".."))) throw new Error("Invalid API path");
+// The Files panel's chat folder: a read-only listing or preview, GET only, the
+// path one fully percent-encoded query value (the server confines it).
+const workspace = input.method === "GET" && /^\/api\/v2\/conversations\/[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}\/workspace(?:\/preview)?\?path=[A-Za-z0-9%._~-]{0,12288}$/.test(input.path);
+if (!deskRequest && !health && !signIn && !localAccount && !sites && !workspace &&!security.test(input.path) && !vault.test(input.path) && !credentials.test(input.path) && !route.test(input.path) && !(manage.test(input.path) && !input.path.includes("..")) && !(sidebar.test(input.path) && !input.path.includes(".."))) throw new Error("Invalid API path");
 const headers = {"Content-Type": "application/json"};
 if (localAccount) headers["x-orkestr-local-setup"] = "1";
 if (input.csrf && !["GET", "HEAD"].includes(input.method)) headers["x-orkestr-csrf"] = input.csrf;

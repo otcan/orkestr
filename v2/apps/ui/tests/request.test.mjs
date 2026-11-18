@@ -218,6 +218,17 @@ test('conversation posts are read with one fixed page and never written from the
     }
 });
 
+test('the chat folder is read with GET only, one encoded path value',async()=>{
+    const conversation='/api/v2/conversations/00000000-0000-4000-8000-00000000000a';
+    for(const path of [`${conversation}/workspace?path=`,`${conversation}/workspace?path=docs%2Fplan.md`,`${conversation}/workspace/preview?path=na%C3%AFve%20x.txt`]) {
+        await execute({recv:async()=>({...base,method:'GET',path,body:null})},async(seen)=>{assert.equal(seen,path);return new Response('{}');});
+    }
+    for(const [method,bad] of [['POST',`${conversation}/workspace?path=a`],['DELETE',`${conversation}/workspace?path=a`],['GET',`${conversation}/workspace?path=docs/plan.md`],
+        ['GET',`${conversation}/workspace?path=a&inline=true`],['GET',`${conversation}/workspace/file?path=a`],['GET',`${conversation}/workspace`],['GET','/api/v2/conversations/x/workspace?path=']]) {
+        await assert.rejects(execute({recv:async()=>({...base,method,path:bad,body:null})},()=>assert.fail('fetch must not run')),/Invalid API path/);
+    }
+});
+
 test('GET polls revalidate with the last ETag and a 304 returns the kept body',async()=>{
     const path='/api/v2/sidebar';
     const get={...base,method:'GET',path,body:null};
