@@ -306,7 +306,9 @@ async function updatePublicRemoteParent(thread, localMessage, remoteMessage, rem
 
 // On a relay-bound thread (legacy mirror off) a reply to V1-local input
 // (thread, agent, mailbox, CLI, UI) stays in this thread, where its requester
-// reads it, exactly as a V1 reply to such input; it is never sent to the group.
+// reads it, exactly as a V1 reply to such input; V1 never sends it to the
+// group. The V2 adapter exports a separate, marked group copy of a real reply
+// as a pseudo timer turn, which the scoped relay delivers like a V2 timer reply.
 export function remoteLocalInputParent(thread = null, parent = null) {
   return thread?.binding?.mirrorToWhatsApp === false &&
     parent?.role === "user" && pickString(parent.remoteInputKind) === "v1_local";
