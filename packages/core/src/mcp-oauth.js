@@ -248,8 +248,11 @@ export async function validateAuthorizeRequest(query = {}, env = process.env, fe
 }
 
 // The consent form carries a one-time id bound to the signed-in session.
-export async function createConsent(request, { userId, sessionId }, env = process.env) {
-  const consent = { id: token("mcc"), userId, sessionId: clean(sessionId), request, expiresAt: new Date(Date.now() + CONSENT_TTL_MS).toISOString() };
+// `whatsappRead`: the WhatsApp accounts the consent page listed for reading;
+// approving grants exactly those (thread-bridge-whatsapp.js).
+export async function createConsent(request, { userId, sessionId, whatsappRead = /** @type {string[]} */ ([]) }, env = process.env) {
+  const consent = { id: token("mcc"), userId, sessionId: clean(sessionId), request, expiresAt: new Date(Date.now() + CONSENT_TTL_MS).toISOString(),
+    ...(Array.isArray(whatsappRead) && whatsappRead.length ? { whatsappRead: whatsappRead.map(String) } : {}) };
   await mutate(env, (state) => { state.consents.push(consent); });
   return consent.id;
 }
@@ -260,7 +263,7 @@ export function redirectWith(uri, params = {}) {
   return url.toString();
 }
 
-async function upsertGrant({ userId, clientId, clientName }, env) {
+async function upsertGrant({ userId, clientId, clientName, whatsappRead = /** @type {string[]} */ ([]) }, env) {
   const file = grantsPath(env);
   const agentId = agentIdForClient(clientId);
   const grantId = `grant_${agentId}`;
@@ -279,6 +282,7 @@ async function upsertGrant({ userId, clientId, clientName }, env) {
       observe: "all",
       reply: "all",
       message: "all",
+      ...(whatsappRead.length ? { whatsappRead: [...whatsappRead] } : {}),
       createdAt: nowIso(),
       expiresAt: new Date(Date.now() + GRANT_TTL_MS).toISOString(),
     });
@@ -296,7 +300,8 @@ export async function decideConsent({ consentId, userId, sessionId, approve }, e
   if (!consent || consent.userId !== userId || consent.sessionId !== clean(sessionId)) throw oauthError("access_denied", "This approval link expired. Start the connection again.", 400);
   const { request } = consent;
   if (!approve) return redirectWith(request.redirectUri, { error: "access_denied", state: request.state });
-  const grantId = await upsertGrant({ userId, clientId: request.client.clientId, clientName: request.client.clientName }, env);
+  const grantId = await upsertGrant({ userId, clientId: request.client.clientId, clientName: request.client.clientName,
+    whatsappRead: Array.isArray(consent.whatsappRead) ? consent.whatsappRead : [] }, env);
   const code = token("mca");
   await mutate(env, (state) => {
     state.codes.push({

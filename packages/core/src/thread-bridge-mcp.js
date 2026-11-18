@@ -9,6 +9,7 @@ import { listBridgeThreads, readBridgeChanges, readBridgeHistory, replyToBridgeT
 import { getThread } from "./threads.js";
 import { bridgeThreadStatus, sendBridgeMessage, waitForBridgeReply } from "./thread-bridge-messaging.js";
 import { bridgeProviderQuotas } from "./thread-bridge-quota.js";
+import { bridgeWhatsAppIncoming, WHATSAPP_MAX_LIMIT } from "./thread-bridge-whatsapp.js";
 
 function result(value) {
   return { content: [{ type: "text", text: JSON.stringify(value) }], structuredContent: value };
@@ -129,6 +130,19 @@ const tools = {
     inputSchema: { provider: z.enum(["codex", "claude"]).optional() },
     readOnly: true,
     run: (input, principal, env) => bridgeProviderQuotas(principal, { provider: input.provider || "" }, env),
+  },
+  list_incoming_whatsapp_messages: {
+    title: "List recent incoming WhatsApp messages",
+    description: "Recent WhatsApp messages other people sent to one of the owner's connected accounts, newest first. Read-only: never sends, reacts, or marks anything read. account: orkestr (the Orkestr assistant number: messages from listed participants in groups bound to the owner's threads) or german (the owner's German personal account, read live). Optional chat (a chat.id from an earlier answer) narrows to one chat; since (ISO 8601 with offset, default 7 days ago); limit (1-50, default 20); cursor (nextCursor of the previous page, same account/chat/since; whatsapp_cursor_expired means start again without it). Each message has account, chat {id, name, kind}, sender {name, masked number, ref}, receivedAt in UTC and Europe/Berlin, type, text (media by type only) and id. The owner's own messages and Orkestr replies are left out. Also returns observedAt, coverage (what was read; complete only after completeAfter), per-account availability, and the account's limits.",
+    inputSchema: {
+      account: z.enum(["orkestr", "german"]),
+      chat: z.string().regex(/^wa-[0-9a-f]{20}$/).optional(),
+      since: z.string().max(40).optional(),
+      limit: z.number().int().min(1).max(WHATSAPP_MAX_LIMIT).optional(),
+      cursor: z.string().max(1024).optional(),
+    },
+    readOnly: true,
+    run: (input, principal, env) => bridgeWhatsAppIncoming(principal, input, env),
   },
 };
 

@@ -18,6 +18,7 @@ import {
   validateAuthorizeRequest,
 } from "../../../../../packages/core/src/mcp-oauth.js";
 import { createThreadBridgeMcpServer } from "../../../../../packages/core/src/thread-bridge-mcp.js";
+import { whatsappConsentAccounts } from "../../../../../packages/core/src/thread-bridge-whatsapp.js";
 import { handleModernMcpRequest, isModernMcpRequest, preflightModernMcpRequest, shouldStreamModernRequest } from "../../../../../packages/core/src/mcp-modern-protocol.js";
 import { captureResponseOutcome, respondWithMcpException, sendMcpJson, streamMcpResponse, trackMcpRequest } from "./mcp-http.js";
 import { mcpLandingPage } from "../../../../../packages/core/src/mcp-landing-page.js";
@@ -55,7 +56,10 @@ function unauthorized(response: any) {
     .json({ error: "invalid_token" });
 }
 
-function consentPage({ request, consentId, userId }: any) {
+function consentPage({ request, consentId, userId, whatsappAccounts = [] }: any) {
+  const whatsapp = whatsappAccounts.length
+    ? `<li>read recent <strong>incoming WhatsApp messages</strong> of ${whatsappAccounts.map((entry: any) => escapeHtml(entry.label)).join(" and ")}: who wrote, in which chat, when and what (media by type only). Read-only: nothing is sent, reacted to or marked as read;</li>\n`
+    : "";
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="referrer" content="same-origin">
 <title>Connect ${escapeHtml(request.client.clientName)} to Orkestr</title>
@@ -64,7 +68,7 @@ function consentPage({ request, consentId, userId }: any) {
 <p>Signed in to Orkestr as <strong>${escapeHtml(userId)}</strong>. <strong>${escapeHtml(request.client.clientName)}</strong> (returns to ${escapeHtml(request.redirectHost)}) asks to:</p>
 <ul><li>read the visible messages of <strong>all your threads</strong>, including future ones;</li>
 <li>see the Codex and Claude quota readings Orkestr already shows you (remaining percentages, reset times, freshness);</li>
-<li>add comments to your threads, labelled as coming from this assistant;</li>
+${whatsapp}<li>add comments to your threads, labelled as coming from this assistant;</li>
 <li><strong>send messages to your threads' agents</strong>, which then start work as if asked, labelled as coming from this assistant.</li></ul>
 <p>Comments are context only and are not sent to WhatsApp. Messages start work in the thread; the agent's answer is also sent through the thread's existing eligible WhatsApp binding by default, unless the assistant opts out. No other recipient can be selected, and no WhatsApp message is sent when the thread has no eligible binding. Nothing is ever sent as you. Access lasts 90 days; you can revoke it at any time.</p>
 <form method="post" action="/mcp-oauth/authorize"><input type="hidden" name="consent_id" value="${escapeHtml(consentId)}">
@@ -111,8 +115,9 @@ export class ThreadBridgeMcpController {
       if (keycloakOidcEnabled()) return response.status(302).header("location", `/auth/login?return=${encodeURIComponent(returnTo)}`).send("Redirecting to sign in.");
       return response.status(401).type("text/plain").send("Sign in to Orkestr in this browser first, then start the connection again.");
     }
-    const consentId = await createConsent(validated, user);
-    return response.status(200).type("text/html").header("x-frame-options", "DENY").send(consentPage({ request: validated, consentId, userId: user.userId }));
+    const whatsappAccounts = await whatsappConsentAccounts(user.userId);
+    const consentId = await createConsent(validated, { ...user, whatsappRead: whatsappAccounts.map((entry: any) => entry.account) });
+    return response.status(200).type("text/html").header("x-frame-options", "DENY").send(consentPage({ request: validated, consentId, userId: user.userId, whatsappAccounts }));
   }
 
   @Post("mcp-oauth/authorize")
