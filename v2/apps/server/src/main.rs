@@ -216,6 +216,9 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     // Optional: the host's sites catalog (ORK-834), read per request; a
     // missing file lists no sites.
     state = state.with_sites_catalog(&home);
+    // Optional: the Files panel's folder view reads through the workspace
+    // reader socket; without one the panel says this host cannot show it.
+    state = state.with_workspace_reader_from_env();
     let listener = tokio::net::TcpListener::bind(bind).await?;
     let catalog = match std::env::var_os("ORKESTR_V2_GOOGLE_CATALOG") {
         Some(path) => {

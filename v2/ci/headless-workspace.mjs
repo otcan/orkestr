@@ -858,6 +858,37 @@ export const scenarios = [
     assert.deepEqual(view.links[0], ['https://example.invalid/runbook', 'noopener noreferrer nofollow']);
     assert.equal(view.html, 0, 'message markup is never parsed as HTML');
     assert.equal(view.raw, false, 'no literal Markdown markers remain');
+    // A V1 answer says it is the final answer; owner and member messages carry no mark.
+    assert.deepEqual(await page.$$eval('.v1-thread .chat-messages article', n => n.map(a => [a.dataset.messageKind, a.querySelector('.message-kind')?.textContent ?? ''])),
+      [['', ''], ['', ''], ['final', 'Final']]);
+    // Every message, and each code block, has its own Copy button.
+    await page.evaluate(() => {
+      window.__copied = [];
+      Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async text => { window.__copied.push(text); } } });
+    });
+    assert.equal(await page.$$eval('.v1-thread .chat-messages > li .message-copy .copy-button', n => n.length), 3);
+    await page.click('.v1-thread .rt-code-block .copy-button');
+    await page.waitForFunction(() => document.querySelector('.v1-thread .rt-code-block .copy-button')?.dataset.copyState === 'copied');
+    let copied = await page.evaluate(() => window.__copied);
+    assert.match(copied[0], /^cargo test --offline --locked -p orkestr-v2-ui/, 'a code block copies its own text');
+    assert.ok(!copied[0].includes('```') && !copied[0].includes('Synthetic status'), 'no fences, nothing outside the block');
+    assert.equal(await page.$eval('.v1-thread .rt-code-block .copy-button', b => b.textContent.trim()), 'Copied');
+    // From the keyboard: focus a message's Copy button and press Enter. It
+    // copies the message's original text.
+    await page.focus('.v1-thread .chat-messages > li:first-child .message-copy .copy-button');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => window.__copied.length === 2);
+    copied = await page.evaluate(() => window.__copied);
+    assert.match(copied[1], /Which check was this\? <b>not html<\/b>$/);
+    // Without the Clipboard API (a plain-http host) the fallback still copies.
+    await page.evaluate(() => {
+      Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined });
+      document.execCommand = command => { window.__copied.push(`fallback:${document.querySelector('textarea[aria-hidden=true]')?.value}`); return command === 'copy'; };
+    });
+    await page.click('.v1-thread .chat-messages > li:last-child .message-copy .copy-button');
+    await page.waitForFunction(() => window.__copied.length === 3);
+    assert.match((await page.evaluate(() => window.__copied))[2], /^fallback:## Synthetic status/);
+    assert.equal(await page.$('textarea[aria-hidden=true]'), null, 'the fallback leaves nothing behind');
     await screenshot(label, 'message-formatting');
     await noHorizontalScroll();
   }],
@@ -873,7 +904,7 @@ export const scenarios = [
       return { shown: !!aside && getComputedStyle(aside).display !== 'none', hash: location.hash,
         toggle: !!document.querySelector('.files-drawer-toggle'), inTranscript: !!document.querySelector('.conversation-scroll .files-section'),
         current: [...document.querySelectorAll('nav[aria-label="Conversation"] button[aria-current=page]')].map(b => b.textContent.trim()),
-        sections: aside ? [...aside.querySelectorAll('.files-section h3, .files-private-toggle')].map(n => n.textContent.trim()) : [],
+        sections: aside ? [...aside.querySelectorAll('.files-section h3, .files-more-toggle, .files-private-toggle')].map(n => n.textContent.trim()) : [],
         machinery: /held input|work slot|work window|Latest 100 saved inputs|not supported yet|Thread files/i.test(aside?.innerText ?? '') };
     });
     let view = await panel();
@@ -885,7 +916,7 @@ export const scenarios = [
     view = await panel();
     assert.equal(view.hash, `#conversation/${A}/files`);
     assert.deepEqual(view.current, ['Files']);
-    assert.deepEqual(view.sections, ['In this chat', 'Your folder', 'Private copies']);
+    assert.deepEqual(view.sections, ['Chat folder', 'In this chat', 'More', 'Your folder', 'Private copies']);
     assert.equal(view.machinery, false, 'no held inputs, work slots, work window or internal names in Files');
     await page.waitForFunction(() => document.activeElement?.classList.contains('files-drawer-close'));
     // In this chat: the files the owner sent in this chat, newest first, each named and downloadable.
@@ -908,6 +939,34 @@ export const scenarios = [
     }
     await screenshot(label, 'chat-files-open');
     await noHorizontalScroll();
+    // Chat folder: the folder this chat's agent works in, read-only. Chat A
+    // works in the shared default folder, and the panel says so.
+    await page.waitForFunction(() => document.querySelectorAll('.files-drawer .workspace-entry').length === 4, { timeout: 15000 });
+    const folder = await page.evaluate(() => ({
+      root: document.querySelector('.workspace-root')?.textContent, kind: document.querySelector('.workspace-root')?.dataset.rootKind,
+      note: document.querySelector('.workspace-shared-note')?.textContent ?? '',
+      rows: [...document.querySelectorAll('.workspace-entry')].map(n => [n.dataset.kind, n.querySelector('.workspace-entry-name').textContent, n.querySelector('button').disabled]),
+      hidden: document.querySelector('.workspace-hidden')?.textContent }));
+    assert.deepEqual([folder.root, folder.kind], ['Shared default workspace', 'shared_default']);
+    assert.match(folder.note, /Not this chat's own folder/);
+    assert.deepEqual(folder.rows, [['dir', 'docs', false], ['file', 'chart.png', false], ['file', 'report.md', false], ['link', 'escape', true]],
+      'folders first, newest first; a link outside the folder does not open');
+    assert.equal(folder.hidden, '2 protected items hidden (keys, tokens, credentials).');
+    // A folder opens in place and a breadcrumb leads back; a file previews with Download.
+    await page.click('.workspace-entry[data-kind=dir] button');
+    await page.waitForFunction(() => document.querySelector('.workspace-crumbs [aria-current=page]')?.textContent === 'docs');
+    await page.click('.workspace-entry button');
+    await page.waitForFunction(() => document.querySelector('.workspace-preview-text')?.textContent.includes('Synthetic plan'));
+    assert.match(await page.$eval('.workspace-download', a => a.getAttribute('href')), /\/workspace\/file\?path=docs%2Fplan\.md$/);
+    await screenshot(label, 'chat-folder-preview');
+    await page.click('button.workspace-crumb');
+    await page.waitForFunction(() => document.querySelectorAll('.files-drawer .workspace-entry').length === 4 && !document.querySelector('.workspace-preview'));
+    await page.click('.workspace-entry:nth-child(2) button');
+    await page.waitForFunction(() => { const img = document.querySelector('.workspace-preview-image'); return img?.complete && img.naturalWidth === 1; }, { timeout: 15000 });
+    await noHorizontalScroll();
+    // More: your computer's folder and Private copies stay collapsed until asked for.
+    assert.equal(await page.$eval('.files-more', n => n.open), false);
+    await page.click('.files-more-toggle');
     // Private copies stay collapsed until asked for.
     assert.equal(await page.$('.files-drawer [aria-label="Thread files"]'), null);
     await page.click('.files-private-toggle');
@@ -915,6 +974,7 @@ export const scenarios = [
     assert.equal(await page.$eval('.files-private-toggle', n => n.getAttribute('aria-expanded')), 'true');
     await page.click('.files-private-toggle');
     await page.waitForFunction(() => !document.querySelector('.files-drawer [aria-label="Thread files"]'));
+    await page.click('.files-more-toggle');
     // Escape closes Files, back to Chat with focus on the Files destination.
     await page.keyboard.press('Escape');
     await page.waitForFunction(() => getComputedStyle(document.querySelector('.files-drawer')).display === 'none');

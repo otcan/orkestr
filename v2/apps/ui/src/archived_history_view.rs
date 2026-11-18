@@ -113,6 +113,7 @@ pub fn ArchivedHistory(
                                     crate::message_time_view::MessageTime { at_ms: at, now_ms: now() }
                                 } else if let Some(at) = entry.message.created_at.as_ref() { time { "{at}" } }
                                 span { class: "archived-badge", "Archived" }
+                                crate::copy_button::CopyButton { text: entry.message.text.clone(), label: "Copy message", class: "message-copy" }
                             }
                             {
                                 let (head, cut) = preview(&entry.message.text);

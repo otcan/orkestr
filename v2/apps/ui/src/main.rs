@@ -19,6 +19,7 @@ mod conversation_location;
 mod conversation_posts_view;
 mod conversation_sidebar;
 mod conversation_status_poll;
+mod copy_button;
 mod credentials_view;
 mod desk_owner_actions;
 mod desk_sharing_view;
@@ -90,6 +91,7 @@ mod worker_tasks_panel;
 mod worker_tasks_view;
 mod workers_view;
 mod workspace;
+mod workspace_files_view;
 use dioxus::prelude::*;
 use orkestr_v2_ui::{session_scope::SessionScope, Draft};
 use serde_json::Value;
@@ -262,6 +264,7 @@ fn App() -> Element {
         style { "{include_str!(\"style.css\")}" }
         style { "{include_str!(\"host_metrics.css\")}" }
         style { "{include_str!(\"shell_layout.css\")}" }
+        style { "{include_str!(\"message_marks.css\")}" }
         main { class: "app-shell",
             // Global header: owner-wide resources only, never a conversation's views.
             header { class: "app-heading", h1 { class: "app-brand", "Orkestr" }

@@ -730,6 +730,48 @@ pub fn safe_href(url: &str) -> Option<String> {
     ok.then(|| url.to_string())
 }
 
+/// The text a block's Copy button copies: code verbatim (no fences), a
+/// quote's content without its `>` markers, other blocks as plain text.
+pub fn block_text(block: &Block) -> String {
+    match block {
+        Block::Paragraph(content) | Block::Heading(_, content) | Block::Reply(content) => {
+            plain(content)
+        }
+        Block::Code { text, .. } => text.clone(),
+        Block::List(items) => items
+            .iter()
+            .map(|item| {
+                let marker = match item.marker {
+                    Marker::Bullet => "-".to_string(),
+                    Marker::Number(n) => format!("{n}."),
+                };
+                format!(
+                    "{}{marker} {}",
+                    "  ".repeat(usize::from(item.depth)),
+                    plain(&item.content)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        Block::Quote(inner) => inner
+            .iter()
+            .map(block_text)
+            .collect::<Vec<_>>()
+            .join("\n\n"),
+        Block::Table { head, rows, .. } => std::iter::once(head)
+            .chain(rows.iter())
+            .map(|row| {
+                row.iter()
+                    .map(|cell| plain(cell))
+                    .collect::<Vec<_>>()
+                    .join("\t")
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        Block::Rule => "---".into(),
+    }
+}
+
 /// Plain text of inline content, for labels and tests.
 pub fn plain(content: &[Inline]) -> String {
     content

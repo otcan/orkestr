@@ -1,0 +1,27 @@
+/* Update / Final marks on assistant messages, and the Copy buttons on every
+   message and on each code or quote block (owner requests 2026-11-18). */
+.message-kind { display: inline-block; margin-left: .45rem; padding: 0 .45rem; border-radius: .6rem; font-size: .66rem; font-weight: 700; line-height: 1.3rem; letter-spacing: .03em; text-transform: uppercase; vertical-align: middle; }
+.message-kind-final { background: var(--accent-soft); color: var(--accent-text); }
+.message-kind-update { background: var(--surface-3); color: var(--muted); }
+.message-kind-stopped, .message-kind-unfinished { background: var(--warn-soft); color: var(--warn-text); }
+/* An update is muted and dashed: it is not the answer, more is coming. */
+.live-answer[data-message-kind=update], .assistant-message:has(> article[data-message-kind=update]) { border-style: dashed; border-color: var(--border-strong); background: var(--surface-2); box-shadow: none; }
+.live-answer[data-message-kind=update] .rich-text, article[data-message-kind=update] .rich-text { color: var(--muted); }
+.live-working { display: flex; align-items: center; gap: .45rem; margin-top: .35rem; font-size: .76rem; color: var(--muted); }
+.working-dots { display: inline-block; width: 1.4rem; height: .4rem; background: radial-gradient(circle, currentColor 45%, transparent 50%) 0 50% / .45rem .4rem repeat-x; animation: working-dots 1.2s steps(4) infinite; }
+@keyframes working-dots { from { width: 0; } to { width: 1.8rem; } }
+@media (prefers-reduced-motion: reduce) { .working-dots { animation: none; } }
+
+.copy-control { display: inline-flex; align-items: center; vertical-align: middle; }
+.copy-button { display: inline-flex; align-items: center; gap: .3rem; min-height: 1.9rem; min-width: 1.9rem; padding: 0 .45rem; border: 0; border-radius: .9rem; background: transparent; color: inherit; font-size: .72rem; line-height: 1; opacity: .7; cursor: pointer; }
+.copy-button:hover, .copy-button:focus-visible { opacity: 1; background: rgba(127,127,127,.18); }
+.copy-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.copy-button[data-copy-state=copied] { opacity: 1; color: var(--accent-text); }
+.copy-button[data-copy-state=failed] { opacity: 1; color: var(--danger-text); }
+.message-copy { margin-left: .2rem; }
+/* A code or quote block carries its own Copy button in its top corner. */
+.rt-code-block, .rt-quote-block { position: relative; }
+.rt-block-copy { position: absolute; top: .35rem; right: .3rem; }
+.rt-code-block .rt-block-copy .copy-button, .rt-quote-block .rt-block-copy .copy-button { background: var(--surface); border: 1px solid var(--border); opacity: .85; }
+.rt-code-block pre.rt-code { padding-right: 2.6rem; }
+@media (pointer: coarse) { .copy-button { min-height: 44px; min-width: 44px; } }

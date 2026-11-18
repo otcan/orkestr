@@ -326,6 +326,7 @@ pub mod send_intent;
 pub mod sidebar;
 
 pub mod upload_progress;
+pub mod workspace_files;
 
 pub mod deployment_times;
 pub mod desk_presentation;
