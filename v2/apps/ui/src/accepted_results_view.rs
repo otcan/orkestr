@@ -385,7 +385,7 @@ pub fn AcceptedReplies(
             // Every update is its own message above; while the run still
             // works, this line says more is coming.
             if let Some(state) = working {
-                div { key: "working", class: "chat-messages live-answer-row",
+                div { class: "chat-messages live-answer-row",
                     crate::progress_view::LiveBubble { text: None, state }
                 }
             }

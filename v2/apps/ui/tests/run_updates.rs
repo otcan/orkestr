@@ -44,13 +44,13 @@ fn every_update_is_its_own_message_in_event_order_and_the_answer_once() {
     // accepted reply at 7; a second input arrived at 6 while the run worked.
     let updates = [update(3, 1, false), update(4, 2, false), update(5, 3, true)];
     let replies = [reply(7, 3)];
-    let shown = shown(&updates, &replies, 1);
+    let visible = shown(&updates, &replies, 1);
     assert_eq!(
-        shown.iter().map(|u| u.sequence).collect::<Vec<_>>(),
+        visible.iter().map(|u| u.sequence).collect::<Vec<_>>(),
         [3, 4],
         "the final answer is not an update"
     );
-    let rows = ordered_with_updates(&[input(1), input(6)], &replies, &[], &shown).unwrap();
+    let rows = ordered_with_updates(&[input(1), input(6)], &replies, &[], &visible).unwrap();
     let kinds: Vec<String> = rows
         .iter()
         .map(|row| match row {
@@ -69,8 +69,8 @@ fn every_update_is_its_own_message_in_event_order_and_the_answer_once() {
 fn an_answer_accepted_after_the_list_was_read_is_still_shown_once() {
     // The list still says "not final", but the accepted reply names it.
     let updates = [update(3, 1, false), update(5, 3, false)];
-    let shown = shown(&updates, &[reply(7, 3)], 1);
-    assert_eq!(shown.iter().map(|u| u.sequence).collect::<Vec<_>>(), [3]);
+    let visible = shown(&updates, &[reply(7, 3)], 1);
+    assert_eq!(visible.iter().map(|u| u.sequence).collect::<Vec<_>>(), [3]);
     // While the run works, every update shows, its newest included.
     assert_eq!(shown(&updates, &[], 0).len(), 2);
     // Removed texts and updates older than the oldest message on screen do not show.
