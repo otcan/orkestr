@@ -67,7 +67,8 @@ class ManagedPackageTests(identity_tests.SplitPackageTests):
         try:
             self.assertEqual(manager.managed.limits['window_in_flight_max'],4)
             self.assertEqual(manager.managed.limits['window_requests_max'],500)
-            self.assertEqual(manager.managed.limits['window_requests_per_minute'],60)
+            self.assertEqual(manager.managed.limits['window_requests_per_minute'],120)
+            self.assertEqual(manager.managed.limits['window_request_burst'],48)
         finally:manager.close()
 
     def test_native_workers_gate_is_explicit_true_and_requires_managed_split(self):

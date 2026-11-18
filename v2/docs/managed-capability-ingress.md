@@ -149,13 +149,15 @@ retry finds its existing claim and is never refused by the window bounds.
 
 | Bound | Default | Refusal |
 | --- | --- | --- |
-| Claims of one window whose caller still waits (in flight) | 8 | 429 `managed_window_busy`, `retry_after_s` 2 |
-| New claims per window: token bucket | 60 a minute, burst 20 | 429 `managed_window_busy`, `retry_after_s` until the next token |
-| HTTP requests per original native: token bucket | 240 a minute, burst 60 | 429 `managed_native_busy`, `retry_after_s` |
+| Claims of one window whose caller still waits (in flight) | 16 | 429 `managed_window_busy`, `retry_after_s` 2 |
+| New claims per window: token bucket | 120 a minute, burst 48 (three waves of 16 parallel calls) | 429 `managed_window_busy`, `retry_after_s` until the next token |
+| HTTP requests per original native: token bucket | 240 a minute, burst 96 | 429 `managed_native_busy`, `retry_after_s` |
 | Claims one window keeps in the journal (backstop) | 2000 | 409 `managed_window_budget_exhausted` until the window closes |
 
-The in-flight bound keeps one window from taking the manager's 32 shared
-connection slots; Core serves a window's claims one at a time. The backstop
+The in-flight bound keeps one window from taking all of the manager's 32
+shared connection slots (two saturated windows can still fill them). Core
+serves one run's claims one at a time, so the last of 16 parallel calls waits
+for the others within its own 35-second deadline. The backstop
 counts kept claims, including those of earlier manager lives, because held
 windows' claims are never removed early. Before 2026-11-18 the only bounds were
 32 claims per window and 128 HTTP requests per native for their whole life, and

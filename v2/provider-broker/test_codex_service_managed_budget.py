@@ -125,7 +125,7 @@ class Fixture:
 class Configuration(unittest.TestCase):
     def test_defaults_and_closed_bounded_overrides(self):
         self.assertEqual(limits(), budget.DEFAULTS)
-        self.assertEqual(budget.DEFAULTS['window_in_flight_max'], 8)
+        self.assertEqual(budget.DEFAULTS['window_in_flight_max'], 16)
         self.assertEqual(budget.DEFAULTS['window_requests_max'], 2000)
         self.assertEqual(limits({'window_in_flight_max': 4})['window_in_flight_max'], 4)
         for bad in ([], {'window_in_flight_max': 0}, {'window_in_flight_max': 33},
@@ -147,17 +147,30 @@ class Configuration(unittest.TestCase):
 class AdmissionLimits(unittest.TestCase):
     def test_in_flight_bound_counts_waiting_calls_not_lifetime(self):
         admission = Admission(limits())
-        for n in range(8):
+        for n in range(16):
             admission.admit('w', n, 0, now=n)  # one at a time, below burst
         with self.assertRaises(Busy) as refused:
-            admission.admit('w', 8, 8, now=9)
+            admission.admit('w', 16, 16, now=17)
         self.assertEqual(refused.exception.refusal['reason'], 'managed_window_busy')
         self.assertEqual(refused.exception.refusal['limit'], 'window_in_flight_max')
         self.assertEqual(refused.exception.refusal['status'], 429)
         self.assertEqual(refused.exception.refusal['retry_after_s'], budget.IN_FLIGHT_RETRY_S)
         # Thirty-two completed calls (the old lifetime bound) are no reason to refuse.
         admission.admit('w', 0, 32, now=100)
-        admission.admit('w', 7, 33, now=101)
+        admission.admit('w', 15, 33, now=101)
+
+    def test_default_pace_admits_waves_of_sixteen_parallel_calls(self):
+        admission = Admission(limits())
+        claims = 0
+        for wave in range(3):  # Three waves of 16 short parallel calls, one a second.
+            for in_flight in range(16):
+                admission.admit('w', in_flight, claims, now=wave)
+                claims += 1
+        with self.assertRaises(Busy) as refused:  # A sustained flood still meets the pace.
+            for in_flight in range(16):
+                admission.admit('w', in_flight, claims, now=3)
+                claims += 1
+        self.assertEqual(refused.exception.refusal['limit'], 'window_requests_per_minute')
 
     def test_pace_refuses_with_retry_after_and_recovers(self):
         admission = Admission(limits({'window_requests_per_minute': 60, 'window_request_burst': 5}))
@@ -191,7 +204,7 @@ class AdmissionLimits(unittest.TestCase):
         admission = Admission(limits({'window_request_burst': 1}))
         for _ in range(3):
             with self.assertRaises(Busy):
-                admission.admit('w', 8, 0, now=0)
+                admission.admit('w', 16, 0, now=0)
         admission.admit('w', 0, 0, now=0)
 
     def test_backstop_is_lasting_and_checked_first(self):
@@ -262,9 +275,9 @@ class Answers(unittest.TestCase):
 
 
 class IngressRefusals(unittest.TestCase):
-    def test_ninth_concurrent_call_is_answered_busy_and_queues_nothing(self):
+    def test_call_beyond_the_in_flight_bound_is_answered_busy_and_queues_nothing(self):
         f = Fixture(self)
-        f.waiting(8)
+        f.waiting(16)
         before = f.claims()
         peer, client = f.http()
         f.ingress.tick()
@@ -279,28 +292,28 @@ class IngressRefusals(unittest.TestCase):
                          ('managed_window_busy', 429, budget.IN_FLIGHT_RETRY_S))
         self.assertNotIn(peer, f.ingress.peers)
         self.assertEqual(f.claims(), before)
-        self.assertEqual(f.ingress.journal.count(f.window), 8)
+        self.assertEqual(f.ingress.journal.count(f.window), 16)
         self.assertIn('reason=managed_window_busy limit=window_in_flight_max status=429', f.log.getvalue())
 
     def test_other_windows_and_exact_retries_are_not_blocked_by_a_busy_window(self):
         f = Fixture(self)
-        f.waiting(7)
+        f.waiting(15)
         request = {'version': 1, 'request_key': 'k', 'operation': 'worker_status', 'arguments': {}}
-        eighth = SimpleNamespace(source=source(f.window), proof=live_proof(), deadline=time.monotonic() + 60)
-        f.ingress._record(eighth, request)
-        f.ingress.peers.append(eighth)
-        self.assertEqual(f.ingress.in_flight(f.window), 8)
+        last = SimpleNamespace(source=source(f.window), proof=live_proof(), deadline=time.monotonic() + 60)
+        f.ingress._record(last, request)
+        f.ingress.peers.append(last)
+        self.assertEqual(f.ingress.in_flight(f.window), 16)
         with self.assertRaisesRegex(Refused, 'managed_window_busy'):
             f.ingress._record(SimpleNamespace(source=source(f.window)), {**request, 'request_key': 'new'})
         # An exact retry finds its own claim; it is never a new admission.
-        retry = SimpleNamespace(source=dict(eighth.source))
+        retry = SimpleNamespace(source=dict(last.source))
         f.ingress._record(retry, request)
-        self.assertEqual(retry.path, eighth.path)
+        self.assertEqual(retry.path, last.path)
         other = str(uuid.uuid4())
         f.ingress.manager.windows[other] = None
         caller = SimpleNamespace(source=source(other))
         f.ingress._record(caller, request)
-        self.assertEqual((f.ingress.journal.count(other), f.ingress.journal.count(f.window)), (1, 8))
+        self.assertEqual((f.ingress.journal.count(other), f.ingress.journal.count(f.window)), (1, 16))
 
     def test_call_after_a_completed_call_is_admitted_when_slots_free(self):
         f = Fixture(self)

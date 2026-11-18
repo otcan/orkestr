@@ -30,13 +30,16 @@ import time
 
 from .contract import Refused, require
 
+# A chat may run 16 short calls in parallel; the burst lets three such waves
+# pass back to back, and a native's HTTP burst stays above the claim burst so
+# that the window's limit, not the transport's, is the one a chat meets.
 DEFAULTS = {
-    'window_in_flight_max': 8,
-    'window_requests_per_minute': 60,
-    'window_request_burst': 20,
+    'window_in_flight_max': 16,
+    'window_requests_per_minute': 120,
+    'window_request_burst': 48,
     'window_requests_max': 2000,
     'native_http_requests_per_minute': 240,
-    'native_http_request_burst': 60,
+    'native_http_request_burst': 96,
 }
 # Inclusive operator bounds: a deployment may tune a limit, never remove it.
 RANGES = {
