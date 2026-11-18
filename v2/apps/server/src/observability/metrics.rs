@@ -1,6 +1,8 @@
 //! In-process request metrics: cumulative counters and latency histograms
 //! per route template (Prometheus), plus recent samples for exact windowed
-//! p50/p95/p99 and error rates (JSON, used by the owner's health check).
+//! p50/p95/p99, error rates, response sizes and the busiest conversations
+//! (JSON, used by the owner's health check). Prometheus labels stay route
+//! templates only; conversation ids appear in the JSON summary alone.
 use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, VecDeque},
@@ -8,6 +10,11 @@ use std::{
     sync::Mutex,
     time::{Duration, Instant},
 };
+use uuid::Uuid;
+
+#[path = "metrics_breakdown.rs"]
+mod breakdown;
+use breakdown::{conversations, sizes};
 
 /// Histogram upper bounds in milliseconds (`+Inf` is implicit).
 const BUCKETS_MS: [f64; 14] = [
@@ -19,11 +26,29 @@ const RECENT_AGE: Duration = Duration::from_secs(3600);
 /// Route templates are bounded, but never let a bug create unbounded series.
 const SERIES_MAX: usize = 512;
 
+/// What one request returned beyond its status and time.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Detail {
+    /// Response body bytes, when the body size was known.
+    pub bytes: Option<u64>,
+    /// Rows the handler reported returning.
+    pub rows: Option<u64>,
+    /// The conversation the request was about.
+    pub conversation: Option<Uuid>,
+}
+
 #[derive(Clone, Copy)]
 struct Sample {
     at: Instant,
     micros: u64,
     status: u16,
+    bytes: Option<u32>,
+    rows: Option<u32>,
+    conversation: Option<Uuid>,
+}
+
+fn saturating(value: Option<u64>) -> Option<u32> {
+    value.map(|v| u32::try_from(v).unwrap_or(u32::MAX))
 }
 
 #[derive(Default)]
@@ -38,7 +63,7 @@ struct Series {
 }
 
 impl Series {
-    fn record(&mut self, status: u16, elapsed: Duration, now: Instant) {
+    fn record(&mut self, status: u16, elapsed: Duration, now: Instant, detail: Detail) {
         self.count += 1;
         self.sum += elapsed;
         let ms = elapsed.as_secs_f64() * 1000.0;
@@ -62,7 +87,18 @@ impl Series {
             at: now,
             micros: u64::try_from(elapsed.as_micros()).unwrap_or(u64::MAX),
             status,
+            bytes: saturating(detail.bytes),
+            rows: saturating(detail.rows),
+            conversation: detail.conversation,
         });
+    }
+
+    /// Samples of the last `window`, newest first.
+    fn in_window(&self, window: Duration, now: Instant) -> impl Iterator<Item = &Sample> {
+        self.recent
+            .iter()
+            .rev()
+            .take_while(move |s| now.duration_since(s.at) <= window)
     }
 
     fn window(&self, window: Duration, now: Instant) -> Option<Window> {
@@ -138,6 +174,7 @@ fn record_into(
     status: u16,
     elapsed: Duration,
     streaming: bool,
+    detail: Detail,
 ) {
     let Ok(mut map) = map.lock() else { return };
     let now = Instant::now();
@@ -147,7 +184,7 @@ fn record_into(
     }
     let series = map.entry(key).or_default();
     series.streaming |= streaming;
-    series.record(status, elapsed, now);
+    series.record(status, elapsed, now, detail);
 }
 
 impl Metrics {
@@ -159,10 +196,36 @@ impl Metrics {
         elapsed: Duration,
         streaming: bool,
     ) {
-        record_into(&self.http, (method, route), status, elapsed, streaming);
+        self.record_request(method, route, status, elapsed, streaming, Detail::default());
+    }
+    /// One request with its size, rows and conversation.
+    pub fn record_request(
+        &self,
+        method: &str,
+        route: &str,
+        status: u16,
+        elapsed: Duration,
+        streaming: bool,
+        detail: Detail,
+    ) {
+        record_into(
+            &self.http,
+            (method, route),
+            status,
+            elapsed,
+            streaming,
+            detail,
+        );
     }
     pub fn record_upstream(&self, target: &str, route: &str, status: u16, elapsed: Duration) {
-        record_into(&self.upstream, (target, route), status, elapsed, false);
+        record_into(
+            &self.upstream,
+            (target, route),
+            status,
+            elapsed,
+            false,
+            Detail::default(),
+        );
     }
 
     /// Windowed latency and error summary of one route, if it had requests.
@@ -212,12 +275,15 @@ impl Metrics {
                 let Some(w) = series.window(window, now) else {
                     continue;
                 };
+                let sizes = sizes(series.in_window(window, now));
                 rows.push(json!({
                     first: a, second: b,
                     "count": w.count, "errors": w.errors,
                     "error_rate": rate(w.errors, w.count),
                     "p50_ms": round(w.p50), "p95_ms": round(w.p95), "p99_ms": round(w.p99),
                     "max_ms": round(w.max),
+                    "bytes_p50": sizes.bytes_p50, "bytes_max": sizes.bytes_max,
+                    "bytes_total": sizes.bytes_total, "rows_total": sizes.rows_total,
                     "window_complete": w.complete,
                     "streaming": series.streaming,
                     "total_count": series.count,
@@ -236,10 +302,13 @@ impl Metrics {
             });
             (rows, overall)
         };
-        let (routes, overall) = self
+        let (routes, overall, conversations) = self
             .http
             .lock()
-            .map(|m| describe(&m, "method", "route"))
+            .map(|m| {
+                let (routes, overall) = describe(&m, "method", "route");
+                (routes, overall, conversations(&m, window, now))
+            })
             .unwrap_or_default();
         let (upstream, _) = self
             .upstream
@@ -254,6 +323,7 @@ impl Metrics {
             "overall": overall,
             "routes": routes,
             "upstream": upstream,
+            "conversations": conversations,
         })
     }
 

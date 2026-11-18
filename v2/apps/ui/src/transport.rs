@@ -148,6 +148,23 @@ pub async fn snapshot(
     .await
 }
 
+/// Opening a chat: only its newest page, which is all the chat keeps, not
+/// every page from the start. If that read is refused or cannot be verified
+/// (an older server), the full forward read runs as before.
+pub async fn opening(id: &str, csrf: &str) -> Result<Projection, Failure> {
+    let path = format!("/api/v2/conversations/{id}?before={}&limit=100", i64::MAX);
+    match request::<ConversationSnapshot>("GET", &path, Value::Null, csrf, "").await {
+        Ok(page) => {
+            if let Ok(projection) = orkestr_v2_ui::newest_page(id, page) {
+                return Ok(projection);
+            }
+        }
+        Err(error) if error.status == 401 => return Err(error),
+        Err(_) => {}
+    }
+    snapshot(id, csrf, 0, Projection::default(), 0).await
+}
+
 use orkestr_v2_ui::StreamItem;
 
 pub async fn event(id: &str, cursor: i64) -> Result<StreamItem, Failure> {

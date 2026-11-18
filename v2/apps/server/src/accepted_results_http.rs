@@ -8,6 +8,9 @@ use orkestr_v2_application::runtime::RuntimeStoreError;
 pub(crate) struct Page {
     after_sequence: Option<i64>,
     limit: Option<u16>,
+    /// The newest page below this acceptance sequence instead of a forward
+    /// page (`9223372036854775807`: the newest replies, for opening a chat).
+    before_sequence: Option<i64>,
 }
 
 pub(crate) async fn read(
@@ -29,26 +32,41 @@ pub(crate) async fn read(
     })?);
     let after = page.after_sequence.unwrap_or(0);
     let limit = page.limit.unwrap_or(20);
-    if conversation.0.is_nil() || after < 0 || !(1..=50).contains(&limit) {
+    let before = page.before_sequence;
+    if conversation.0.is_nil()
+        || after < 0
+        || !(1..=50).contains(&limit)
+        || before.is_some_and(|before| before < 1 || page.after_sequence.is_some())
+    {
         return Err(invalid_query());
     }
     let credential = browser::credential(&headers)?;
-    let result = state
-        .store
-        .accepted_results_authenticated(&credential, &conversation, after, limit)
-        .await
-        .map_err(|error| match error {
-            RuntimeStoreError::Unauthorized => unauthorized(),
-            RuntimeStoreError::NotFound => {
-                Error(StatusCode::NOT_FOUND, "not_found", "Conversation not found")
-            }
-            RuntimeStoreError::InvalidInput => invalid_query(),
-            _ => Error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "history_unavailable",
-                "Accepted results unavailable",
-            ),
-        })?;
+    let read = match before {
+        Some(before) => {
+            state
+                .store
+                .accepted_results_before_authenticated(&credential, &conversation, before, limit)
+                .await
+        }
+        None => {
+            state
+                .store
+                .accepted_results_authenticated(&credential, &conversation, after, limit)
+                .await
+        }
+    };
+    let result = read.map_err(|error| match error {
+        RuntimeStoreError::Unauthorized => unauthorized(),
+        RuntimeStoreError::NotFound => {
+            Error(StatusCode::NOT_FOUND, "not_found", "Conversation not found")
+        }
+        RuntimeStoreError::InvalidInput => invalid_query(),
+        _ => Error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "history_unavailable",
+            "Accepted results unavailable",
+        ),
+    })?;
     if result.conversation_id != conversation
         || !result.is_valid()
         || result.results.len() > usize::from(limit)
@@ -56,6 +74,13 @@ pub(crate) async fn read(
             .results
             .first()
             .is_some_and(|row| row.acceptance_sequence <= after)
+        || before.is_some_and(|before| {
+            result.next_after_sequence.is_some()
+                || result
+                    .results
+                    .last()
+                    .is_some_and(|row| row.acceptance_sequence >= before)
+        })
     {
         return Err(Error(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -63,6 +88,7 @@ pub(crate) async fn read(
             "Accepted results unavailable",
         ));
     }
+    crate::observability::rows(result.results.len());
     Ok(Json(result).into_response())
 }
 

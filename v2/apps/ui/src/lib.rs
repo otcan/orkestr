@@ -24,7 +24,7 @@ pub mod v1_manage;
 pub mod v1_workers;
 pub mod whatsapp_chat;
 pub mod workers;
-pub use reconcile::reconcile;
+pub use reconcile::{newest_page, reconcile};
 
 pub const WINDOW: usize = 100;
 

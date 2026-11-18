@@ -4,6 +4,9 @@ use crate::conversation_resources_http::tests::case;
 use std::collections::BTreeMap;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+#[path = "request_detail_tests.rs"]
+mod request_detail;
+
 pub(crate) struct Raw {
     pub status: u16,
     pub headers: BTreeMap<String, String>,
@@ -184,17 +187,45 @@ fn log_lines_hold_templates_and_timings_only() {
         streaming: false,
         upstream: &calls,
         spans: &spans,
+        conversation: Some("00000000-0000-4000-8000-0000000000aa"),
+        bytes: Some(36_031),
+        rows: Some(100),
     });
     assert_eq!(line["msg"], "slow_request");
+    assert_eq!(line["conv"], "00000000-0000-4000-8000-0000000000aa");
+    assert_eq!(line["bytes"], 36_031);
+    assert_eq!(line["rows"], 100);
     assert_eq!(line["level"], "warn");
     assert_eq!(line["route"], "/api/v2/v1-threads/{thread}/messages");
     assert_eq!(line["upstream"][0]["ms"], 321.0);
     assert_eq!(line["upstream_ms"], 321.0);
     assert_eq!(line["spans"]["db_list"], 4.2);
-    let timing = log::server_timing(Duration::from_millis(612), &calls, &spans);
+    let timing = log::server_timing(Duration::from_millis(612), &calls, &spans, Some(100));
     assert_eq!(
         timing,
-        "app;dur=612, v1;dur=321;desc=\"1 call(s)\", db_list;dur=4.2"
+        "app;dur=612, v1;dur=321;desc=\"1 call(s)\", db_list;dur=4.2, rows;desc=\"100\""
+    );
+    // A request without a conversation, size or rows names none of them.
+    let plain = log::line(&log::RequestLine {
+        id: "0123456789abcdef",
+        method: "GET",
+        route: "/api/v2/sidebar",
+        status: 200,
+        elapsed: Duration::from_millis(3),
+        slow: false,
+        streaming: false,
+        upstream: &[],
+        spans: &[],
+        conversation: None,
+        bytes: None,
+        rows: None,
+    });
+    for key in ["conv", "bytes", "rows"] {
+        assert!(plain.get(key).is_none(), "{key}");
+    }
+    assert_eq!(
+        log::server_timing(Duration::from_millis(3), &[], &[], None),
+        "app;dur=3"
     );
 }
 

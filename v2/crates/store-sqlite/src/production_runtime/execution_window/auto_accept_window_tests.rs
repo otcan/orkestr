@@ -108,6 +108,45 @@ async fn worker_fast_and_deep_are_accepted_in_order_without_a_browser_and_audite
             .unwrap();
     assert_eq!(history.results.len(), 3);
     assert!(history.results.iter().all(|r| r.auto_accepted));
+    // Newest first: the newest page, then the page below it, both oldest
+    // first, together the forward history without gaps.
+    let newest =
+        w.f.store
+            .accepted_results_before_authenticated(
+                &w.browser_credential,
+                &w.f.conversation,
+                i64::MAX,
+                2,
+            )
+            .await
+            .unwrap();
+    assert!(newest.is_valid());
+    assert_eq!(newest.results, history.results[1..].to_vec());
+    assert_eq!(newest.next_after_sequence, None);
+    let older =
+        w.f.store
+            .accepted_results_before_authenticated(
+                &w.browser_credential,
+                &w.f.conversation,
+                newest.results[0].acceptance_sequence,
+                2,
+            )
+            .await
+            .unwrap();
+    assert_eq!(older.results, history.results[..1].to_vec());
+    for (before, limit) in [(0, 2), (1, 0), (1, 51)] {
+        assert!(w
+            .f
+            .store
+            .accepted_results_before_authenticated(
+                &w.browser_credential,
+                &w.f.conversation,
+                before,
+                limit,
+            )
+            .await
+            .is_err());
+    }
     // Nothing left: a later pass is a no-op.
     assert!(w
         .bound

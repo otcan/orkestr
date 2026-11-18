@@ -112,6 +112,7 @@ pub(crate) async fn read_many(
             payloads.push(payload);
         }
     }
+    crate::observability::rows(payloads.len());
     Ok(Json(ProviderPayloads {
         conversation_id: conversation,
         payloads,

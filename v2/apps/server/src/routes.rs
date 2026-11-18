@@ -16,20 +16,29 @@ pub struct Page {
     after: Option<i64>,
     limit: Option<u32>,
 }
+/// A conversation snapshot read: forward from `after`, or the newest page
+/// below `before` (a chat opens with `before=9223372036854775807`).
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SnapshotPage {
+    after: Option<i64>,
+    limit: Option<u32>,
+    before: Option<i64>,
+}
+fn invalid_page() -> Error {
+    Error(
+        StatusCode::BAD_REQUEST,
+        "invalid_cursor",
+        "Invalid pagination",
+    )
+}
 fn page(q: Result<Query<Page>, QueryRejection>) -> Result<Page, Error> {
-    let Query(p) = q.map_err(|_| {
-        Error(
-            StatusCode::BAD_REQUEST,
-            "invalid_cursor",
-            "Invalid pagination",
-        )
-    })?;
+    let Query(p) = q.map_err(|_| invalid_page())?;
+    checked(p)
+}
+fn checked(p: Page) -> Result<Page, Error> {
     if p.after.is_some_and(|n| n < 0) || p.limit.is_some_and(|n| n == 0 || n > 100) {
-        return Err(Error(
-            StatusCode::BAD_REQUEST,
-            "invalid_cursor",
-            "Invalid pagination",
-        ));
+        return Err(invalid_page());
     }
     Ok(p)
 }
@@ -92,20 +101,32 @@ pub async fn snapshot(
     State(s): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
-    q: Result<Query<Page>, QueryRejection>,
+    q: Result<Query<SnapshotPage>, QueryRejection>,
 ) -> Result<impl IntoResponse, Error> {
     let owner = owner(&s, &headers).await?;
-    let p = page(q)?;
-    Ok(Json(
-        s.store
-            .snapshot(
-                &owner,
-                &conversation(id)?,
-                p.after.unwrap_or(0),
-                p.limit.unwrap_or(50),
-            )
-            .await?,
-    ))
+    let Query(q) = q.map_err(|_| invalid_page())?;
+    let p = checked(Page {
+        after: q.after,
+        limit: q.limit,
+    })?;
+    let conversation = conversation(id)?;
+    let limit = p.limit.unwrap_or(50);
+    let snapshot = match (q.before, p.after) {
+        (None, after) => {
+            s.store
+                .snapshot(&owner, &conversation, after.unwrap_or(0), limit)
+                .await?
+        }
+        // Only the newest page: never the history before it.
+        (Some(before), None) if before >= 1 => {
+            s.store
+                .snapshot_before(&owner, &conversation, before, limit)
+                .await?
+        }
+        _ => return Err(invalid_page()),
+    };
+    crate::observability::rows(snapshot.messages.len());
+    Ok(Json(snapshot))
 }
 pub async fn message(
     State(s): State<AppState>,

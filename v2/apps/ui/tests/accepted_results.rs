@@ -68,3 +68,45 @@ fn live_refresh_reads_after_the_newest_reply_shown() {
     assert_eq!(refresh_cursor(None, true, 0), 0);
     assert_eq!(refresh_cursor(Some(372), false, 20), 20);
 }
+
+/// `count` ordered rows ending at acceptance sequence `newest`.
+fn newest_page(count: i64, newest: i64) -> AcceptedResults {
+    let mut p = page();
+    let row = p.results[0].clone();
+    p.results = (0..count)
+        .map(|index| {
+            let mut row = row.clone();
+            row.acceptance_sequence = newest - count + 1 + index;
+            row
+        })
+        .collect();
+    p.next_after_sequence = None;
+    p
+}
+
+#[test]
+fn a_chat_opens_with_newest_pages_and_refuses_a_forward_answer() {
+    use orkestr_v2_ui::accepted_results::{older_cursor, valid_newest_page, NEWEST_PAGE};
+    let full = newest_page(NEWEST_PAGE as i64, 900);
+    assert!(valid_newest_page(&full, C, i64::MAX));
+    assert!(valid_newest_page(&full, C, 901));
+    // A full page continues below its oldest row; a short page ends it.
+    assert_eq!(older_cursor(&full), Some(851));
+    let short = newest_page(3, 40);
+    assert!(valid_newest_page(&short, C, 851));
+    assert_eq!(older_cursor(&short), None);
+    assert_eq!(older_cursor(&newest_page(0, 1)), None);
+    // Rows at or above the cursor, a forward cursor (a server that ignored
+    // the newest-first request), another chat, too many rows or a bad cursor.
+    assert!(!valid_newest_page(&full, C, 900));
+    let mut forward = full.clone();
+    forward.next_after_sequence = Some(900);
+    assert!(!valid_newest_page(&forward, C, i64::MAX));
+    assert!(!valid_newest_page(
+        &full,
+        "00000000-0000-4000-8000-000000000009",
+        i64::MAX
+    ));
+    assert!(!valid_newest_page(&newest_page(51, 900), C, i64::MAX));
+    assert!(!valid_newest_page(&short, C, 0));
+}

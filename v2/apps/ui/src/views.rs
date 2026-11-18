@@ -161,7 +161,11 @@ pub fn Conversation(
                     } else {
                         (cursor, projection.peek().clone())
                     };
-                    let result = transport::snapshot(&id, &csrf, after, base, after).await;
+                    let result = if resync {
+                        transport::opening(&id, &csrf).await
+                    } else {
+                        transport::snapshot(&id, &csrf, after, base, after).await
+                    };
                     if !session_scope.read().is_current(generation) {
                         projection.set(Projection::default());
                         return;

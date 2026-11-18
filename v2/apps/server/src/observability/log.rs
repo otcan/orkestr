@@ -1,5 +1,7 @@
 //! One JSON line per request on stderr (journald). Only ids, route
-//! templates, statuses and durations: never bodies, queries or credentials.
+//! templates, statuses, durations and sizes: never bodies, queries or
+//! credentials. The one path identifier kept is the conversation id, so a
+//! slow chat can be found.
 use super::context::UpstreamCall;
 use serde_json::{json, Value};
 use std::{io::Write, time::Duration};
@@ -14,6 +16,12 @@ pub(super) struct RequestLine<'a> {
     pub streaming: bool,
     pub upstream: &'a [UpstreamCall],
     pub spans: &'a [(&'static str, Duration)],
+    /// The conversation the request is about (from its path), if any.
+    pub conversation: Option<&'a str>,
+    /// Response body bytes, when the body size was known.
+    pub bytes: Option<u64>,
+    /// Rows the handler reported returning.
+    pub rows: Option<u64>,
 }
 
 fn ms(duration: Duration) -> f64 {
@@ -40,6 +48,15 @@ pub(super) fn line(entry: &RequestLine<'_>) -> Value {
     });
     if entry.streaming {
         value["stream"] = json!(true);
+    }
+    if let Some(conversation) = entry.conversation {
+        value["conv"] = json!(conversation);
+    }
+    if let Some(bytes) = entry.bytes {
+        value["bytes"] = json!(bytes);
+    }
+    if let Some(rows) = entry.rows {
+        value["rows"] = json!(rows);
     }
     if !entry.upstream.is_empty() {
         value["upstream"] = entry
@@ -103,11 +120,13 @@ pub(super) fn request(entry: &RequestLine<'_>) {
     }
 }
 
-/// `Server-Timing`: total, upstream (summed per target) and named spans.
+/// `Server-Timing`: total, upstream (summed per target), named spans and the
+/// rows returned (`rows;desc="N"`, shown beside the timings in devtools).
 pub(super) fn server_timing(
     elapsed: Duration,
     upstream: &[UpstreamCall],
     spans: &[(&'static str, Duration)],
+    rows: Option<u64>,
 ) -> String {
     let mut parts = vec![format!("app;dur={}", ms(elapsed))];
     let mut targets: Vec<(&str, Duration, usize)> = Vec::new();
@@ -128,6 +147,9 @@ pub(super) fn server_timing(
     }
     for (name, total) in spans {
         parts.push(format!("{name};dur={}", ms(*total)));
+    }
+    if let Some(rows) = rows {
+        parts.push(format!("rows;desc=\"{rows}\""));
     }
     parts.join(", ")
 }
