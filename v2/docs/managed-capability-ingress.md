@@ -163,6 +163,15 @@ windows' claims are never removed early. Before 2026-11-18 the only bounds were
 32 claims per window and 128 HTTP requests per native for their whole life, and
 a refused caller's connection was closed without an answer.
 
+Core keeps its own backstop on the managed operations of one window
+(`MANAGED_WINDOW_CLAIMS_MAX`, 2000, equal to the default above). Core counts
+only claims that reached it, so with equal values the manager answers first.
+Core refuses only a claim the manager has already let through, and that refusal
+still ends the window and its running Deep turn. A plan that raises
+`window_requests_max` above 2000 must raise Core's backstop too. Until
+2026-11-18 Core still stopped at 32: the 33rd host call of a busy window ended
+the window, the Deep turn, and the results it was waiting for.
+
 A refused call creates no claim and runs nothing. The caller is answered: a
 tool call receives an MCP tool error (`isError`, HTTP 200, because MCP clients
 treat a non-2xx status as a transport failure) whose structured content is

@@ -343,7 +343,9 @@ async fn submitted_receipt_is_not_approval_and_unknown_claims_consume_window_bud
         .await
         .unwrap();
     assert_eq!(state, "submitted");
-    for _ in 1..32 {
+    // The old fixed bound was 32 claims per window: the 33rd call ended the
+    // window. The manager now owns the working limits; Core admits on.
+    for _ in 1..33 {
         assert!(matches!(
             bound
                 .consume_managed_operation(&token, &parent, Uuid::new_v4(), &source, &request())
@@ -352,10 +354,45 @@ async fn submitted_receipt_is_not_approval_and_unknown_claims_consume_window_bud
             ManagedOperationConsumption::Operation(_)
         ));
     }
+    const COUNT: &str = "SELECT count(*) FROM managed_operations WHERE window_id=?";
+    let window = source.window_id.to_string();
+    let kept: i64 = sqlx::query_scalar(COUNT)
+        .bind(window.as_str())
+        .fetch_one(&f.store.pool)
+        .await
+        .unwrap();
+    assert_eq!(kept, 33);
+    // Fill the window up to one below the backstop with kept unknown claims
+    // (copies of the first claim), which count against it like any other.
+    sqlx::query("WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<?) INSERT INTO managed_operations(id,owner_id,conversation_id,window_id,run_id,session_id,context_id,incarnation_id,binding_generation,lease_generation,dispatch_fence,evidence_sha256,operation,request_json,expires_at_ms,state,created_at_ms) SELECT 'backstop-fill-'||n.i,o.owner_id,o.conversation_id,o.window_id,o.run_id,o.session_id,o.context_id,o.incarnation_id,o.binding_generation,o.lease_generation,o.dispatch_fence,o.evidence_sha256,o.operation,o.request_json,o.expires_at_ms,'delivery_unknown',o.created_at_ms FROM n,managed_operations o WHERE o.id=?")
+        .bind(MANAGED_WINDOW_CLAIMS_MAX - 34)
+        .bind(id.to_string())
+        .execute(&f.store.pool)
+        .await
+        .unwrap();
+    let kept: i64 = sqlx::query_scalar(COUNT)
+        .bind(window.as_str())
+        .fetch_one(&f.store.pool)
+        .await
+        .unwrap();
+    assert_eq!(kept, MANAGED_WINDOW_CLAIMS_MAX - 1);
+    assert!(matches!(
+        bound
+            .consume_managed_operation(&token, &parent, Uuid::new_v4(), &source, &request())
+            .await
+            .unwrap(),
+        ManagedOperationConsumption::Operation(_)
+    ));
     assert!(bound
         .consume_managed_operation(&token, &parent, Uuid::new_v4(), &source, &request())
         .await
         .is_err());
+    let kept: i64 = sqlx::query_scalar(COUNT)
+        .bind(window.as_str())
+        .fetch_one(&f.store.pool)
+        .await
+        .unwrap();
+    assert_eq!(kept, MANAGED_WINDOW_CLAIMS_MAX);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

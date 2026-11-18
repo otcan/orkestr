@@ -6,6 +6,19 @@ use serde_json::{json, Value};
 mod native_workers;
 pub use native_workers::{NativeWorkerAvailability, NativeWorkerCall, NativeWorkerObservation};
 
+/// Backstop on the managed operations one execution window may keep. It
+/// equals the Root manager's default `window_requests_max` backstop
+/// (`provider-broker/codex_service/managed_budget.py`, `DEFAULTS`), which
+/// refuses an over-budget call with a tool-level answer
+/// (`managed_window_budget_exhausted`) before it reaches Core. The manager
+/// also bounds calls in flight and paces new ones, so this is not a working
+/// limit. Core used to stop at 32 claims per window: once the manager allowed
+/// more, the 33rd host call of a busy window was refused here, which ended
+/// the window and the running Deep turn together with its in-flight results.
+/// Keep it at least as large as any `managed_limits.window_requests_max` a
+/// deployment selects.
+pub(crate) const MANAGED_WINDOW_CLAIMS_MAX: i64 = 2000;
+
 #[derive(Clone)]
 pub struct ManagedOperationSetup {
     binding: Binding,
@@ -313,7 +326,7 @@ impl Store {
                 .fetch_one(&mut *tx)
                 .await
                 .map_err(db)?;
-        if count >= 32 {
+        if count >= MANAGED_WINDOW_CLAIMS_MAX {
             return Err(RuntimeStoreError::Fenced);
         }
         let now = now(&mut tx).await?;
