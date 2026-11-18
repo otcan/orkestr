@@ -85,8 +85,10 @@ def configuration(path):
             value['v2_url'] == f'http://127.0.0.1:{uri.port}', 'controller_loopback_required')
     require(re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,63}', value['desktop_slug']) and
             re.fullmatch(r'[a-zA-Z0-9_.@-]+\.service', value['framebuffer_unit']), 'controller_target_invalid')
-    for key in ('conversation_id', 'v1_thread_id'):
-        uuid.UUID(value[key])
+    uuid.UUID(value['conversation_id'])
+    require(isinstance(value['v1_thread_id'], str) and
+            re.fullmatch(r'[A-Za-z0-9._:-]{1,200}', value['v1_thread_id']),
+            'controller_thread_id_invalid')
     require(all(type(value[k]) is int and value[k] > 0 for k in ('output_uid', 'output_gid', 'broker_uid')),
             'controller_output_identity')
     require(type(value['framebuffer_port']) is int and 1 <= value['framebuffer_port'] <= 65535,
