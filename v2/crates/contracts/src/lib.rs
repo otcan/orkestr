@@ -1,6 +1,8 @@
 //! Version 0 HTTP contracts. No storage or provider dependencies.
 mod accepted_results;
 pub use accepted_results::*;
+mod run_updates;
+pub use run_updates::*;
 mod message_revisions;
 pub use message_revisions::*;
 mod source_receipts;

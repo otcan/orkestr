@@ -3,7 +3,7 @@
 //! event they were written after, ordered by creation time among themselves.
 use orkestr_v2_contracts::{
     AcceptedResult, ConversationPost, Message, MessageRevisionKind, MessageRevisionNotice,
-    MessageRevisionSource, ReplyTo,
+    MessageRevisionSource, ReplyTo, RunUpdate,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -252,6 +252,9 @@ pub enum Row {
     Input(Input),
     Reply(AcceptedResult),
     Post(ConversationPost),
+    /// An interim update of a run, shown as its own message at its event
+    /// (owner decision 2026-11-18: every update stays visible, like WhatsApp).
+    Update(RunUpdate),
 }
 impl Row {
     /// The event sequence: a post reports the event it follows.
@@ -260,6 +263,7 @@ impl Row {
             Self::Input(row) => row.sequence,
             Self::Reply(row) => row.acceptance_sequence,
             Self::Post(row) => row.after_sequence,
+            Self::Update(row) => row.sequence,
         }
     }
     /// Events first at their sequence, then posts after it by creation time.
@@ -281,20 +285,25 @@ impl Row {
     pub fn is_replyable(&self) -> bool {
         match self {
             Self::Input(row) => row.revisions.notice.is_none() && !row.revisions.deleted,
-            Self::Reply(_) => true,
+            Self::Reply(_) | Self::Update(_) => true,
             Self::Post(_) => false,
         }
     }
     /// Whether a suppressed reply hides this row: only the reply itself, never
     /// a post that follows it and so reports the same event sequence.
     pub fn is_silenced(&self, silent: &BTreeSet<i64>) -> bool {
-        matches!(self, Self::Reply(row) if silent.contains(&row.acceptance_sequence))
+        match self {
+            Self::Reply(row) => silent.contains(&row.acceptance_sequence),
+            Self::Update(row) => silent.contains(&row.sequence),
+            _ => false,
+        }
     }
     pub fn key(&self) -> String {
         match self {
             Self::Input(row) => format!("input-{}", row.id),
             Self::Reply(row) => format!("reply-{}", row.acceptance_event_id),
             Self::Post(row) => format!("post-{}", row.id),
+            Self::Update(row) => format!("update-{}", row.payload_id),
         }
     }
 }
@@ -303,11 +312,23 @@ pub fn ordered(
     replies: &[AcceptedResult],
     posts: &[ConversationPost],
 ) -> Result<Vec<Row>, &'static str> {
+    ordered_with_updates(inputs, replies, posts, &[])
+}
+
+/// [`ordered`], with each run update at its own event: updates come from the
+/// same journal, so their sequences never collide with inputs or replies.
+pub fn ordered_with_updates(
+    inputs: &[Input],
+    replies: &[AcceptedResult],
+    posts: &[ConversationPost],
+    updates: &[RunUpdate],
+) -> Result<Vec<Row>, &'static str> {
     let mut rows: Vec<_> = inputs
         .iter()
         .cloned()
         .map(Row::Input)
         .chain(replies.iter().cloned().map(Row::Reply))
+        .chain(updates.iter().cloned().map(Row::Update))
         .collect();
     rows.sort_by_key(Row::sequence);
     if rows.iter().any(|row| row.sequence() <= 0)

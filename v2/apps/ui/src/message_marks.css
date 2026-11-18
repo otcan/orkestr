@@ -25,3 +25,6 @@
 .rt-code-block .rt-block-copy .copy-button, .rt-quote-block .rt-block-copy .copy-button { background: var(--surface); border: 1px solid var(--border); opacity: .85; }
 .rt-code-block pre.rt-code { padding-right: 2.6rem; }
 @media (pointer: coarse) { .copy-button { min-height: 44px; min-width: 44px; } }
+/* The line under the last update while the run still works: not a message. */
+.live-answer[data-message-kind=""] { background: transparent; border-style: dashed; box-shadow: none; padding-block: .35rem; }
+.live-answer[data-message-kind=""] .live-working { margin-top: 0; }

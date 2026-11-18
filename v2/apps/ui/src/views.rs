@@ -318,6 +318,13 @@ pub fn Conversation(
     };
     let now = use_signal(|| 0_u64);
     let posts = crate::conversation_posts_view::use_conversation_posts(id.clone(), session_scope);
+    // Every interim update of the chat's runs, each its own message.
+    let updates = crate::run_updates_view::use_run_updates(
+        id.clone(),
+        accepted_revision,
+        session_scope,
+        onexpired,
+    );
     let messages = projection
         .read()
         .messages
@@ -339,7 +346,7 @@ pub fn Conversation(
             div { class: "conversation-scroll", tabindex: "0", "aria-label": "Conversation transcript",
                 crate::archived_history_view::ArchivedHistory { key: "archived-{id}-{generation}", id: id.clone(), session_scope, onexpired }
                 crate::intelligence_view::IntelligencePanel { key:"intelligence-{id}-{generation}", id:id.clone(), csrf:csrf.clone(), session_scope, execution, onexpired }
-                crate::accepted_results_view::AcceptedReplies { key: "accepted-{id}-{generation}", id: id.clone(), session_scope, messages, posts: posts(), update: Some(accepted_revision), inline: true, files: Some(chat_files), onexpired,
+                crate::accepted_results_view::AcceptedReplies { key: "accepted-{id}-{generation}", id: id.clone(), session_scope, messages, posts: posts(), updates: updates.read().values().cloned().collect::<Vec<_>>(), update: Some(accepted_revision), inline: true, files: Some(chat_files), onexpired,
                     live: Some(crate::accepted_results_view::LiveContext { status: live_status.clone(), csrf: csrf.clone(), execution }) }
                 if let Some(notice) = failure {
                     article { class: "assistant-proposal run-failed", role: "alert",

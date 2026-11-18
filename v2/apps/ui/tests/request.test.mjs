@@ -257,6 +257,17 @@ test('the chat folder is read with GET only, one encoded path value',async()=>{
     }
 });
 
+test('run updates are read with GET only, one fixed page shape',async()=>{
+    const conversation='/api/v2/conversations/00000000-0000-4000-8000-00000000000a';
+    for(const path of [`${conversation}/updates?after_sequence=0&limit=100`,`${conversation}/updates?before_sequence=9223372036854775807&limit=100`]) {
+        await execute({recv:async()=>({...base,method:'GET',path,body:null})},async(seen)=>{assert.equal(seen,path);return new Response('{}');});
+    }
+    for(const [method,bad] of [['POST',`${conversation}/updates?after_sequence=0&limit=100`],['GET',`${conversation}/updates`],['GET',`${conversation}/updates?after_sequence=0&limit=50`],
+        ['GET',`${conversation}/updates?after_sequence=-1&limit=100`],['GET',`${conversation}/updates?after_sequence=0&limit=100&x=1`],['GET','/api/v2/conversations/x/updates?after_sequence=0&limit=100']]) {
+        await assert.rejects(execute({recv:async()=>({...base,method,path:bad,body:null})},()=>assert.fail('fetch must not run')),/Invalid API path/);
+    }
+});
+
 test('GET polls revalidate with the last ETag and a 304 returns the kept body',async()=>{
     const path='/api/v2/sidebar';
     const get={...base,method:'GET',path,body:null};

@@ -90,6 +90,7 @@ mod response_shaping;
 pub mod restricted_http;
 mod retired_inputs;
 mod routes;
+mod run_updates_http;
 mod service_credentials;
 mod sidebar_http;
 mod sidebar_v1;
@@ -673,7 +674,7 @@ pub fn router_with_google_catalog(
     catalog: google_registry_metadata::RegistryCatalog,
 ) -> Router {
     Router::new()
-        .route("/api/v2/health",get(|| async { Json(serde_json::json!({"status":"ok","product":"orkestr-v2","contract_version":0,"fixture_mode":false,"features":["message_author","message_revisions_v1","message_retries_v1","thread_asks","agent_timers","source_receipts_v1","root_intake_v1","fast_run_receipts_v1","provider_quotas_v1","provider_sign_in_v1","local_files_v1","local_file_writes_waiting_v1","vault_v1","held_input_lookup_v1","credentials_v1","sites_v1","history_before_v1","request_metrics_v1","workspace_files_v1"],"build":build_identity::identity(),"deployment":deployment_identity::identity()})) }))
+        .route("/api/v2/health",get(|| async { Json(serde_json::json!({"status":"ok","product":"orkestr-v2","contract_version":0,"fixture_mode":false,"features":["message_author","message_revisions_v1","message_retries_v1","thread_asks","agent_timers","source_receipts_v1","root_intake_v1","fast_run_receipts_v1","provider_quotas_v1","provider_sign_in_v1","local_files_v1","local_file_writes_waiting_v1","vault_v1","held_input_lookup_v1","credentials_v1","sites_v1","history_before_v1","request_metrics_v1","workspace_files_v1","run_updates_v1"],"build":build_identity::identity(),"deployment":deployment_identity::identity()})) }))
         .route("/api/v2/setup",get(auth::setup_status).post(auth::setup))
         .route("/api/v2/session",post(auth::session))
         .route("/api/v2/machine/session",post(auth::session))
@@ -690,6 +691,7 @@ pub fn router_with_google_catalog(
         .route("/api/v2/conversations/{id}",get(routes::snapshot))
         .route("/api/v2/conversations",get(conversations_http::list).post(conversations_http::create))
         .route("/api/v2/conversations/{id}/accepted-results",get(accepted_results_http::read))
+        .route("/api/v2/conversations/{id}/updates",get(run_updates_http::read))
         .route("/api/v2/beta",get(beta_discovery_http::read))
         .route("/api/v2/conversations/{id}/intelligence",get(intelligence_http::read))
         .route("/api/v2/conversations/{id}/window",get(window_http::status).post(window_http::admit))

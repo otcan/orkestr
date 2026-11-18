@@ -122,6 +122,7 @@ fn posts_follow_their_event_and_are_ordered_by_creation_time() {
             Row::Input(i) => format!("i{}", i.sequence),
             Row::Reply(r) => format!("r{}", r.acceptance_sequence),
             Row::Post(p) => p.request_key.clone(),
+            Row::Update(u) => format!("u{}", u.sequence),
         })
         .collect();
     assert_eq!(keys, ["i1", "r5", "k1", "k2", "i9", "k3"]);

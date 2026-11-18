@@ -29,6 +29,9 @@ mod cancellation;
 #[cfg(test)]
 mod cancellation_tests;
 mod claude_identity;
+mod run_updates;
+#[cfg(test)]
+mod run_updates_tests;
 pub use claude_identity::ClaudeProcessInitialization;
 mod capability;
 pub use capability::{ConsumedProviderDispatch, ExecutionConsumption};

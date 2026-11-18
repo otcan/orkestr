@@ -1,4 +1,7 @@
-// One answer must stay on screen from its first update to its accepted reply.
+// Every interim update of a run stays visible as its own message, in order,
+// marked Update; the run's answer is its own message marked Final, shown once
+// (owner decision 2026-11-18). Nothing is replaced in place. While the run
+// works, a line under the last update says more is coming.
 // Synthetic run, payloads and replies only; the real WASM bundle does the rest.
 import assert from 'node:assert/strict';
 
@@ -19,9 +22,11 @@ const POLL_MS = 2600;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const reply = (run, sequence, payload) => ({ run_id: run, completion_event_id: id(sequence + 8200), acceptance_event_id: id(sequence + 8300),
   acceptance_sequence: sequence, payload_id: payload, payload_removed: false, auto_accepted: true });
+const update = (payload, sequence, final_answer = false) => ({ run_id: RUN_OF[payload], payload_id: payload, sequence,
+  observed_at_ms: Date.now(), payload_removed: false, final_answer });
 
 export function createLiveAnswer(conversation) {
-  return { conversation, run: RUN_1, phase: 'running', payload: FIRST, revision: 1, progressAt: 1000, replies: [], watermark: 1 };
+  return { conversation, run: RUN_1, phase: 'running', payload: FIRST, revision: 1, progressAt: 1000, replies: [], updates: [], watermark: 1 };
 }
 
 function set(state, change) {
@@ -44,8 +49,15 @@ export async function liveAnswerApi(state, req, res, rest, { json, q }) {
     return true;
   }
   if (rest === '/accepted-results') {
-    const after = Number(q.get('after_sequence') ?? 0);
-    json(res, 200, { conversation_id: live.conversation, results: live.replies.filter(r => r.acceptance_sequence > after), next_after_sequence: null });
+    const after = Number(q.get('after_sequence') ?? 0), before = q.get('before_sequence');
+    const rows = live.replies.filter(r => before === null ? r.acceptance_sequence > after : r.acceptance_sequence < Number(before));
+    json(res, 200, { conversation_id: live.conversation, results: rows, next_after_sequence: null });
+    return true;
+  }
+  if (rest === '/updates') {
+    const after = Number(q.get('after_sequence') ?? 0), before = q.get('before_sequence');
+    const rows = live.updates.filter(u => before === null ? u.sequence > after : u.sequence < Number(before));
+    json(res, 200, { conversation_id: live.conversation, updates: rows, next_after_sequence: null });
     return true;
   }
   const payload = /^\/payloads\/([0-9a-f-]{36})$/.exec(rest)?.[1];
@@ -54,7 +66,7 @@ export async function liveAnswerApi(state, req, res, rest, { json, q }) {
     json(res, 200, { payload_id: payload, conversation_id: live.conversation, run_id: RUN_OF[payload], text: TEXT[payload] });
     return true;
   }
-  // Several accepted replies in one read (ORK-797), as slow as one.
+  // Several texts in one read (ORK-797), as slow as one.
   if (rest === '/payloads') {
     const ids = (q.get('ids') ?? '').split(',').filter(p => TEXT[p]);
     await sleep(READ_MS);
@@ -64,31 +76,21 @@ export async function liveAnswerApi(state, req, res, rest, { json, q }) {
   return false;
 }
 
-// Records every change of the answers on screen. A row covered by the live
-// bubble is mounted but hidden, so it does not count as visible.
-const sampler = () => {
-  const read = () => JSON.stringify([...document.querySelectorAll('.live-answer .rich-text, .chat-messages .accepted-output')]
-    .filter(node => node.offsetParent !== null).map(node => node.textContent.trim()));
-  window.__answers = [read()];
-  window.__sampling = setInterval(() => {
-    const now = read();
-    if (window.__answers.at(-1) !== now) window.__answers.push(now);
-  }, 15);
+/** The assistant messages on screen, in order: [kind, text]. */
+const assistantRows = page => page.evaluate(() => [...document.querySelectorAll('ol.chat-messages > li.assistant-message article')]
+  .filter(article => article.offsetParent !== null)
+  .map(article => [article.dataset.messageKind, article.querySelector('.update-output, .accepted-output')?.textContent.trim() ?? '']));
+const working = page => page.evaluate(() => document.querySelector('.live-answer .live-working')?.textContent.trim() ?? null);
+const waitRows = (page, expected) => page.waitForFunction(rows => {
+  const shown = [...document.querySelectorAll('ol.chat-messages > li.assistant-message article')].filter(a => a.offsetParent !== null)
+    .map(a => [a.dataset.messageKind, a.querySelector('.update-output, .accepted-output')?.textContent.trim() ?? '']);
+  return JSON.stringify(shown) === JSON.stringify(rows);
+}, { timeout: 20000 }, expected);
+// The stream goes quiet in the mock: a new watermark and a wake make the chat read again.
+const advance = async (page, state, watermark) => {
+  state.live.watermark = watermark;
+  await page.evaluate(() => window.dispatchEvent(new Event('orkestr-stream-retry')));
 };
-const samples = async page => (await page.evaluate(() => { clearInterval(window.__sampling); return window.__answers; })).map(row => JSON.parse(row));
-
-/** After its first text appears, some text of the answer stays visible in every frame. */
-function assertContinuous(frames, texts, what) {
-  const first = frames.findIndex(frame => frame.some(text => texts.includes(text)));
-  assert.ok(first >= 0, `${what}: the answer never appeared`);
-  const gap = frames.slice(first).find(frame => !frame.some(text => texts.includes(text)));
-  assert.equal(gap, undefined, `${what}: the answer disappeared from the chat and came back. Frames: ${JSON.stringify(frames)}`);
-}
-const assertNoDuplicate = (frames, text, what) => assert.equal(frames.find(frame => frame.filter(t => t === text).length > 1), undefined, `${what}: the same answer was shown twice. Frames: ${JSON.stringify(frames)}`);
-const wake = page => page.evaluate(() => window.dispatchEvent(new Event('orkestr-stream-retry')));
-const liveShows = (page, text) => page.waitForFunction(t => document.querySelector('.live-answer .rich-text')?.textContent.includes(t), { timeout: 20000 }, text);
-const settled = (page, text) => page.waitForFunction(t => !document.querySelector('.live-answer')
-  && [...document.querySelectorAll('.chat-messages .accepted-output')].some(node => node.offsetParent !== null && node.textContent.includes(t)), { timeout: 20000 }, text);
 
 export async function liveAnswer({ page, state, origin, conversation, returnConversation, screenshot, label }) {
   const open = async () => {
@@ -97,56 +99,60 @@ export async function liveAnswer({ page, state, origin, conversation, returnConv
   };
   state.live = createLiveAnswer(conversation);
   try {
+    // The first update is its own message, and the run says it still works.
+    state.live.updates = [update(FIRST, 101)];
+    state.live.watermark = 101;
     await open();
-    await liveShows(page, TEXT[FIRST]);
-    await page.evaluate(sampler);
-    // A later update of the same run replaces the text without blanking it.
+    await waitRows(page, [['update', TEXT[FIRST]]]);
+    await page.waitForFunction(() => document.querySelector('.live-answer .live-working')?.textContent.includes('Still working'), { timeout: 20000 });
+    assert.equal(await page.$eval('ol.chat-messages > li.update-message .message-kind', n => n.textContent), 'Update');
+    // A later update is a new message below it; the first stays.
     set(state, { payload: SECOND });
-    await liveShows(page, TEXT[SECOND]);
+    state.live.updates = [...state.live.updates, update(SECOND, 102)];
+    await advance(page, state, 102);
+    await waitRows(page, [['update', TEXT[FIRST]], ['update', TEXT[SECOND]]]);
+    assert.match(await working(page), /Still working/);
     await screenshot(label, 'live-answer-updating');
-    // The run finishes; its accepted reply is not readable yet.
-    set(state, { phase: 'completed', payload: FINAL });
-    await sleep(POLL_MS);
+    // The run's last text arrives: while the run is not accepted it is an update too.
+    set(state, { payload: FINAL });
+    state.live.updates = [...state.live.updates, update(FINAL, 103)];
+    await advance(page, state, 103);
+    await waitRows(page, [['update', TEXT[FIRST]], ['update', TEXT[SECOND]], ['update', TEXT[FINAL]]]);
+    // Accepted: the answer is the Final message, shown once; the updates stay.
+    set(state, { phase: 'completed' });
+    state.live.updates = state.live.updates.map(u => u.payload_id === FINAL ? { ...u, final_answer: true } : u);
     state.live.replies = [reply(RUN_1, 500, FINAL)];
-    state.live.watermark = 500;
-    await wake(page);
-    await settled(page, TEXT[FINAL]);
-    await sleep(POLL_MS);
-    let frames = await samples(page);
-    assertContinuous(frames, [TEXT[FIRST], TEXT[SECOND], TEXT[FINAL]], 'updates and handover');
-    assertNoDuplicate(frames, TEXT[FINAL], 'handover');
-    assert.deepEqual(frames.at(-1), [TEXT[FINAL]], 'exactly one settled answer');
+    await advance(page, state, 500);
+    await waitRows(page, [['update', TEXT[FIRST]], ['update', TEXT[SECOND]], ['final', TEXT[FINAL]]]);
+    await page.waitForFunction(() => !document.querySelector('.live-answer'), { timeout: 20000 });
+    assert.equal(await page.$eval('ol.chat-messages > li.assistant-message:last-child .message-kind', n => n.textContent), 'Final');
+    await screenshot(label, 'live-answer-final');
 
-    // A run followed at once by another: status never reports it completed.
+    // A reopened chat shows the same messages and never a working line for a finished run.
+    await open();
+    await waitRows(page, [['update', TEXT[FIRST]], ['update', TEXT[SECOND]], ['final', TEXT[FINAL]]]);
+    await sleep(POLL_MS);
+    assert.equal(await page.$('.live-answer'), null, 'a finished run is not shown as working');
+
+    // The next run: its one text is an update until it is accepted, then its Final message.
     set(state, { run: RUN_2, phase: 'running', payload: NEXT });
-    await liveShows(page, TEXT[NEXT]);
-    await page.evaluate(sampler);
+    state.live.updates = [...state.live.updates, update(NEXT, 501)];
+    await advance(page, state, 501);
+    await waitRows(page, [['update', TEXT[FIRST]], ['update', TEXT[SECOND]], ['final', TEXT[FINAL]], ['update', TEXT[NEXT]]]);
     set(state, { run: RUN_3, phase: 'starting', payload: null });
-    await sleep(POLL_MS);
-    state.live.replies = [...state.live.replies, reply(RUN_2, 501, NEXT)];
-    state.live.watermark = 501;
-    await wake(page);
-    await settled(page, TEXT[NEXT]);
-    frames = await samples(page);
-    assertContinuous(frames, [TEXT[NEXT]], 'next run starts before the reply arrives');
-    assertNoDuplicate(frames, TEXT[NEXT], 'next run starts before the reply arrives');
+    state.live.updates = state.live.updates.map(u => u.payload_id === NEXT ? { ...u, final_answer: true } : u);
+    state.live.replies = [...state.live.replies, reply(RUN_2, 502, NEXT)];
+    await advance(page, state, 502);
+    await waitRows(page, [['update', TEXT[FIRST]], ['update', TEXT[SECOND]], ['final', TEXT[FINAL]], ['final', TEXT[NEXT]]]);
 
-    // Reopening a finished chat never flashes a live bubble for an old answer.
-    set(state, { run: RUN_1, phase: 'completed', payload: FINAL });
-    const seen = await page.evaluateOnNewDocument(() => {
-      window.__sawLive = false;
-      setInterval(() => { if (document.querySelector('.live-answer')) window.__sawLive = true; }, 15);
-    });
-    await page.reload({ waitUntil: 'domcontentloaded' });
-    await settled(page, TEXT[FINAL]);
-    await sleep(POLL_MS);
-    assert.equal(await page.evaluate(() => window.__sawLive), false, 'a finished answer is not replayed as live after a reload');
-    await page.removeScriptToEvaluateOnNewDocument(seen.identifier);
-
-    // A suppressed reply is never shown while it is being written.
+    // A suppressed update is never shown.
     set(state, { run: RUN_4, phase: 'running', payload: SILENT });
+    state.live.updates = [...state.live.updates, update(SILENT, 503)];
+    await advance(page, state, 503);
     await sleep(POLL_MS + READ_MS);
-    assert.equal(await page.evaluate(() => document.querySelector('.live-answer')?.textContent.includes('NO_REPLY') ?? false), false, 'suppression marker stays hidden while live');
+    assert.equal(await page.evaluate(() => document.querySelector('ol.chat-messages')?.textContent.includes('NO_REPLY') ?? false), false,
+      'a suppression marker stays hidden');
+    assert.equal((await assistantRows(page)).length, 4);
   } finally {
     state.live = null;
     await page.goto(`${origin}/#conversation/${returnConversation}`, { waitUntil: 'domcontentloaded' });
