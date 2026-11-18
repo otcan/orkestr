@@ -14,7 +14,7 @@ import { createUser } from "../packages/core/src/users.js";
 import { callThreadBridgeTool } from "../packages/core/src/thread-bridge-mcp.js";
 import { bridgeWhatsAppIncoming } from "../packages/core/src/thread-bridge-whatsapp.js";
 import { clearCoordinatorChatCache } from "../packages/core/src/whatsapp-incoming-readers.js";
-import { chatRef, maskedNumber } from "../packages/core/src/whatsapp-incoming-sources.js";
+import { chatRef as keyedChatRef, maskedNumber } from "../packages/core/src/whatsapp-incoming-sources.js";
 import { closeThreadMessageRegistryCache } from "../packages/storage/src/thread-message-registry.js";
 
 const principal = { kind: "delegated-agent", ownerUserId: "owner-a", agentId: "agent-a", grantId: "grant-a", issuer: "orkestr", authMethod: "orkestr-oauth",
@@ -31,6 +31,8 @@ const STRANGER = "491700000003@c.us";
 const GROUP_A = "120363000000000001@g.us";
 const GROUP_OTHER_OWNER = "120363000000000002@g.us";
 const GROUP_UNBOUND = "120363000000000003@g.us";
+const REF_KEY = "a".repeat(64);
+const chatRef = (account, raw) => keyedChatRef(REF_KEY, account, raw);
 const minute = 60_000;
 const hour = 60 * minute;
 
@@ -57,7 +59,7 @@ async function fixture(t, { grantOverride = {}, sources = null } = {}) {
     CREATE TABLE group_input_media(id TEXT PRIMARY KEY,path TEXT NOT NULL,filename TEXT,mimetype TEXT,size INTEGER);`);
   let open = true;
   const closeWriter = () => { if (open) writer.close(); open = false; };
-  const writeSources = (accounts) => fs.writeFile(sourcesFile, JSON.stringify({ format: "orkestr-whatsapp-incoming-sources-v1", accounts }), { mode: 0o600 });
+  const writeSources = (accounts, refKey = REF_KEY) => fs.writeFile(sourcesFile, JSON.stringify({ format: "orkestr-whatsapp-incoming-sources-v1", refKey, accounts }), { mode: 0o600 });
   t.after(async () => { closeWriter(); clearCoordinatorChatCache(); await closeThreadMessageRegistryCache(); await fs.rm(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
   return { home, env, journal, tokenFile, sourcesFile, grants, writeSources, closeWriter };
 }
@@ -132,6 +134,10 @@ test("an account that is granted but not enrolled, or an unprotected enrollment,
   assert.deepEqual((await fs.readdir(f.home)).sort(), before);
   await f.writeSources([germanSource(f, "https://example.com/")]);
   assert.equal(ok(await call({ account: "german" }, f.env)).reason, "not_enrolled", "the bridge token is only ever sent to a loopback origin");
+  await f.writeSources([germanSource(f, "http://localhost:9/")]);
+  assert.equal(ok(await call({ account: "german" }, f.env)).reason, "not_enrolled", "not even to a name that resolves elsewhere");
+  await f.writeSources([orkestrSource(f)], null);
+  assert.equal(ok(await call({ account: "orkestr" }, f.env)).reason, "not_enrolled", "references need the file's key");
 });
 
 test("orkestr: only listed participants' admitted inputs from groups bound to the owner's observed threads, masked and paged", async (t) => {
@@ -165,6 +171,14 @@ test("orkestr: only listed participants' admitted inputs from groups bound to th
   assert.deepEqual(first.chat, { id: chatRef("orkestr", GROUP_A), name: "Sales group", kind: "group", threadId: "thread-a" });
   assert.deepEqual(first.sender, { name: "Peer One", number: "+49…01", ref: first.sender.ref });
   assert.match(first.sender.ref, /^ws-[0-9a-f]{20}$/);
+  // References are keyed: another key gives other references, and none is a plain hash of the raw id.
+  const crypto = await import("node:crypto");
+  assert.notEqual(first.chat.id, `wa-${crypto.createHash("sha256").update(["orkestr-wa-chat-v1", "orkestr", GROUP_A].join("\0")).digest("hex").slice(0, 20)}`);
+  await f.writeSources([orkestrSource(f, { ownerAuthorIds: [OWNER_LID] })], "b".repeat(64));
+  const rekeyed = ok(await call({ account: "orkestr" }, f.env)).messages.at(-1);
+  assert.notEqual(rekeyed.chat.id, first.chat.id);
+  assert.notEqual(rekeyed.sender.ref, first.sender.ref);
+  await f.writeSources([orkestrSource(f, { ownerAuthorIds: [OWNER_LID] })]);
   assert.equal(first.id, "AAAAAA0003");
   assert.equal(first.receivedAt.utc, new Date(now - 40 * minute).toISOString());
   assert.match(first.receivedAt.berlin, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+0[12]:00$/);
@@ -248,7 +262,7 @@ function fakeBridge(t, { chats, health = { ok: true, ready: true, identityMatche
       const list = [...chats].sort((left, right) => right.messages.at(-1).t - left.messages.at(-1).t);
       return send(200, { ok: true, source: "chats", chats: list.slice(0, Number(url.searchParams.get("limit"))).map((chat) => ({
         chatId: chat.id, label: chat.name, isGroup: chat.id.endsWith("@g.us"), unreadCount: 0,
-        lastMessageAt: new Date(chat.messages.at(-1).t).toISOString(), lastFromThem: !chat.messages.at(-1).fromMe })), hasMore: false, nextCursor: null, total: list.length });
+        lastMessageAt: chat.noTime ? null : new Date(chat.messages.at(-1).t).toISOString(), lastFromThem: !chat.messages.at(-1).fromMe })), hasMore: false, nextCursor: null, total: list.length });
     }
     const match = /^\/coordinator\/chats\/([^/]+)\/messages$/.exec(url.pathname);
     if (match) {
@@ -362,6 +376,30 @@ test("german: busy chats are walked back page by page; pages across chats are di
   } while (cursor);
   assert.equal(all.length, 400);
   assert.equal(new Set(all).size, 400);
+});
+
+test("german: number-like names are masked, chats without an activity time are read, and a listing whose window moved says so", async (t) => {
+  const f = await fixture(t);
+  const now = Date.now();
+  const unnamed = { id: "491700000011@c.us", name: "+49 170 0000011", messages: [wa("491700000011@c.us", { t: now - 5 * minute, body: "from an unsaved number" })] };
+  const timeless = { id: "491700000012@c.us", name: "No time", noTime: true, messages: [wa("491700000012@c.us", { t: now - 6 * minute, body: "chat without a time" })] };
+  const busy = { id: "120363000000000013@g.us", name: "Busy", messages: [] };
+  for (let index = 0; index < 200; index += 1) busy.messages.push(wa(busy.id, { t: now - (300 - index) * minute, author: PEER_LID, body: `b${index}` }));
+  const bridge = await fakeBridge(t, { chats: [unnamed, timeless, busy] });
+  await f.writeSources([germanSource(f, bridge.baseUrl)]);
+
+  const first = ok(await call({ account: "german", limit: 5 }, f.env));
+  assert.deepEqual(first.messages.slice(0, 2).map((message) => message.text), ["from an unsaved number", "chat without a time"]);
+  const unsaved = first.messages[0];
+  assert.deepEqual([unsaved.chat.name, unsaved.sender.name, unsaved.sender.number], ["+49…11", "+49…11", "+49…11"]);
+  assert.ok(!JSON.stringify(first).includes("0000011"), "the formatted number in the name is masked");
+  assert.equal(first.coverage.truncatedChats[0].chat.name, "Busy");
+
+  // New messages push the busy chat's 150-message window: page 2 cannot reach this listing's older messages.
+  for (let index = 0; index < 10; index += 1) busy.messages.push(wa(busy.id, { t: now - (9 - index) * 1000, author: PEER_LID, body: `new ${index}` }));
+  assert.equal(errorOf(await call({ account: "german", limit: 5, cursor: first.nextCursor }, f.env)), "whatsapp_cursor_expired");
+  const fresh = ok(await call({ account: "german", limit: 5 }, f.env));
+  assert.equal(fresh.messages[0].text, "new 9");
 });
 
 test("german: a bridge that is not ready, marks seen, lacks its credential or fails is unavailable with a reason", async (t) => {

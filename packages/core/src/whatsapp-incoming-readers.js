@@ -14,7 +14,7 @@
 // (opaque chat/sender refs, masked numbers, no raw WhatsApp ids, no media).
 import fs from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
-import { boundedText, chatRef, maskedNumber, messageKey, readSourceToken, senderRef, timePair } from "./whatsapp-incoming-sources.js";
+import { boundedText, chatRef, maskedName, maskedNumber, messageKey, readSourceToken, senderRef, timePair } from "./whatsapp-incoming-sources.js";
 
 const code = (value) => Object.assign(new Error(value), { readerCode: value });
 const finiteTime = (value) => { const ms = Date.parse(String(value || "")); return Number.isFinite(ms) && ms > 0 ? ms : null; };
@@ -64,16 +64,21 @@ export async function journalStatus(source) {
 }
 
 // `chats`: Map(raw group id -> { threadId, name, labels }) of chats bound to
-// threads the grant observes now. Anything else in the journal is never read out.
-export async function readJournalIncoming(source, { account, chats, chatRaw = null, sinceMs, before = null, limit }) {
+// threads the grant observes now. Anything else in the journal is never read:
+// the query selects only those groups, participant inputs, and the range
+// [since, cursor second], so the scan bound counts only rows that can answer.
+export async function readJournalIncoming(source, { account, chats, chatRaw = null, sinceMs, before = null }) {
   let db;
   let rows;
+  const scope = chatRaw ? [chatRaw] : [...chats.keys()];
+  if (!scope.length) return { records: [], coveredFromMs: null };
   try {
     db = await openJournal(source.journalPath);
     rows = db.prepare(`SELECT i.id AS id, i.chat_id AS chatId, i.body AS body, i.created_at AS createdAt, a.proof AS proof, m.mimetype AS mimetype
       FROM group_input i JOIN group_input_author a ON a.id = i.id LEFT JOIN group_input_media m ON m.id = i.id
-      WHERE i.id LIKE 'false\\_%' ESCAPE '\\' AND i.created_at >= ? ORDER BY i.created_at DESC LIMIT ?`)
-      .all(new Date(sinceMs).toISOString(), JOURNAL_SCAN_LIMIT + 1);
+      WHERE i.id LIKE 'false\\_%' ESCAPE '\\' AND i.chat_id IN (SELECT value FROM json_each(?)) AND i.created_at >= ? AND i.created_at <= ?
+      ORDER BY i.created_at DESC LIMIT ?`)
+      .all(JSON.stringify(scope), new Date(sinceMs).toISOString(), before ? new Date(before.t).toISOString() : "9999", JOURNAL_SCAN_LIMIT + 1);
   } catch (error) {
     throw code(error?.readerCode || "journal_unreadable");
   } finally { try { db?.close(); } catch { /* closed */ } }
@@ -96,16 +101,17 @@ export async function readJournalIncoming(source, { account, chats, chatRaw = nu
     if (!authorId && !phoneId) continue;
     if (owners.has(authorId) || owners.has(phoneId)) continue;
     const { type, body } = journalType(row.body, row.mimetype);
-    const ref = chatRef(account, row.chatId);
-    const key = `${ref}:${messageKey(row.id)}`;
+    const ref = chatRef(source.refKey, account, row.chatId);
+    const id = messageKey(source.refKey, row.id);
+    const key = `${ref}:${id}`;
     if (!olderThan({ t, key }, before)) continue;
     const labels = chat.labels || {};
     const name = [labels[authorId], labels[phoneId]].find((value) => typeof value === "string" && value.trim()) || null;
     records.push({ t, key, message: {
-      id: messageKey(row.id),
+      id,
       account,
-      chat: { id: ref, name: chat.name || null, kind: "group", threadId: chat.threadId },
-      sender: { name: name ? name.trim().slice(0, 80) : null, number: maskedNumber(phoneId) || maskedNumber(authorId), ref: senderRef(account, phoneId || authorId) },
+      chat: { id: ref, name: maskedName(chat.name), kind: "group", threadId: chat.threadId },
+      sender: { name: maskedName(name), number: maskedNumber(phoneId) || maskedNumber(authorId), ref: senderRef(source.refKey, account, phoneId || authorId) },
       receivedAt: timePair(t),
       type,
       ...boundedText(body),
@@ -187,8 +193,7 @@ export async function coordinatorChats(source, { now = Date.now, ...options } = 
     const chats = (Array.isArray(page.chats) ? page.chats : []).flatMap((chat) => {
       const raw = typeof chat?.chatId === "string" ? chat.chatId : "";
       if (!READ_CHAT.test(raw)) return [];
-      return [{ raw, name: typeof chat.label === "string" && chat.label.trim() ? chat.label.trim().slice(0, 80) : null,
-        isGroup: chat.isGroup === true || raw.endsWith("@g.us"), lastMs: finiteTime(chat.lastMessageAt) || 0 }];
+      return [{ raw, name: maskedName(chat.label), isGroup: chat.isGroup === true || raw.endsWith("@g.us"), lastMs: finiteTime(chat.lastMessageAt) || 0 }];
     });
     return { observedAtMs: startedAt, chats, listFull: page.hasMore === true };
   });
@@ -204,7 +209,9 @@ const TYPE_NAMES = new Map([["chat", "text"], ["ptt", "voice"], ["multi_vcard", 
 const CAPTIONED = new Set(["text", "image", "video", "document", "poll"]);
 const BLOB = /^[A-Za-z0-9+/=\s]{200,}$/;
 
-function germanRecord(message, chat, { account, assistants }) {
+// The coordinator's serializer always sets fromMe to a boolean; anything else
+// is not known to be incoming and is left out.
+function germanRecord(message, chat, { account, assistants, refKey }) {
   if (!message || message.fromMe !== false) return null;
   const rawType = typeof message.type === "string" ? message.type.toLowerCase() : "";
   if (SYSTEM_TYPES.has(rawType)) return null;
@@ -214,13 +221,14 @@ function germanRecord(message, chat, { account, assistants }) {
   if (!t || typeof message.id !== "string") return null;
   const type = TYPE_NAMES.get(rawType) || (/^[a-z_]{1,24}$/.test(rawType) ? rawType : "other");
   const body = CAPTIONED.has(type) && typeof message.body === "string" && !BLOB.test(message.body) ? message.body : "";
-  const ref = chatRef(account, chat.raw);
-  const key = `${ref}:${messageKey(message.id)}`;
+  const ref = chatRef(refKey, account, chat.raw);
+  const id = messageKey(refKey, message.id);
+  const key = `${ref}:${id}`;
   return { t, key, message: {
-    id: messageKey(message.id),
+    id,
     account,
     chat: { id: ref, name: chat.name, kind: chat.isGroup ? "group" : "direct" },
-    sender: { name: chat.isGroup ? null : chat.name, number: maskedNumber(author), ref: author ? senderRef(account, author) : null },
+    sender: { name: chat.isGroup ? null : chat.name, number: maskedNumber(author), ref: author ? senderRef(refKey, account, author) : null },
     receivedAt: timePair(t),
     type,
     ...boundedText(body),
@@ -246,7 +254,7 @@ export async function coordinatorChatIncoming(source, chat, { account, sinceMs, 
     for (const message of messages) {
       const t = finiteTime(message?.timestamp);
       if (t) oldestMs = Math.min(oldestMs, t);
-      const record = germanRecord(message, chat, { account, assistants });
+      const record = germanRecord(message, chat, { account, assistants, refKey: source.refKey });
       if (record && record.t >= sinceMs && olderThan(record, before)) records.push(record);
     }
     const exhausted = page.hasMore !== true || typeof page.nextCursor !== "string" || !page.nextCursor || !messages.length;

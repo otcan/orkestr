@@ -6,7 +6,7 @@
 // account. It holds no credential: the German bridge token stays in its own
 // file and is referenced by path only.
 //
-//   { "format": "orkestr-whatsapp-incoming-sources-v1", "accounts": [
+//   { "format": "orkestr-whatsapp-incoming-sources-v1", "refKey": "<64 hex>", "accounts": [
 //     { "account": "orkestr", "label": "...", "ownerUserId": "admin",
 //       "kind": "scoped_relay_journal", "journalPath": "/var/lib/.../transport.sqlite" },
 //     { "account": "german", "label": "...", "ownerUserId": "admin",
@@ -14,12 +14,16 @@
 //       "tokenFile": "/etc/.../coordinator.token", "ownerApprovedAt": "<ISO>",
 //       "assistantAuthorIds": ["<Orkestr number>@c.us", "<its LID>@lid"] } ] }
 //
-// Also: chat/sender references and phone masking shared by the readers, so no
-// raw WhatsApp id (which embeds phone numbers) ever reaches an answer.
+// `refKey` keys the opaque chat/sender/message references (HMAC), so a
+// reference cannot be reversed to a phone number by trying candidates. It is a
+// pseudonymization key, not a credential: it opens nothing.
+//
+// Also: references and phone masking shared by the readers, so no raw WhatsApp
+// id (which embeds phone numbers) and no number-like name reaches an answer.
 import fs from "node:fs/promises";
 import { constants } from "node:fs";
 import path from "node:path";
-import { createHash } from "node:crypto";
+import { createHmac } from "node:crypto";
 import { localIsoTime } from "./provider-quota-report.js";
 
 export const WHATSAPP_INCOMING_FORMAT = "orkestr-whatsapp-incoming-v1";
@@ -43,7 +47,7 @@ function loopbackOrigin(value) {
   if (!text(value, 200)) return false;
   try {
     const url = new URL(value);
-    return ["http:", "https:"].includes(url.protocol) && ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname)
+    return ["http:", "https:"].includes(url.protocol) && ["127.0.0.1", "[::1]"].includes(url.hostname)
       && !url.username && !url.password && url.pathname === "/" && !url.search && !url.hash;
   } catch { return false; }
 }
@@ -75,9 +79,10 @@ async function readPrivateFile(filename, { owners = null, forbiddenMode, limit }
   } finally { await file.close(); }
 }
 
-// The owner's enrolled accounts: { configured, accounts: Map(account -> source) }.
-// Missing, unprotected or invalid configuration enrolls nothing (fails closed);
-// a duplicate or invalid entry for this owner drops that account.
+// The owner's enrolled accounts: { configured, accounts: Map(account -> source) };
+// each source carries the file's refKey. Missing, unprotected or invalid
+// configuration enrolls nothing (fails closed); a duplicate or invalid entry
+// for this owner drops that account.
 export async function loadWhatsAppSources(ownerUserId, env = process.env) {
   const filename = env.ORKESTR_WHATSAPP_INCOMING_SOURCES;
   const accounts = new Map();
@@ -86,13 +91,14 @@ export async function loadWhatsAppSources(ownerUserId, env = process.env) {
   try {
     config = JSON.parse(await readPrivateFile(filename, { owners: [0, process.getuid?.()].filter(Number.isInteger), forbiddenMode: 0o027, limit: SOURCES_LIMIT }));
   } catch { return { configured: false, accounts }; }
-  if (!exactKeys(config, ["format", "accounts"]) || config.format !== WHATSAPP_SOURCES_FORMAT || !Array.isArray(config.accounts) || config.accounts.length > 16) {
+  if (!exactKeys(config, ["format", "refKey", "accounts"]) || config.format !== WHATSAPP_SOURCES_FORMAT || !/^[0-9a-f]{64}$/.test(config.refKey)
+      || !Array.isArray(config.accounts) || config.accounts.length > 16) {
     return { configured: false, accounts };
   }
   const owned = config.accounts.filter((entry) => entry && typeof entry === "object" && entry.ownerUserId === ownerUserId);
   for (const account of WHATSAPP_INCOMING_ACCOUNTS) {
     const entries = owned.filter((entry) => entry.account === account);
-    if (entries.length === 1 && validSource(entries[0])) accounts.set(account, Object.freeze({ ...entries[0] }));
+    if (entries.length === 1 && validSource(entries[0])) accounts.set(account, Object.freeze({ ...entries[0], refKey: config.refKey }));
   }
   return { configured: true, accounts };
 }
@@ -104,23 +110,35 @@ export async function readSourceToken(source) {
   return value;
 }
 
-const digest = (...parts) => createHash("sha256").update(parts.join("\0")).digest("hex");
+const keyed = (key, ...parts) => createHmac("sha256", Buffer.from(String(key || ""), "hex")).update(parts.join("\0")).digest("hex");
 
 // Stable opaque references: raw chat and sender ids embed phone numbers.
-export const chatRef = (account, rawChatId) => `wa-${digest("orkestr-wa-chat-v1", account, rawChatId).slice(0, 20)}`;
-export const senderRef = (account, rawSenderId) => `ws-${digest("orkestr-wa-sender-v1", account, rawSenderId).slice(0, 20)}`;
+export const chatRef = (key, account, rawChatId) => `wa-${keyed(key, "orkestr-wa-chat-v1", account, rawChatId).slice(0, 20)}`;
+export const senderRef = (key, account, rawSenderId) => `ws-${keyed(key, "orkestr-wa-sender-v1", account, rawSenderId).slice(0, 20)}`;
 
 // +49…62 for a phone-number id; null for a LID or anything else.
+const maskDigits = (digits) => `+${digits.slice(0, 2)}…${digits.slice(-2)}`;
 export function maskedNumber(rawId) {
   const match = /^(\d{6,20})@c\.us$/.exec(String(rawId || ""));
-  return match ? `+${match[1].slice(0, 2)}…${match[1].slice(-2)}` : null;
+  return match ? maskDigits(match[1]) : null;
+}
+
+// A contact WhatsApp has no name for is listed under its formatted number
+// ("+49 176 …"): mask a name made of digits only, and every "+"-number in a
+// name (6+ digits). Dates and other numbers in group names stay.
+export function maskedName(value) {
+  if (typeof value !== "string" || !value.trim()) return null;
+  const name = value.trim().slice(0, 80);
+  const digitsOf = (text) => text.replace(/\D/g, "");
+  if (/^[\d\s().-]+$/.test(name) && digitsOf(name).length >= 6) return maskDigits(digitsOf(name));
+  return name.replace(/\+\d[\d\s().-]{4,}\d/g, (run) => digitsOf(run).length >= 6 ? maskDigits(digitsOf(run)) : run);
 }
 
 // The provider's message key (third part of fromMe_chat_key[_author]); it
-// carries no phone number. Anything unexpected is hashed instead.
-export function messageKey(serializedId) {
-  const key = String(serializedId || "").split("_")[2] || "";
-  return /^[A-Za-z0-9]{6,64}$/.test(key) ? key : `h${digest("orkestr-wa-message-v1", String(serializedId || "")).slice(0, 24)}`;
+// carries no phone number. Anything unexpected is replaced by a keyed hash.
+export function messageKey(key, serializedId) {
+  const part = String(serializedId || "").split("_")[2] || "";
+  return /^[A-Za-z0-9]{6,64}$/.test(part) ? part : `h${keyed(key, "orkestr-wa-message-v1", String(serializedId || "")).slice(0, 24)}`;
 }
 
 export const timePair = (ms) => ({ utc: new Date(ms).toISOString(), berlin: localIsoTime(ms, WHATSAPP_REPORT_ZONE) });

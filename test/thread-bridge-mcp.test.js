@@ -249,7 +249,7 @@ test("a connected assistant reads incoming WhatsApp messages only after consenti
 
   const before = await connect(base);
   const sources = path.join(home, "whatsapp-incoming-sources.json");
-  await fs.writeFile(sources, JSON.stringify({ format: "orkestr-whatsapp-incoming-sources-v1", accounts: [
+  await fs.writeFile(sources, JSON.stringify({ format: "orkestr-whatsapp-incoming-sources-v1", refKey: "c".repeat(64), accounts: [
     { account: "orkestr", label: "the Orkestr number", ownerUserId: "admin", kind: "scoped_relay_journal", journalPath: journal }] }), { mode: 0o600 });
   process.env.ORKESTR_WHATSAPP_INCOMING_SOURCES = sources;
   const call = (token) => fetch(`${base}/mcp`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json", authorization: `Bearer ${token}`,

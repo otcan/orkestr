@@ -20,7 +20,7 @@ const KNOWN_CODES = new Set([
   "bridge_history_reset_required", "bridge_reply_invalid", "bridge_cause_invalid", "bridge_idempotency_conflict",
   "bridge_message_invalid", "bridge_message_rate_limited", "bridge_message_not_found", "insufficient_scope",
   "bridge_quota_not_granted", "bridge_whatsapp_not_granted", "whatsapp_since_invalid", "whatsapp_cursor_invalid",
-  "whatsapp_cursor_mismatch", "whatsapp_chat_not_found",
+  "whatsapp_cursor_mismatch", "whatsapp_cursor_expired", "whatsapp_chat_not_found",
   "url_invalid", "url_must_be_public_https", "url_address_not_public", "request_timeout", "response_too_large",
 ]);
 

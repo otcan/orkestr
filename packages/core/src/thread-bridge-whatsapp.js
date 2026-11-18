@@ -81,7 +81,8 @@ function encodeCursor(value) {
 }
 
 // The cursor is a position (time, message reference) in one listing: same
-// account, chat and since. It carries no raw id, so it grants nothing.
+// account, chat and since, plus the time the listing was complete after (w).
+// It carries no raw id, so it grants nothing.
 function decodeCursor(cursor, { account, chat, sinceMs }) {
   if (!cursor) return null;
   let value;
@@ -91,19 +92,21 @@ function decodeCursor(cursor, { account, chat, sinceMs }) {
   } catch { fail("whatsapp_cursor_invalid", 400); }
   if (!value || value.v !== 1 || !WHATSAPP_INCOMING_ACCOUNTS.includes(value.a) || !Number.isSafeInteger(value.t) || value.t <= 0
       || typeof value.k !== "string" || !CURSOR_KEY.test(value.k) || !Number.isSafeInteger(value.s) || value.s < 0
+      || !Number.isSafeInteger(value.w) || value.w < value.s - 1
       || !(value.c === null || typeof value.c === "string" && /^wa-[0-9a-f]{20}$/.test(value.c))) fail("whatsapp_cursor_invalid", 400);
   if (value.a !== account || value.c !== (chat || null) || (sinceMs !== null && sinceMs !== value.s)) fail("whatsapp_cursor_mismatch", 400);
-  return { t: value.t, key: value.k, sinceMs: value.s };
+  return { t: value.t, key: value.k, sinceMs: value.s, windowMs: value.w };
 }
 
-function page(records, { limit, account, chat, sinceMs }) {
+// `windowMs`: the answer holds every incoming message after it.
+function page(records, { limit, account, chat, sinceMs, windowMs }) {
   const selected = records.slice(0, limit);
   const hasMore = records.length > limit;
   const last = selected.at(-1);
   return {
     messages: selected.map((record) => record.message),
     hasMore,
-    nextCursor: hasMore && last ? encodeCursor({ v: 1, a: account, c: chat || null, s: sinceMs, t: last.t, k: last.key }) : null,
+    nextCursor: hasMore && last ? encodeCursor({ v: 1, a: account, c: chat || null, s: sinceMs, w: windowMs, t: last.t, k: last.key }) : null,
   };
 }
 
@@ -121,6 +124,7 @@ const LIMITS = {
     `Without chat: the newest ${SCAN_PAGES_PER_CHAT * 50} messages of each of the ${SCAN_CHATS} most recently active chats; the answer is complete only after coverage.completeAfter. With chat: the newest ${CHAT_PAGES * 50} messages of that chat, which must be among the 100 most recently active chats.`,
     "Group senders are given as masked number and reference only (the bridge returns no group sender names); a direct chat's sender is named after the chat.",
     "Your own messages, Orkestr assistant replies and system notices (group changes, calls, encryption notices) are left out. Media is reported by type only.",
+    "Every page reads the window again. If new messages moved it past the listing's start, the next page answers whatsapp_cursor_expired: start again without cursor.",
   ],
 };
 
@@ -155,11 +159,12 @@ async function readOrkestr(source, grant, { account, chat, sinceMs, before }, en
   const chats = await boundGroupChats(grant, env);
   let chatRaw = null;
   if (chat) {
-    chatRaw = [...chats.keys()].find((raw) => chatRef(account, raw) === chat) || null;
+    chatRaw = [...chats.keys()].find((raw) => chatRef(source.refKey, account, raw) === chat) || null;
     if (!chatRaw) fail("whatsapp_chat_not_found", 404);
   }
   const { records, coveredFromMs } = await readJournalIncoming(source, { account, chats, chatRaw, sinceMs, before });
-  return { records, coverage: { source: "orkestr_relay_journal", complete: !coveredFromMs, completeAfter: iso(coveredFromMs || sinceMs), groupsInScope: chat ? 1 : chats.size } };
+  return { records, windowMs: coveredFromMs || sinceMs - 1,
+    coverage: { source: "orkestr_relay_journal", complete: !coveredFromMs, completeAfter: iso(coveredFromMs || sinceMs), groupsInScope: chat ? 1 : chats.size } };
 }
 
 async function readGerman(source, { account, chat, sinceMs, before }, options) {
@@ -167,11 +172,13 @@ async function readGerman(source, { account, chat, sinceMs, before }, options) {
   let scan;
   let unscanned = [];
   if (chat) {
-    const found = list.chats.find((entry) => chatRef(account, entry.raw) === chat);
+    const found = list.chats.find((entry) => chatRef(source.refKey, account, entry.raw) === chat);
     if (!found) fail("whatsapp_chat_not_found", 404);
     scan = [found];
   } else {
-    const active = list.chats.filter((entry) => entry.lastMs >= sinceMs).sort((left, right) => right.lastMs - left.lastMs);
+    // A chat without a last-activity time may hold anything: read it like an active one.
+    const active = list.chats.filter((entry) => !entry.lastMs || entry.lastMs >= sinceMs)
+      .sort((left, right) => (right.lastMs || Infinity) - (left.lastMs || Infinity));
     scan = active.slice(0, SCAN_CHATS);
     unscanned = active.slice(SCAN_CHATS);
   }
@@ -183,13 +190,13 @@ async function readGerman(source, { account, chat, sinceMs, before }, options) {
   // after the newest such point, so the pages have no gaps.
   const listCut = !chat && list.listFull && list.chats.length > 0 && list.chats.at(-1).lastMs >= sinceMs;
   const holes = [sinceMs - 1];
-  if (unscanned.length) holes.push(unscanned[0].lastMs);
+  if (unscanned.length) holes.push(unscanned[0].lastMs || Date.now());
   if (listCut) holes.push(list.chats.at(-1).lastMs);
   const truncatedChats = [];
   const failedChats = [];
   results.forEach((result, index) => {
     const entry = scan[index];
-    const ref = { id: chatRef(account, entry.raw), name: entry.name };
+    const ref = { id: chatRef(source.refKey, account, entry.raw), name: entry.name };
     if (result.failed) {
       failedChats.push({ chat: ref, reason: result.failed });
       holes.push(entry.lastMs || Date.now());
@@ -204,7 +211,7 @@ async function readGerman(source, { account, chat, sinceMs, before }, options) {
     .filter((record) => record.t > cutoff && !seen.has(record.key) && seen.add(record.key))
     .sort(newestFirst);
   const complete = cutoff < sinceMs;
-  return { records, coverage: {
+  return { records, windowMs: cutoff, coverage: {
     source: "german_bridge_live",
     chatListObservedAt: iso(list.observedAtMs),
     complete,
@@ -247,6 +254,12 @@ export async function bridgeWhatsAppIncoming(principal, input = {}, env = proces
     }
   }
 
+  // Every page re-reads its window. If it now ends later than when the listing
+  // started (new messages pushed a busy chat's window, the active chats
+  // changed), older messages of this listing can no longer be reached: say so
+  // instead of ending the listing early.
+  if (read && cursor && read.windowMs > cursor.windowMs) fail("whatsapp_cursor_expired", 409);
+
   // The reads take time: a grant revoked or narrowed meanwhile gets nothing,
   // and a thread that left the grant takes its group's messages with it.
   const current = await whatsappGrant(principal, account, env);
@@ -255,7 +268,7 @@ export async function bridgeWhatsAppIncoming(principal, input = {}, env = proces
     const threads = new Set([...(await boundGroupChats(current, env)).values()].map((entry) => entry.threadId));
     records = records.filter((record) => threads.has(record.message.chat.threadId));
   }
-  const paged = page(records, { limit, account, chat, sinceMs });
+  const paged = page(records, { limit, account, chat, sinceMs, windowMs: read?.windowMs ?? sinceMs - 1 });
   return {
     format: WHATSAPP_INCOMING_FORMAT,
     account,
