@@ -23,6 +23,8 @@ pub(crate) struct RequestContext {
     pub id: String,
     upstream: Mutex<Vec<UpstreamCall>>,
     spans: Mutex<Vec<(&'static str, Duration)>>,
+    /// Rows (messages, replies, times...) the handler reported returning.
+    rows: Mutex<Option<u64>>,
 }
 
 /// Bounded so a pathological handler cannot grow a request's record.
@@ -34,6 +36,7 @@ impl RequestContext {
             id,
             upstream: Mutex::new(Vec::new()),
             spans: Mutex::new(Vec::new()),
+            rows: Mutex::new(None),
         }
     }
     pub fn upstream_calls(&self) -> Vec<UpstreamCall> {
@@ -42,6 +45,10 @@ impl RequestContext {
     /// Spans with the same name are summed (e.g. several store reads).
     pub fn spans(&self) -> Vec<(&'static str, Duration)> {
         self.spans.lock().map(|s| s.clone()).unwrap_or_default()
+    }
+    /// The rows reported for this request, if any handler reported them.
+    pub fn rows(&self) -> Option<u64> {
+        self.rows.lock().ok().and_then(|rows| *rows)
     }
 }
 
@@ -104,6 +111,18 @@ pub(crate) fn span(name: &'static str, started: Instant) {
             } else if spans.len() < MAX_ENTRIES {
                 spans.push((name, elapsed));
             }
+        }
+    }
+}
+
+/// Adds `count` to the rows the current request returns (a page's messages,
+/// replies or times), for its log line, `Server-Timing` and metrics. Several
+/// reports in one request are summed. No-op outside a request.
+pub(crate) fn rows(count: usize) {
+    if let Some(context) = current() {
+        if let Ok(mut rows) = context.rows.lock() {
+            let count = u64::try_from(count).unwrap_or(u64::MAX);
+            *rows = Some(rows.unwrap_or(0).saturating_add(count));
         }
     }
 }

@@ -16,7 +16,11 @@ fn project(r: &sqlx::sqlite::SqliteRow) -> Result<Project> {
     })
 }
 impl Store {
-    async fn scope(&self, owner: &OwnerId, conversation: &ConversationId) -> Result<(Scope, i64)> {
+    pub(crate) async fn scope(
+        &self,
+        owner: &OwnerId,
+        conversation: &ConversationId,
+    ) -> Result<(Scope, i64)> {
         let row =
             sqlx::query("SELECT project_id,sequence FROM conversations WHERE id=? AND owner_id=?")
                 .bind(conversation.to_string())
@@ -348,9 +352,7 @@ impl IntakeStore for Store {
             return Err(StoreError::Invalid);
         }
         let limit = limit.clamp(1, 100);
-        // An attempt retired for re-admission is shown once, as its successor.
-        let sql = format!("SELECT m.id,m.sequence,m.actor_kind,m.text,m.request_key,r.reply_to,{},{} FROM messages m LEFT JOIN message_reply_to r ON r.message_id=m.id {} WHERE m.conversation_id=? AND m.owner_id=? AND m.sequence>? AND m.sequence<=? AND {} ORDER BY m.sequence LIMIT ?", crate::message_revisions::SNAPSHOT_COLUMNS, crate::message_retries::COLUMN, crate::message_revisions::SNAPSHOT_JOINS, crate::message_retries::VISIBLE);
-        let mut rows = sqlx::query(&sql)
+        let mut rows = sqlx::query(&crate::snapshot_page::snapshot_sql(false))
             .bind(conversation.to_string())
             .bind(owner.to_string())
             .bind(after)
@@ -363,23 +365,7 @@ impl IntakeStore for Store {
         rows.truncate(limit as usize);
         let messages = rows
             .iter()
-            .map(|r| {
-                Ok(Message {
-                    message_id: MessageId(parse(r.get("id"))?),
-                    sequence: r.get("sequence"),
-                    actor_kind: r.get("actor_kind"),
-                    text: r.get("text"),
-                    reply_to: r
-                        .get::<Option<String>, _>("reply_to")
-                        .and_then(|json| serde_json::from_str(&json).ok()),
-                    origin: Some(message_origin(r.get("request_key")).into()),
-                    revisions: crate::message_revisions::snapshot_state(r),
-                    retry_of: r
-                        .get::<Option<String>, _>("retry_of")
-                        .map(|id| parse(id).map(MessageId))
-                        .transpose()?,
-                })
-            })
+            .map(crate::snapshot_page::snapshot_message)
             .collect::<Result<Vec<_>>>()?;
         Ok(ConversationSnapshot {
             conversation_id: conversation.clone(),

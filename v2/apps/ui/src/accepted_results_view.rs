@@ -113,7 +113,27 @@ pub fn AcceptedReplies(
             busy.set(true);
             notice.set("Loading accepted replies…".into());
             let mut cursor = cursor;
-            for _ in 0..CHAT_PAGES {
+            let mut pages = CHAT_PAGES;
+            // Opening the chat (or Refresh) reads the newest replies first,
+            // not every page from the start; anything newer arrives live.
+            if inline && cursor == 0 {
+                let wanted = || {
+                    mounted()
+                        && session_scope.read().is_current(owner)
+                        && read_ticket.get() == ticket
+                };
+                let newest = crate::accepted_results_newest::read(&id, channel, &wanted).await;
+                if !wanted() {
+                    return;
+                }
+                if let Some(rows) = newest {
+                    if chat_timeline::merge_replies(&mut collected.write(), &rows).is_ok() {
+                        cursor = collected.peek().keys().next_back().copied().unwrap_or(0);
+                        pages = 0;
+                    }
+                }
+            }
+            for _ in 0..pages {
                 let eval = start(json!({"conversation":id,"after":cursor.to_string()}), false);
                 channel.set(Some(eval));
                 let result = eval.join::<Value>().await;

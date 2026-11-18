@@ -496,3 +496,37 @@ fn production_metadata_journal_gaps_fail_atomically_and_retry_once() {
         assert_eq!(fingerprint(&again.unwrap()), fingerprint(&committed));
     }
 }
+
+#[test]
+fn the_newest_page_alone_equals_what_a_full_forward_read_keeps() {
+    use orkestr_v2_ui::newest_page;
+    let id = original().conversation_id.unwrap();
+    let sequences: Vec<i64> = (1..=150).collect();
+    // A forward read from the start: two pages, of which the projection keeps
+    // only the newest window.
+    let mut pages = VecDeque::from([
+        Ok::<_, String>(page(&sequences[..100], 150, Some(100))),
+        Ok(page(&sequences[100..], 150, None)),
+    ]);
+    let full = ready(reconcile(&id, 0, &Projection::default(), 0, |_| {
+        std::future::ready(pages.pop_front().expect("unexpected fetch"))
+    }))
+    .unwrap();
+    let opened = newest_page(&id, page(&sequences[50..], 150, None)).unwrap();
+    assert_eq!(fingerprint(&opened), fingerprint(&full));
+    assert_eq!(opened.watermark, 150);
+    assert_eq!(opened.messages.len(), 100);
+    // A short chat opens whole; the watermark may lie past its last message.
+    let short = newest_page(&id, page(&[3, 5], 9, None)).unwrap();
+    assert_eq!(short.watermark, 9);
+    assert_eq!(short.messages.keys().copied().collect::<Vec<_>>(), [3, 5]);
+    // Another chat, a forward cursor, more than one window, disorder, or a
+    // message past the watermark is refused (the chat then reads forward).
+    let other = "00000000-0000-4000-8000-0000000000ff";
+    assert!(newest_page(other, page(&[3], 9, None)).is_err());
+    assert!(newest_page(&id, page(&[3], 9, Some(3))).is_err());
+    assert!(newest_page(&id, page(&sequences[..101], 150, None)).is_err());
+    assert!(newest_page(&id, page(&[5, 3], 9, None)).is_err());
+    assert!(newest_page(&id, page(&[3, 3], 9, None)).is_err());
+    assert!(newest_page(&id, page(&[3, 10], 9, None)).is_err());
+}

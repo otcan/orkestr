@@ -2,6 +2,7 @@ mod about;
 mod acceptance_button;
 mod accepted_payloads_view;
 mod accepted_results_bridge;
+mod accepted_results_newest;
 mod accepted_results_view;
 mod archived_history_view;
 mod attachment_keys_view;

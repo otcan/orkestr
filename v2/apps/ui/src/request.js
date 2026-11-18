@@ -1,6 +1,6 @@
 // Audited platform bridge: only fixed same-origin API paths from Rust.
 const input = await dioxus.recv();
-const route = /^\/api\/v2\/(?:setup|browser\/session|projects|conversations\/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(?:\/messages|\/message-attachments)?)(?:\?after=[0-9]+&limit=100)?$/;
+const route = /^\/api\/v2\/(?:setup|browser\/session|projects|conversations\/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(?:\/messages|\/message-attachments)?)(?:\?after=[0-9]+&limit=100|\?before=[1-9][0-9]{0,18}&limit=100)?$/;
 // Owner management of one conversation: settings, timers, desktops, posts.
 const manage = /^\/api\/v2\/conversations\/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\/(?:settings|messages\/[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}\/revisions|provider-handoffs(?:\/[A-Za-z0-9._:-]{1,128})?|timers|desktops(?:\/[a-z0-9_.-]{1,128}\/open)?|desktop-binding|message-times\?after=[0-9]{1,18}&limit=200|posts\?limit=50)$/;
 // Sidebar observation, read marks, linked V1 history and input, old V1 deep links.

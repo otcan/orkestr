@@ -64,3 +64,25 @@ where
         .to_string()
         .into())
 }
+
+/// Opening a chat: the newest page (`?before=9223372036854775807&limit=100`)
+/// as the whole projection, instead of every page from the start (the
+/// projection keeps only the newest `WINDOW` messages, so the older pages
+/// were read and dropped). The page must name this conversation, end at its
+/// watermark (no forward cursor) and hold at most one window of ascending
+/// messages; the live stream then continues from that watermark.
+pub fn newest_page(id: &str, page: ConversationSnapshot) -> Result<Projection, &'static str> {
+    if page.conversation_id.to_string() != id
+        || page.next_cursor.is_some()
+        || page.messages.len() > crate::WINDOW
+        || page
+            .messages
+            .windows(2)
+            .any(|pair| pair[0].sequence >= pair[1].sequence)
+    {
+        return Err("Invalid newest snapshot page");
+    }
+    let mut projection = Projection::default();
+    projection.page(page)?;
+    Ok(projection)
+}

@@ -1,25 +1,30 @@
 //! Request observability: a request id on every request (returned in
 //! `x-request-id`, sent upstream to V1 and written to every log line), one
 //! structured JSON log line per request with the route template, status,
-//! duration and upstream timings, a slow-request warning above a threshold,
-//! and per-route latency and error metrics for the local-only metrics
-//! listener. Logs never contain bodies, query strings, cookies, tokens or
-//! identifiers from the path: only the matched route template.
+//! duration, response bytes, returned rows and upstream timings, a
+//! `Server-Timing` header with the same timings, a slow-request warning above
+//! a threshold, and per-route latency, size and error metrics for the
+//! local-only metrics listener and the owner's request metrics page. Logs
+//! never contain bodies, query strings, cookies or tokens; of the path they
+//! keep the matched route template and the conversation id (so a slow chat
+//! can be found), never other identifiers.
 mod context;
 mod log;
 pub mod metrics;
 pub mod metrics_http;
+pub(crate) mod owner_http;
 #[cfg(test)]
 pub(crate) mod tests;
 
 use axum::{
+    body::HttpBody,
     extract::{MatchedPath, Request},
     http::{header, HeaderName, HeaderValue},
     middleware::Next,
     response::Response,
     Router,
 };
-pub(crate) use context::{request_id, scoped, span, upstream, RequestContext};
+pub(crate) use context::{request_id, rows, scoped, span, upstream, RequestContext};
 use std::{
     sync::{Arc, LazyLock, Mutex},
     time::{Duration, Instant},
@@ -146,6 +151,20 @@ fn label(route: Option<String>, path: &str) -> String {
     }
 }
 
+/// The conversation a request is about: the path segment matched by the
+/// `{id}` or `{conversation}` parameter that follows `conversations` in the
+/// route template. Only a UUID is accepted, so nothing else reaches logs.
+pub(crate) fn conversation_of(route: &str, path: &str) -> Option<uuid::Uuid> {
+    let mut previous = "";
+    for (template, actual) in route.split('/').zip(path.split('/')) {
+        if previous == "conversations" && matches!(template, "{id}" | "{conversation}") {
+            return uuid::Uuid::parse_str(actual).ok();
+        }
+        previous = template;
+    }
+    None
+}
+
 /// Outer layer: id, timing, logging and metrics for every request.
 pub(crate) async fn observe(mut request: Request, next: Next) -> Response {
     let observer = Observer::global();
@@ -162,14 +181,26 @@ pub(crate) async fn observe(mut request: Request, next: Next) -> Response {
     let status = response.status().as_u16();
     let calls = context.upstream_calls();
     let spans = context.spans();
+    let rows = context.rows();
     let streaming = response
         .headers()
         .get(header::CONTENT_TYPE)
         .is_some_and(|v| v.as_bytes().starts_with(b"text/event-stream"));
+    let bytes = HttpBody::size_hint(response.body()).exact();
+    let conversation = conversation_of(&route, &path);
     // A streaming response's handler time is its setup, not the stream.
-    observer
-        .metrics
-        .record(method.as_str(), &route, status, elapsed, streaming);
+    observer.metrics.record_request(
+        method.as_str(),
+        &route,
+        status,
+        elapsed,
+        streaming,
+        metrics::Detail {
+            bytes,
+            rows,
+            conversation,
+        },
+    );
     for call in &calls {
         observer
             .metrics
@@ -179,11 +210,12 @@ pub(crate) async fn observe(mut request: Request, next: Next) -> Response {
     if let Ok(value) = HeaderValue::from_str(&id) {
         headers.insert(REQUEST_ID.clone(), value);
     }
-    if let Ok(value) = HeaderValue::from_str(&log::server_timing(elapsed, &calls, &spans)) {
+    if let Ok(value) = HeaderValue::from_str(&log::server_timing(elapsed, &calls, &spans, rows)) {
         headers.insert(HeaderName::from_static("server-timing"), value);
     }
     let slow = !streaming && elapsed >= observer.slow;
     if observer.access.shows(method.as_str(), status, slow) {
+        let conversation = conversation.map(|c| c.to_string());
         log::request(&log::RequestLine {
             id: &id,
             method: method.as_str(),
@@ -194,6 +226,9 @@ pub(crate) async fn observe(mut request: Request, next: Next) -> Response {
             streaming,
             upstream: &calls,
             spans: &spans,
+            conversation: conversation.as_deref(),
+            bytes,
+            rows,
         });
     }
     response

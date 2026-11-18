@@ -133,6 +133,21 @@ test('canonical snapshot pagination remains a relative API request',async()=>{
 });
 
 
+test('a chat opens with only its newest snapshot page',async()=>{
+    const conversation = '/api/v2/conversations/00000000-0000-4000-8000-000000000003';
+    for (const path of [`${conversation}?before=9223372036854775807&limit=100`, `${conversation}?before=42&limit=100`]) {
+        const result = await execute({recv:async()=>({...base,method:'GET',path,body:null})},async(actual)=>{
+            assert.equal(actual,path);
+            return new Response('{"messages":[]}');
+        });
+        assert.deepEqual(result.body,{messages:[]});
+    }
+    for (const path of [`${conversation}?before=0&limit=100`, `${conversation}?before=-1&limit=100`, `${conversation}?before=1&limit=50`,
+        `${conversation}?before=1&after=1&limit=100`, `${conversation}?before=12345678901234567890&limit=100`, `${conversation}/messages?before=1&limit=100x`]) {
+        await assert.rejects(execute({recv:async()=>({...base,method:'GET',path,body:null})},()=>assert.fail('fetch must not run')),/Invalid API path/);
+    }
+});
+
 test('cookie writes carry CSRF header without Authorization or token URLs',async()=>{
     await execute({recv:async()=>({...base,path:'/api/v2/projects',csrf:'synthetic-csrf'})},async(path,options)=>{
         assert.equal(path,'/api/v2/projects');

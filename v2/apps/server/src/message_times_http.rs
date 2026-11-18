@@ -133,6 +133,7 @@ pub(crate) async fn read(
             "Message times unavailable",
         ));
     }
+    crate::observability::rows(page.times.len());
     Ok(Json(page).into_response())
 }
 

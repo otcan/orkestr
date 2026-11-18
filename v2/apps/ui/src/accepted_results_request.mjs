@@ -1,5 +1,9 @@
-export async function acceptedResults({conversation, after, signal}, fetcher = fetch) {
+// A forward page of 20 after `after`, or (`before` set, `after` "0") the
+// newest page of 50 below `before`, which a chat opens with.
+export async function acceptedResults({conversation, after, before, signal}, fetcher = fetch) {
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(conversation) || typeof after !== 'string' || !/^(0|[1-9][0-9]{0,18})$/.test(after) || BigInt(after) > 9223372036854775807n) throw new Error('Invalid history cursor');
+    if (before !== undefined && (typeof before !== 'string' || !/^[1-9][0-9]{0,18}$/.test(before) || BigInt(before) > 9223372036854775807n || after !== '0')) throw new Error('Invalid history cursor');
+    const query = before === undefined ? `after_sequence=${after}&limit=20` : `before_sequence=${before}&limit=50`;
     const controller = new AbortController();
     const abort = () => controller.abort();
     signal?.addEventListener('abort', abort, {once:true});
@@ -7,7 +11,7 @@ export async function acceptedResults({conversation, after, signal}, fetcher = f
     const timeout = setTimeout(abort, 10000);
     let reader;
     try {
-        const response = await fetcher(`/api/v2/conversations/${conversation}/accepted-results?after_sequence=${after}&limit=20`, {
+        const response = await fetcher(`/api/v2/conversations/${conversation}/accepted-results?${query}`, {
             credentials:'same-origin', cache:'no-store', redirect:'error', signal:controller.signal,
         });
         if (response.status !== 200) { await response.body?.cancel(); return {status:response.status,text:''}; }

@@ -49,6 +49,7 @@ pub use production_runtime::MetadataFenceDiagnostics;
 mod replay;
 mod runtime;
 pub mod service_credentials;
+mod snapshot_page;
 pub use production_runtime::DeskLoginSetup;
 pub use production_runtime::{CompletedDeskLogin, DeskLoginOutcome};
 pub use production_runtime::{
