@@ -253,6 +253,13 @@ pub fn Workspace(
     let activity = header
         .as_ref()
         .and_then(|e| orkestr_v2_ui::sidebar::activity_label(&e.activity));
+    // The heading's model line is read again after chat settings close.
+    let models_key = format!(
+        "{}-{}-{}",
+        current(),
+        tab() == Tab::Settings,
+        session_scope.read().generation()
+    );
     rsx! {
         div { class: "workspace", "data-sidebar-open": "{sidebar}", "data-sidebar-collapsed": "{collapsed}",
             crate::conversation_sidebar::ConversationSidebar {
@@ -335,6 +342,13 @@ pub fn Workspace(
                                 p { class: "heading-activity", role: "status", "{label}" }
                             } else if let Some(entry) = header.as_ref().filter(|e| e.read_only) {
                                 p { class: "heading-meta", if entry.coordinator { "On V1 · coordinator attached" } else { "On V1 · read-only" } }
+                            } else if linked().is_none() {
+                                crate::model_settings_view::HeadingModels { key: "{models_key}", conversation: current(), session_scope,
+                                    onopen: move |_| {
+                                        execution.write().select(&current(), "");
+                                        tab.set(Tab::Settings);
+                                    }
+                                }
                             }
                         }
                         if linked().is_none() {

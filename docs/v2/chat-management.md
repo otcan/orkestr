@@ -5,7 +5,7 @@ it lives in the Rust UI.
 
 | V1 web UI | Native or migrated chat (V2 state) | Linked V1 chat (V1 API through the server) |
 | --- | --- | --- |
-| Model and reasoning effort (model details dialog) | Settings tab: provider, model, effort (`PUT …/settings`, revision-guarded) | Settings: model and effort from V1's model list (`/api/v2/v1-threads/{t}/settings` → V1 `model-settings`) |
+| Model and reasoning effort (model details dialog) | Chat heading: the Deep and Fast models at a glance (opens Settings). Settings tab, Models: provider, model and effort of Deep and Fast and the model the last Deep reply used; Deep is changed in the thread settings (`PUT …/settings`), Fast in its own form (`PUT …/fast/settings`), both revision-guarded | Settings: model and effort from V1's model list (`/api/v2/v1-threads/{t}/settings` → V1 `model-settings`) |
 | Executor switch (Codex/Claude) | Settings tab: provider (applies at the next turn with a handoff) | not offered (see below) |
 | NO_REPLY, reply prefix and footer | Settings tab | Settings: reply prefix (WhatsApp options) |
 | Thread timers: list, add, pause/resume, delete | Timers tab: list; pause (disable), resume (enable), stop, rollback | Timers: list, create, edit, pause, resume, delete (`…/timers`) |

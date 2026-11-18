@@ -608,9 +608,17 @@ export const scenarios = [
     await providerSignIn({page,state,clickWithin,waitText,screenshot,label});
     await clickText('Back to chat');
     await page.waitForFunction(() => [...document.querySelectorAll('.conversation-nav button')].some(b => b.textContent.trim() === 'Chat settings'), {timeout:15000});
-    await clickText('Chat settings');
+    // The heading names the chat's Deep and Fast models and opens chat settings.
+    await page.waitForFunction(() => document.querySelector('.heading-models')?.textContent === 'Deep synthetic-model · medium | Fast gpt-6-luna', {timeout:15000});
+    assert.match(await page.$eval('.heading-models', n => n.title), /^Deep: codex, model synthetic-model, effort medium\. Fast: codex, model gpt-6-luna \(default\), effort low \(default\)\./);
+    await page.$eval('.heading-models', b => b.click());
     await page.waitForSelector('#settings-model');
+    assert.equal(new URL(page.url()).hash, `#conversation/${A}/settings`);
     assert.equal(await page.$eval('#settings-model', n => n.value), 'synthetic-model');
+    assert.deepEqual(await page.$$eval('#settings-models option', o => o.map(n => n.value)).then(v => v[0]), 'gpt-6.1-sol', 'Sol is the first Deep suggestion');
+    const facts = role => page.$eval(`.model-role[aria-label="${role} model"]`, n => [...n.querySelectorAll('dd')].map(d => d.textContent));
+    assert.deepEqual(await facts('Deep'), ['codex', 'synthetic-model', 'medium', 'not reported yet']);
+    assert.deepEqual(await facts('Fast'), ['codex', 'gpt-6-luna (default)', 'low (default)']);
     await page.select('#settings-effort', 'high');
     await page.$eval('#settings-prefix', n => { n.value = ''; });
     await page.type('#settings-prefix', 'synthetic-new:');
@@ -620,6 +628,18 @@ export const scenarios = [
     await waitText('Saved (revision 3)');
     assert.deepEqual(state.settingsPuts.at(-1), { expected_revision: 2, provider: 'codex', model: 'synthetic-model', reasoning_effort: 'high',
       honor_no_reply: true, reply_prefix: 'synthetic-new:', reply_footer: null, review_before_accepting: false });
+    // The model summary follows the saved Deep effort.
+    await page.waitForFunction(() => document.querySelector('.model-role[aria-label="Deep model"]')?.textContent.includes('high'), {timeout:15000});
+    // Fast has its own model and effort (FAST_ROLE_SETTINGS.md); the change
+    // leaves the parallel-replies switch as it is.
+    await page.type('#fast-model', 'gpt-6-sol');
+    await page.select('#fast-effort', 'medium');
+    await clickText('Save Fast model');
+    await waitText('Fast model saved (revision 1)');
+    assert.deepEqual(state.fastSettingsPuts.at(-1), { expected_revision: 0, model: 'gpt-6-sol', reasoning_effort: 'medium' });
+    assert.equal(state.fastSettings.parallel_replies, false);
+    await page.waitForFunction(() => document.querySelector('.model-role[aria-label="Fast model"]')?.textContent.includes('gpt-6-sol'), {timeout:15000});
+    assert.equal(await page.$eval('#fast-model', n => n.value), 'gpt-6-sol');
     // Desktops of the chat: binding and current lease.
     await waitText('synthetic-desk');
     await clickWithin('[aria-label="Available desktops"]', 'Open desktop');

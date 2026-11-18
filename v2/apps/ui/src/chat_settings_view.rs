@@ -5,13 +5,15 @@ use orkestr_v2_contracts::{
 use orkestr_v2_ui::{
     chat_settings::{slugs, SettingsForm},
     desk_presentation::DeskSharing,
+    model_settings::deep_suggestions,
     session_scope::SessionScope,
 };
 use serde_json::{json, Value};
 
-/// Settings of the open native conversation: thread settings (provider,
-/// model, effort, NO_REPLY, prefix/footer, review before accepting) and its V1 desktop binding with the
-/// current leases. Changes are explicit saves guarded by revision.
+/// Settings of the open native conversation: the Deep and Fast models,
+/// thread settings (provider, Deep model and effort, NO_REPLY, prefix/footer,
+/// review before accepting) and its V1 desktop binding with the current
+/// leases. Changes are explicit saves guarded by revision.
 #[component]
 pub fn ChatSettings(
     conversation: String,
@@ -22,6 +24,9 @@ pub fn ChatSettings(
     // Account and server-wide settings moved to Orkestr settings (ORK-789); an
     // old bookmark of this page still finds them from here.
     let open_settings = use_context::<crate::GlobalViews>().settings;
+    // Bumped when the thread settings are saved, so the model summary shows
+    // the new Deep selection.
+    let saved = use_signal(|| 0_u32);
     rsx! {
         section { class: "chat-settings", "aria-label": "Chat settings",
             h2 { "Chat settings" }
@@ -29,7 +34,9 @@ pub fn ChatSettings(
                 p { "Applies only to this chat. Your password, credentials, provider sign-in and installation details are shared by all chats and are in Orkestr settings." }
                 button { r#type: "button", onclick: move |_| { let mut open = open_settings; open += 1; }, "Open Orkestr settings" }
             }
-            ThreadSettings { conversation: conversation.clone(), csrf: csrf.clone(), session_scope, onexpired }
+            crate::model_settings_view::ModelSummary { conversation: conversation.clone(), csrf: csrf.clone(), session_scope, refresh: saved, onexpired }
+            ThreadSettings { conversation: conversation.clone(), csrf: csrf.clone(), session_scope, onexpired,
+                onsaved: move |_| { let mut saved = saved; saved += 1; } }
             crate::provider_handoff_view::ProviderHandoff { conversation: conversation.clone(), csrf: csrf.clone(), session_scope, onexpired }
             Desktops { conversation: conversation.clone(), csrf: csrf.clone(), session_scope, onexpired }
             crate::restricted_view::RestrictedPanel { conversation, csrf, session_scope, onexpired }
@@ -43,6 +50,7 @@ fn ThreadSettings(
     csrf: String,
     session_scope: Signal<SessionScope>,
     onexpired: EventHandler<()>,
+    onsaved: EventHandler<()>,
 ) -> Element {
     let owner = session_scope.read().generation();
     let mut form = use_signal(|| None::<SettingsForm>);
@@ -90,7 +98,7 @@ fn ThreadSettings(
                 if !session_scope.read().is_current(owner) { return; }
                 busy.set(false);
                 match result {
-                    Ok(value) => { form.set(Some(SettingsForm::from_settings(&value))); status.set(format!("Saved (revision {}). Applies from the next turn.", value.revision)); }
+                    Ok(value) => { form.set(Some(SettingsForm::from_settings(&value))); status.set(format!("Saved (revision {}). Applies from the next turn.", value.revision)); onsaved.call(()); }
                     Err(error) if error.status == 401 => onexpired.call(()),
                     Err(error) if error.status == 409 => { status.set(format!("{} Reloaded the current settings.", error.message)); reload += 1; }
                     Err(error) => status.set(error.message),
@@ -108,7 +116,7 @@ fn ThreadSettings(
                     }
                 }
                 div {
-                    label { r#for: "settings-effort", "Effort" }
+                    label { r#for: "settings-effort", "Deep effort" }
                     select { id: "settings-effort", onchange: move |e| if let Some(f) = form.write().as_mut() { f.effort = e.value(); },
                         option { value: "", selected: current.effort.is_empty(), "default" }
                         for effort in efforts.iter() {
@@ -117,9 +125,13 @@ fn ThreadSettings(
                     }
                 }
             }
-            label { r#for: "settings-model", "Model" }
-            input { id: "settings-model", value: "{current.model}", placeholder: "Installation default",
+            label { r#for: "settings-model", "Deep model" }
+            input { id: "settings-model", value: "{current.model}", list: "settings-models", placeholder: "Installation default",
                 oninput: move |e| if let Some(f) = form.write().as_mut() { f.model = e.value(); } }
+            datalist { id: "settings-models",
+                for model in deep_suggestions(current.provider) { option { value: *model } }
+            }
+            p { class: "field-help", "Pick or type a model name; leave it empty to use the installation default." }
             label { class: "checkbox",
                 input { r#type: "checkbox", checked: current.honor_no_reply, onchange: move |e| if let Some(f) = form.write().as_mut() { f.honor_no_reply = e.checked(); } }
                 "Never deliver an exact NO_REPLY answer"

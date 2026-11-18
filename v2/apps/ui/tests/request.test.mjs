@@ -51,6 +51,19 @@ test('provider handoff and receipt keep scoped cookie paths and mutation CSRF', 
         await assert.rejects(execute({recv:async()=>({...base,path})},()=>assert.fail('fetch must not run')),/Invalid API path/);
 });
 
+test('chat model reads and the Fast model change keep fixed conversation paths and CSRF', async () => {
+    const root='/api/v2/conversations/00000000-0000-4000-8000-000000000001';
+    for(const [method,path] of [['GET',root+'/settings'],['GET',root+'/fast/settings'],['PUT',root+'/fast/settings'],['GET',root+'/execution']]) {
+        await execute({recv:async()=>({...base,method,path,csrf:'synthetic-csrf',body:method==='PUT'?{expected_revision:0,model:'synthetic-model',reasoning_effort:'low'}:null})},async(actual,options)=>{
+            assert.equal(actual,path);assert.equal(options.credentials,'same-origin');
+            assert.equal(options.headers['x-orkestr-csrf'],method==='PUT'?'synthetic-csrf':undefined);
+            assert.equal(options.headers.Authorization,undefined);return Response.json({ok:true});
+        });
+    }
+    for(const path of [root+'/fast/settings/..',root+'/fast/%2e%2e',root+'/fast/stop',root+'/execution?run_id=synthetic',root+'/fast/execution','/api/v2/conversations/not-a-uuid/fast/settings'])
+        await assert.rejects(execute({recv:async()=>({...base,method:'GET',path})},()=>assert.fail('fetch must not run')),/Invalid API path/);
+});
+
 test('provider sign-in uses fixed paths with CSRF on every action', async () => {
     const root='/api/v2/provider-sign-in';
     const allowed=[['GET',root],...['codex','claude'].flatMap(p=>['start','code','cancel','sign-out'].map(a=>['POST',`${root}/${p}/${a}`]))];
