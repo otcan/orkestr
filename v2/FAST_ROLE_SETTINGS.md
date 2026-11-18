@@ -33,6 +33,10 @@ another Fast run of the window is live) reports `"concurrent_fast": true` in
 adapter then marks the exported reply `quoteSource`, so WhatsApp quotes the
 source message and out-of-order replies stay attributable.
 
+The web UI shows the Fast model and effort next to Deep's in the chat heading
+and under Chat settings, Models, where the owner changes them. Its update
+always omits `parallel_replies`, so the kill switch keeps its value.
+
 A repeat with the same values and preceding revision is idempotent. Other stale
 updates return `fast_settings_revision_mismatch`. Unknown fields and malformed or
 policy-denied models are rejected. Existing owner authentication and browser CSRF

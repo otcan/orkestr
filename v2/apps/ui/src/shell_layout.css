@@ -162,6 +162,9 @@
 
 /* A chat's published site (ORK-834): its newest live site in a new tab, and
    "+N" for the chat's other sites on the Sites page. */
+/* The chat's Deep and Fast models under its title; opens chat settings. */
+.heading-models { display: block; max-width: 100%; min-height: 0; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--muted); font-size: .76rem; line-height: 1.3; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.heading-models:hover:not(:disabled) { background: transparent; color: var(--accent-text); text-decoration: underline; }
 .heading-site { display: inline-flex; flex: none; align-items: center; gap: .25rem; }
 .heading-site-link { display: inline-flex; align-items: center; gap: .3rem; min-height: 2.4rem; padding: .2rem .8rem; border: 1px solid var(--border); border-radius: 1.2rem; font-size: .82rem; font-weight: 600; color: var(--accent-text); background: var(--surface); text-decoration: none; }
 .heading-site-link:hover { background: var(--accent-soft); border-color: transparent; }

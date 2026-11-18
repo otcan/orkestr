@@ -45,6 +45,7 @@ mod memory_transport;
 mod memory_view;
 mod message_actions_view;
 mod message_time_view;
+mod model_settings_view;
 mod new_whatsapp_chat;
 mod orkestr_settings_view;
 mod outbox_driver;
