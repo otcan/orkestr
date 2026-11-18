@@ -50,13 +50,15 @@ async fn real_reader(root: &FsPath, conversation: &ConversationId) -> RealReader
         .env("PYTHONDONTWRITEBYTECODE", "1")
         .spawn()
         .expect("python3 runs the workspace reader");
-    for _ in 0..200 {
-        if socket.exists() {
+    // Listening, not only bound: a probe connection is accepted (and dropped).
+    let listening = || std::os::unix::net::UnixStream::connect(&socket).is_ok();
+    for _ in 0..400 {
+        if listening() {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     }
-    assert!(socket.exists(), "the workspace reader started");
+    assert!(listening(), "the workspace reader started");
     RealReader { child, socket }
 }
 
@@ -71,7 +73,7 @@ async fn the_real_reader_confines_every_request_to_the_folder() {
     let outside = root.join("outside");
     std::fs::create_dir_all(pinned.join("docs")).unwrap();
     std::fs::create_dir_all(&outside).unwrap();
-    std::fs::write(outside.join("private.txt"), "outside the folder").unwrap();
+    std::fs::write(outside.join("private.txt"), "synthetic private bytes").unwrap();
     std::fs::write(pinned.join("docs/plan.md"), "# Plan\n").unwrap();
     std::fs::write(pinned.join(".env"), "SECRET=1").unwrap();
     std::os::unix::fs::symlink(&outside, pinned.join("escape")).unwrap();
@@ -136,7 +138,7 @@ async fn the_real_reader_confines_every_request_to_the_folder() {
             (403, "workspace_path_outside"),
             "{route} {path}"
         );
-        assert!(!String::from_utf8_lossy(&reply.body).contains("outside the folder"));
+        assert!(!String::from_utf8_lossy(&reply.body).contains("synthetic private bytes"));
     }
     // A harmless name linked to a protected file stays protected.
     let reply = get(&state, &url(&case, "/file", "settings"), &[&owner]).await;
