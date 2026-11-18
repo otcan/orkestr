@@ -47,6 +47,11 @@ export async function target(threadId, grant, scope, env) {
   return thread;
 }
 
+// The threads a checked grant may observe now (ownership and scope re-evaluated).
+export async function observableBridgeThreads(grant, env = process.env) {
+  return (await listThreads(env)).filter(thread => allowed(thread, grant, "observe", env));
+}
+
 export async function listBridgeThreads(principal, env = process.env) {
   const grant = await authorization(principal, env);
   const { currentCursor: checkpoint } = await threadBridgeChanges(grant.ownerUserId, { limit: 1 }, env);

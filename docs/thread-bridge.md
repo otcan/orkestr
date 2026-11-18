@@ -251,7 +251,8 @@ server for clients such as ChatGPT plugins:
 
 - `POST /mcp` (Streamable HTTP, stateless) with tools `list_threads`,
   `read_thread`, `read_changes`, `comment_on_thread`, `send_message`,
-  `get_thread_status`, `wait_for_reply` and `get_provider_quotas`.
+  `get_thread_status`, `wait_for_reply`, `get_provider_quotas` and
+  `list_incoming_whatsapp_messages`.
 - `get_provider_quotas` (read-only, optional `provider`: `codex` or
   `claude`) returns the owner's Codex and Claude subscription quota from the
   same snapshot as the WhatsApp footer and `GET /api/quota/providers`; see
@@ -266,6 +267,16 @@ server for clients such as ChatGPT plugins:
   reports provider, model and quota failures). The consent page names the
   quota readings for connections approved from now on; revoking a connection
   removes this access with the rest.
+- `list_incoming_whatsapp_messages` (read-only, `account`: `orkestr` or
+  `german`) returns recent messages other people sent to one of the owner's
+  connected WhatsApp accounts; see [whatsapp-incoming.md](whatsapp-incoming.md).
+  It needs `threads:read`, a grant whose `observe` is `"all"`, and the grant
+  field `whatsappRead` naming that account. Unlike the quota readings this is
+  its own consent: a personal account is not thread data. The consent page
+  lists the owner's enrolled accounts and approving grants exactly those;
+  connections approved earlier get `bridge_whatsapp_not_granted` until they
+  reconnect or the operator records the owner's approval in their grant. The
+  grant and thread ownership are checked again after the read.
 - Messaging (`thread-bridge-messaging.js`) is a separate permission: OAuth
   scope `threads:message` plus grant field `message` (`"all"` or thread IDs).
   `send_message` queues input (`source: thread_bridge_message`, labelled with
