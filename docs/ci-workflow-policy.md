@@ -16,6 +16,20 @@ below), local/reusable actions and secret expressions. Build runs
 the checker before compilation; ordinary test shards include policy fixtures.
 Fixtures are parsed only: no synthetic credential or untrusted action executes.
 
+## Hosted runner image
+
+GitHub-hosted jobs run on `ubuntu-24.04` (x64) and `ubuntu-24.04-arm`, the
+Ubuntu release of the production host and of the AWS runner image. The policy
+rejects floating labels such as `ubuntu-latest`. On 2026-11-18
+`ubuntu-latest` moved to Ubuntu 26.04 (Python 3.14, Bubblewrap 0.11, libffi
+3.5) without a change in this repository, and V2 tests that use the system
+`/usr/bin/python3` failed on unrelated pull requests. `actions/setup-python`
+would not help: the worker sandbox runs `/usr/bin/python3` from root-owned
+paths, never a tool-cache Python. The Rust dependency cache key also does not
+include the Ubuntu release, so mixed images would share build outputs. Move to
+a newer release deliberately, together with the production host: change the
+labels here, in `scripts/security/workflow-policy.mjs` and in the AWS image.
+
 ## Replacing superseded checks
 
 GitHub-hosted runners are shared, and most of a run's time is spent waiting

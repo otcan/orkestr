@@ -9,7 +9,7 @@ const fixture = `on: [pull_request, push]
 permissions: {contents: read}
 jobs:
   check:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@${actionPins["actions/checkout"]}
         with: {persist-credentials: false}
@@ -32,14 +32,14 @@ for (const [name, before, after] of [
   ["OIDC token", "contents: read", "contents: read, id-token: write"],
   ["privileged event", "pull_request, push", "pull_request_target"],
   ["workflow run event", "pull_request, push", "workflow_run"],
-  ["self hosted runner", "ubuntu-latest", "self-hosted"],
-  ["dynamic runner", "ubuntu-latest", "${{ matrix.runner }}"],
+  ["self hosted runner", "ubuntu-24.04", "self-hosted"],
+  ["dynamic runner", "ubuntu-24.04", "${{ matrix.runner }}"],
   ["duplicate key", "permissions: {contents: read}", "permissions: {contents: read}\npermissions: {contents: write}"],
   ["anchor", "{contents: read}", "&policy {contents: read}"],
   ["local action bypass", `actions/checkout@${actionPins["actions/checkout"]}`, "./unreviewed"],
   ["secret expression", "echo fixture", "echo '${{ secrets.TOKEN }}'"],
-  ["job permission escalation", "runs-on: ubuntu-latest", "runs-on: ubuntu-latest\n    permissions: write-all"],
-  ["ignored gate", "runs-on: ubuntu-latest", "runs-on: ubuntu-latest\n    continue-on-error: true"],
+  ["job permission escalation", "runs-on: ubuntu-24.04", "runs-on: ubuntu-24.04\n    permissions: write-all"],
+  ["ignored gate", "runs-on: ubuntu-24.04", "runs-on: ubuntu-24.04\n    continue-on-error: true"],
 ]) test(`rejects ${name}`, () => assert.throws(() => validateWorkflow(fixture.replace(before, after)), /workflow_/));
 
 const attestFixture = `on: [pull_request, push]
@@ -47,7 +47,7 @@ permissions: {contents: read}
 jobs:
   provenance:
     if: \${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       id-token: write
@@ -80,7 +80,7 @@ permissions: {contents: read}
 jobs:
   image-publish:
     if: ${publishGate}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       packages: write
@@ -132,7 +132,7 @@ permissions: {contents: read}
 jobs:
   image-publish:
     if: ${v2PublishGate}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       packages: write
@@ -166,7 +166,7 @@ for (const [name, before, after] of [
   assert.notEqual(source, v2PublishFixture, `fixture replacement for ${name} did not apply`);
   assert.throws(() => validateWorkflow(source, "v2-publish.yml"), /^Error: workflow_(?!yaml)/);
 });
-test("packages write is rejected on a job that is not a publish job", () => assert.throws(() => validateWorkflow(fixture.replace("runs-on: ubuntu-latest", "runs-on: ubuntu-latest\n    permissions: {contents: read, packages: write}")), /workflow_/));
+test("packages write is rejected on a job that is not a publish job", () => assert.throws(() => validateWorkflow(fixture.replace("runs-on: ubuntu-24.04", "runs-on: ubuntu-24.04\n    permissions: {contents: read, packages: write}")), /workflow_/));
 test("publish run allowlist accepts docker/builtins only", () => {
   assert.equal(publishRunAllowed("set -euo pipefail\n[[ \"$GITHUB_REF_NAME\" =~ ^v[0-9A-Za-z._-]+$ ]]\ndocker tag a b"), true);
   for (const run of ["docker exec c sh", "sh -c 'docker push x'", "bash script.sh", "./publish.sh", "eval \"$X\"", undefined])
@@ -275,7 +275,7 @@ test("secret scanning executes immutable base policy, not candidate scanner or s
 
 const iosFixture = fixture
   .replace("on: [pull_request, push]", "on:\n  pull_request: {branches: ['v2/**']}\n  push: {branches: ['v2/**']}")
-  .replace("ubuntu-latest", "macos-15");
+  .replace("ubuntu-24.04", "macos-15");
 test("pinned macOS runner is allowed only in the dedicated v2 iOS workflow", () => {
   assert.deepEqual(validateWorkflow(iosFixture, "v2-ios.yml"), { jobs: 1, actions: 1 });
   for (const filename of ["", "ci.yml", "v2-rust.yml", "other-ios.yml", "v2-ios.yaml"])
@@ -299,7 +299,7 @@ for (const [name, before, after] of [
 });
 
 // ORK-774: ephemeral AWS runners only through the exact reviewed selections.
-const awsFixture = (selection) => fixture.replace("runs-on: ubuntu-latest", `runs-on: ${JSON.stringify(selection)}`);
+const awsFixture = (selection) => fixture.replace("runs-on: ubuntu-24.04", `runs-on: ${JSON.stringify(selection)}`);
 test("exact AWS runner selections pass only in the V2 build and test workflows", () => {
   for (const selection of Object.values(awsRunnerSelections)) {
     for (const filename of ["v2-rust.yml", "v2-image.yml", "v2-browser.yml"])
@@ -315,14 +315,21 @@ test("AWS runner selections keep forks, other events and the kill switch on GitH
     assert.match(selection, /github\.event_name == 'pull_request' && github\.event\.pull_request\.head\.repo\.full_name == 'otcan\/orkestr'/);
     assert.doesNotMatch(selection, /pull_request_target|workflow_run|merge_group/);
   }
-  assert.match(x64, /fromJSON\('\["self-hosted","orkestr-aws-x64"\]'\) \|\| 'ubuntu-latest' \}\}$/);
-  assert.match(arm64, /fromJSON\('\["self-hosted","orkestr-aws-arm64"\]'\) \|\| 'ubuntu-24.04-arm' \}\}$/);
+  assert.match(x64, /fromJSON\('\["self-hosted","orkestr-aws-x64"\]'\) \|\| 'ubuntu-24\.04' \}\}$/);
+  assert.match(arm64, /fromJSON\('\["self-hosted","orkestr-aws-arm64"\]'\) \|\| 'ubuntu-24\.04-arm' \}\}$/);
 });
+// Hosted images follow the production host's Ubuntu release: a floating label
+// changed Python, Bubblewrap and libffi under unchanged pull requests.
+for (const runner of ["ubuntu-latest", "ubuntu-26.04", "ubuntu-22.04", "ubuntu-latest-arm", "ubuntu-26.04-arm"])
+  test(`rejects the unpinned or non-production hosted runner ${runner}`, () => {
+    assert.throws(() => validateWorkflow(fixture.replace("runs-on: ubuntu-24.04", `runs-on: ${runner}`)), /workflow_runner/);
+  });
 for (const [name, before, after] of [
   ["without the fork check", " && github.event.pull_request.head.repo.full_name == 'otcan/orkestr'", ""],
   ["without the kill switch", "vars.ORKESTR_AWS_RUNNERS == 'on' && ", ""],
   ["for every branch push", "(github.event_name == 'push' && (github.ref == 'refs/heads/integration' || startsWith(github.ref, 'refs/tags/')))", "github.event_name == 'push'"],
   ["with another label", "orkestr-aws-x64", "orkestr-aws-gpu"],
+  ["with a floating hosted fallback", "'ubuntu-24.04' }}", "'ubuntu-latest' }}"],
 ]) test(`rejects an AWS runner selection ${name}`, () => {
   const changed = awsRunnerSelections.x64.replace(before, after);
   assert.notEqual(changed, awsRunnerSelections.x64);
@@ -330,7 +337,7 @@ for (const [name, before, after] of [
 });
 for (const runner of ["[self-hosted, orkestr-aws-x64]", "orkestr-aws-x64", "${{ fromJSON('[\"self-hosted\",\"orkestr-aws-x64\"]') }}"])
   test(`rejects a direct AWS runner label ${runner}`, () => {
-    assert.throws(() => validateWorkflow(fixture.replace("runs-on: ubuntu-latest", `runs-on: ${runner}`), "v2-rust.yml"), /workflow_runner/);
+    assert.throws(() => validateWorkflow(fixture.replace("runs-on: ubuntu-24.04", `runs-on: ${runner}`), "v2-rust.yml"), /workflow_runner/);
   });
 test("AWS runner jobs hold read permissions only", () => {
   const job = awsFixture(awsRunnerSelections.x64);
