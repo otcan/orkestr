@@ -74,6 +74,8 @@ class Client:
                 code = str(json.loads(failure.read()).get('code') or 'http_error')[:64]
             except (ValueError, AttributeError):
                 code = 'http_error'
+            finally:
+                failure.close()
             raise LeaseError(failure.code, code) from None
         except (error.URLError, OSError):
             raise LeaseError(0, 'unreachable') from None

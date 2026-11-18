@@ -6,7 +6,7 @@ a decision to defer iOS indefinitely. Simulator and physical-device acceptance
 remain separate gates.
 
 The repository's `scripts/security/workflow-policy.mjs` currently permits only
-`ubuntu-latest` and `ubuntu-24.04-arm`. Consequently this macOS proposal would
+`ubuntu-24.04` and `ubuntu-24.04-arm`. Consequently this macOS proposal would
 fail `workflow_runner` if installed as a workflow today. Parent has granted the coordinator a narrow policy/test change for exactly
 `macos-15` in `.github/workflows/v2-ios.yml` only. This grant is not a landed
 policy change. Coordinator must route independent exact-head review;

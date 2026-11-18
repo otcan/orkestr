@@ -120,6 +120,7 @@ class Lease:
                 require(len(raw) <= 1024**2, 'controller_lease_response_bound')
                 return json.loads(raw)
         except urllib.error.HTTPError as error:
+            error.close()
             raise ValueError('controller_lease_refused_' + str(error.code)) from None
 
     def binding(self):

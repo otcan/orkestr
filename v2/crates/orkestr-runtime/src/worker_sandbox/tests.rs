@@ -62,7 +62,17 @@ fn actual_worker_has_no_host_files_credentials_fds_processes_or_network() {
     let host_path = serde_json::to_string(&sentinel.to_str().unwrap()).unwrap();
     let code = format!(
         r#"
-import ctypes, errno, json, os, pathlib, resource, socket
+import errno, json, os, pathlib, resource, socket
+# List descriptors before the worker opens any: importing ctypes under Python
+# 3.14 with libffi 3.5 (Ubuntu 26.04) keeps the worker's own libffi.so open.
+links = []
+for entry in pathlib.Path('/proc/self/fd').iterdir():
+    try:
+        links.append(os.readlink(entry))
+    except FileNotFoundError:
+        pass
+inherited_fd_closed = all(link == '/dev/null' or link.startswith('pipe:[') for link in links)
+import ctypes
 sentinel = {host_path}
 parent = {parent}
 def blocked(action):
@@ -89,13 +99,7 @@ checks = {{
     'environment': set(os.environ) <= {{'HOME', 'PATH', 'PWD', 'TMPDIR', 'LANG', 'LC_CTYPE'}},
     'home': os.environ.get('HOME') == '/home/worker' and os.environ.get('PWD') == '/work',
 }}
-links = []
-for entry in pathlib.Path('/proc/self/fd').iterdir():
-    try:
-        links.append(os.readlink(entry))
-    except FileNotFoundError:
-        pass
-checks['inherited_fd_closed'] = all(link == '/dev/null' or link.startswith('pipe:[') for link in links)
+checks['inherited_fd_closed'] = inherited_fd_closed
 status = dict(line.split(':', 1) for line in read('/proc/self/status').decode().splitlines() if ':' in line)
 checks['no_new_privileges'] = status['NoNewPrivs'].strip() == '1'
 checks['no_capabilities'] = int(status['CapEff'].strip(), 16) == 0

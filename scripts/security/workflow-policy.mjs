@@ -76,7 +76,11 @@ const publishDownloadInputs = new Set(["name", "path"]);
 const publishCommands = new Set(["docker", "echo", "set", "test", "[["]);
 const publishDockerCommands = new Set(["load", "login", "logout", "tag", "push"]);
 // GitHub-hosted runners only; the arm64 runner builds the Apple Silicon image.
-const githubHostedRunners = new Set(["ubuntu-latest", "ubuntu-24.04-arm"]);
+// Both name the production host's Ubuntu release. A floating label such as
+// ubuntu-latest moves to a new release (Python, Bubblewrap, libffi, glibc)
+// without a change in this repository, and rust-cache keys do not include
+// the release, so every hosted image is pinned (docs/ci-workflow-policy.md).
+const githubHostedRunners = new Set(["ubuntu-24.04", "ubuntu-24.04-arm"]);
 // Ephemeral AWS runners (ORK-774, docs/ci-workflow-policy.md): one exact
 // selection per architecture, only in the V2 build and test workflows, only in
 // read-only jobs. The selection routes only trusted events to them (pushes to
@@ -89,7 +93,7 @@ const awsTrustedEvent = "vars.ORKESTR_AWS_RUNNERS == 'on' && github.repository =
   "github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || " +
   "(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == 'otcan/orkestr'))";
 export const awsRunnerSelections = Object.freeze({
-  x64: `\${{ ${awsTrustedEvent} && fromJSON('["self-hosted","orkestr-aws-x64"]') || 'ubuntu-latest' }}`,
+  x64: `\${{ ${awsTrustedEvent} && fromJSON('["self-hosted","orkestr-aws-x64"]') || 'ubuntu-24.04' }}`,
   arm64: `\${{ ${awsTrustedEvent} && fromJSON('["self-hosted","orkestr-aws-arm64"]') || 'ubuntu-24.04-arm' }}`,
 });
 const awsRunnerFiles = new Set(["v2-rust.yml", "v2-image.yml", "v2-browser.yml"]);

@@ -25,7 +25,7 @@ concurrency:
 
 jobs:
   dependency-advisories:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
       # PR/merge-queue content cannot supply its own scanner or exception policy.
@@ -67,7 +67,7 @@ jobs:
     # Stable required-check name for the ORK-478 ruleset; skipped is not success.
     if: ${{ always() && !cancelled() }}
     needs: dependency-advisories
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Require complete scan and published evidence
         env:
@@ -80,7 +80,7 @@ jobs:
           test -n "$EVIDENCE_DIGEST"
 
   secret-scan:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: read
@@ -138,7 +138,7 @@ jobs:
   secret-policy:
     if: ${{ always() && !cancelled() }}
     needs: secret-scan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Require complete scan and published evidence
         env:
@@ -151,7 +151,7 @@ jobs:
           test -n "$EVIDENCE_DIGEST"
 
   syntax:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       ORKESTR_BROWSER_LAUNCH_DISABLED: "1"
       ORKESTR_RECOVER_RUNNING_ON_START: "0"
@@ -173,7 +173,7 @@ jobs:
     # Says whether a pull request changes only documentation: files under docs/
     # and Markdown files. Every other event reports false. Heavy jobs skip only
     # on an explicit "true", so a failure here never skips them.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       docs-only: ${{ steps.classify.outputs.docs-only }}
@@ -212,7 +212,7 @@ jobs:
     # Heavy: not run by the nightly scan, for draft PRs or for docs-only PRs.
     # test, smoke and provenance need build, so they skip with it.
     if: ${{ github.event_name != 'schedule' && github.event.pull_request.draft != true && needs.changes.outputs.docs-only != 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       ORKESTR_BROWSER_LAUNCH_DISABLED: "1"
       ORKESTR_RECOVER_RUNNING_ON_START: "0"
@@ -260,7 +260,7 @@ jobs:
     # artifact and attests the runtime-dist archive digest and the manifest.
     needs: build
     if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       id-token: write
@@ -300,7 +300,7 @@ jobs:
           subject-checksums: ${{ runner.temp }}/provenance-subjects.sha256
 
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: build
     timeout-minutes: 30
     strategy:
@@ -344,7 +344,7 @@ jobs:
     # skipped (not failed) when build is skipped on purpose: draft or docs-only PR.
     if: ${{ always() && !cancelled() && github.event_name != 'schedule' && github.event.pull_request.draft != true && needs.changes.outputs.docs-only != 'true' }}
     needs: [changes, build, test, smoke]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Require build, all test shards and smoke to succeed
         env:
@@ -358,7 +358,7 @@ jobs:
           test "$SMOKE" = success
 
   smoke:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: build
     env:
       ORKESTR_BROWSER_LAUNCH_DISABLED: "1"
@@ -395,7 +395,7 @@ jobs:
     # tree with the default read-only token, then hands it off as an artifact.
     needs: [dependency-policy, changes]
     if: ${{ github.event_name != 'schedule' && github.event.pull_request.draft != true && needs.changes.outputs.docs-only != 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -472,7 +472,7 @@ jobs:
     # executes candidate code; it only loads, tags and pushes the artifact.
     needs: [image, image-arm64, test, smoke, provenance, secret-policy, syntax]
     if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (startsWith(github.ref, 'refs/tags/v') && !startsWith(github.ref, 'refs/tags/v2.')) }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
       contents: read
