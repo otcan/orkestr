@@ -268,12 +268,14 @@ class Selected(unittest.TestCase):
         self.plan['whatsapp_chats']='/var/lib/synthetic-private/whatsapp-chats.json'
         self.plan['provider_routing']={'rules':[{'id':'synthetic-category','threshold':3,
             'terms':[{'text':'cedar','weight':3}],'excluded':'claude','preferred':'codex'}]}
+        self.plan['codex_default_model']='gpt-6.1-sol'
         self.plan['password_rotation_ready']=True
         selected.prepare(self.plan)
         with authority(REPO,source) as (_,manager,_):
             package=manager.Package(r/'release/package',sha(r/'release/package/manifest.json'))
             self.assertEqual(set(package.role_profiles),{'deep','fast','worker-0','worker-1','worker-2','worker-3'})
             self.assertEqual(package.beta['provider_routing'],self.plan['provider_routing'])
+            self.assertEqual(package.beta['codex_default_model'],'gpt-6.1-sol')
             self.assertEqual(package.runtime['password_rotation_ready'],True)
             self.assertEqual(package.environment()['ORKESTR_V2_PASSWORD_ROTATION_READY'],'1')
             self.assertEqual(package.environment()['ORKESTR_V2_LIVE_MAP'],'/var/lib/synthetic-live-map/map.json')

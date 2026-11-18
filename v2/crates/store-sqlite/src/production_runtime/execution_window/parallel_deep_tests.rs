@@ -918,13 +918,14 @@ async fn a_slot_turn_is_noted_read_only_with_a_digest_and_a_deep_model() {
     assert_eq!(
         cap.launch().unwrap().codex_overrides(),
         Some((
-            Some(crate::production_runtime::PARALLEL_DEEP_DEFAULT_MODEL),
+            Some(crate::CODEX_DEFAULT_MODEL),
             Some(crate::production_runtime::PARALLEL_DEEP_DEFAULT_EFFORT)
         ))
     );
+    // The writer names the Codex default too; its effort stays the native's.
     assert_eq!(
         writing.launch().unwrap().codex_overrides(),
-        Some((None, None))
+        Some((Some(crate::CODEX_DEFAULT_MODEL), None))
     );
 }
 

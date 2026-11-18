@@ -10,11 +10,10 @@ use sqlx::sqlite::SqliteRow;
 /// request needs a change or an external action: the writer takes it.
 pub const PARALLEL_DEFER: &str = "PARALLEL_DEFER";
 
-/// Model and effort of a parallel turn when the owner selected none. A slot
-/// runs on the read-only Fast service profile, whose native default is the
-/// Fast model: a Deep-quality answer must name a Deep model explicitly. The
-/// writer's own most recent resolved model is preferred when known.
-pub const PARALLEL_DEEP_DEFAULT_MODEL: &str = "gpt-6.1-sol";
+/// Effort of a parallel turn when the owner selected none. A slot runs on the
+/// read-only Fast service profile, whose native defaults are the Fast model
+/// and effort: a Deep-quality answer names a Deep model (the owner's, else
+/// the Codex default, set at dispatch) and this effort explicitly.
 pub const PARALLEL_DEEP_DEFAULT_EFFORT: &str = "high";
 
 const NOTE_MAX_ITEMS: usize = 6;
@@ -143,15 +142,9 @@ pub(super) async fn slot_launch(
     {
         return Ok(Some(launch));
     }
+    // Dispatch already named the owner's model or the Codex default.
     if launch.model.is_none() {
-        let writer: Option<String> = sqlx::query_scalar("SELECT m.model FROM production_run_models m JOIN production_runs r ON r.id=m.run_id WHERE r.owner_id=? AND r.conversation_id=? AND r.role='deep' AND r.deep_slot=0 AND m.source='resolved' ORDER BY m.observed_at_ms DESC,m.sequence DESC LIMIT 1")
-            .bind(run.get::<String, _>("owner_id")).bind(run.get::<String, _>("conversation_id"))
-            .fetch_optional(&mut *tx).await.map_err(db)?;
-        launch.model = Some(
-            writer
-                .filter(|model| !orkestr_v2_contracts::model_denied(model))
-                .unwrap_or_else(|| PARALLEL_DEEP_DEFAULT_MODEL.to_owned()),
-        );
+        launch.model = Some(crate::conversation_resources::codex_default::codex_default_model());
     }
     if launch.reasoning_effort.is_none() {
         launch.reasoning_effort = Some(PARALLEL_DEEP_DEFAULT_EFFORT.to_owned());
