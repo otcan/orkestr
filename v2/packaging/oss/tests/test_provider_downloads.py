@@ -85,15 +85,70 @@ class ProviderDownloadTests(unittest.TestCase):
                 self.assertEqual(providers.download(url), b'fixture')
                 self.assertEqual(opened.call_args.args, (url,))
 
-    def test_permanent_api_refusal_is_not_retried(self):
+    def test_permanent_api_refusal_is_not_retried_and_a_refused_fallback_still_fails(self):
         url = next(iter(providers.GITHUB_ASSET_IDS))
         failure = urllib.error.HTTPError('https://api.github.com/', 403, 'Forbidden', {}, None)
         with patch.object(providers.urllib.request, 'urlopen', side_effect=failure) as opened, \
-                patch.object(providers.time, 'sleep') as sleep:
+                patch.object(providers.time, 'sleep') as sleep, patch('sys.stderr', new=io.StringIO()):
             with self.assertRaises(urllib.error.HTTPError):
                 providers.download(url)
-            self.assertEqual(opened.call_count, 1)
+            # One API attempt, then one attempt on the public link; neither 403 is retried.
+            self.assertEqual(opened.call_count, 2)
+            self.assertEqual(opened.call_args_list[1].args, (url,))
             sleep.assert_not_called()
+
+    def test_api_failure_falls_back_to_the_same_anonymous_public_link(self):
+        public = 'https://github.com/openai/codex/releases/download/rust-v0.163.0/'
+        expected = {
+            public + 'codex-x86_64-unknown-linux-musl.tar.gz': 645227929,
+            public + 'codex-code-mode-host-x86_64-unknown-linux-musl.tar.gz': 645227482,
+            public + 'codex-aarch64-unknown-linux-musl.tar.gz': 645213549,
+            public + 'codex-code-mode-host-aarch64-unknown-linux-musl.tar.gz': 645213791,
+        }
+        self.assertEqual(dict(providers.GITHUB_ASSET_IDS), expected)
+        failures = (urllib.error.HTTPError('https://api.github.com/', 403, 'Forbidden', {}, None),
+                    urllib.error.URLError('unreachable'), TimeoutError('timed out'))
+        for url, asset in expected.items():
+            for failure in failures:
+                with self.subTest(asset=asset, failure=type(failure).__name__), patch.object(
+                        providers.urllib.request, 'urlopen',
+                        side_effect=[failure, io.BytesIO(b'public asset')]) as opened, \
+                        patch.object(providers.time, 'sleep'), patch('sys.stderr', new=io.StringIO()) as log:
+                    self.assertEqual(providers.download(url), b'public asset')
+                    self.assertEqual(opened.call_count, 2)
+                    api, fallback = opened.call_args_list
+                    self.assertEqual(api.args[0].full_url,
+                                     'https://api.github.com/repos/openai/codex/releases/assets/' + str(asset))
+                    # The canonical reviewed URL as a bare string: no Authorization or other header.
+                    self.assertEqual(fallback.args, (url,))
+                    self.assertEqual(fallback.kwargs, {'timeout': 120})
+                    self.assertIn('using the public release link', log.getvalue())
+
+    def test_transient_api_failures_are_retried_before_the_fallback(self):
+        url = next(iter(providers.GITHUB_ASSET_IDS))
+        busy = [urllib.error.HTTPError('https://api.github.com/', 503, 'Unavailable', {}, None) for _ in range(3)]
+        with patch.object(providers.urllib.request, 'urlopen',
+                          side_effect=busy + [io.BytesIO(b'public asset')]) as opened, \
+                patch.object(providers.time, 'sleep') as sleep, patch('sys.stderr', new=io.StringIO()):
+            self.assertEqual(providers.download(url), b'public asset')
+            self.assertEqual(opened.call_count, 4)
+            self.assertEqual(opened.call_args_list[3].args, (url,))
+            self.assertEqual(sleep.call_count, 2)
+
+    def test_fallback_response_never_bypasses_existing_digest(self):
+        url = next(iter(providers.GITHUB_ASSET_IDS))
+        failure = urllib.error.HTTPError('https://api.github.com/', 403, 'Forbidden', {}, None)
+        with tempfile.TemporaryDirectory() as root:
+            output = Path(root) / 'providers'
+            with patch.object(providers, 'Path', return_value=output), \
+                    patch.object(providers, 'assets', return_value=[('codex', url, 'sha256', '0' * 64)]), \
+                    patch.object(providers.urllib.request, 'urlopen',
+                                 side_effect=[failure, io.BytesIO(b'wrong asset')]) as opened, \
+                    patch('sys.stderr', new=io.StringIO()):
+                with self.assertRaisesRegex(ValueError, 'checksum mismatch'):
+                    providers.main()
+                self.assertEqual(opened.call_count, 2)
+                self.assertEqual(list(output.iterdir()), [])
 
     def test_api_response_never_bypasses_existing_digest(self):
         url = next(iter(providers.GITHUB_ASSET_IDS))
