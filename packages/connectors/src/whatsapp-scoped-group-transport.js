@@ -13,6 +13,7 @@ import {createDeliveryRouteFence} from './whatsapp-delivery-route-fence.js';
 import {notificationScope, liveNotificationScope, createTimerNotificationProofStore} from './whatsapp-timer-notification-proof.js';
 import {OPERATOR_NOTICE_PARENT, validateOperatorNotifications, operatorNoticeRequestValid, operatorNoticeBodyValid} from './whatsapp-scoped-operator-notices.js';
 import {downloadScopedGroupMedia} from './whatsapp-scoped-group-media.js';
+import {groupMediaMimetype, groupMediaPolicy} from './whatsapp-scoped-group-inbound-media.js';
 import {validateCoordinatorConfig, coordinatorTokenMatches, createCoordinatorAccess} from './whatsapp-scoped-coordinator.js';
 import {validateDelegatesConfig, delegateForBearer, createDelegateAccess} from './whatsapp-scoped-delegates.js';
 import {DYNAMIC_GROUPS_TABLE, createDynamicGroupView, validateDynamicGroups} from './whatsapp-scoped-dynamic-groups.js';
@@ -22,11 +23,17 @@ import {createInputRevisionObserver} from './whatsapp-scoped-input-revisions.js'
 const fail=code=>{throw new Error(`group_transport_${code}`);};
 const hash=value=>crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
 export const scopedGroupContract=config=>hash([config.ownChatId,config.activatedAt,config.groups]);
-const IMAGE_MIME_EXTENSIONS=new Map([['image/jpeg','.jpg'],['image/png','.png'],['image/gif','.gif'],['image/webp','.webp']]);
-const MAX_GROUP_MEDIA_BYTES=10*1024*1024;
-// Types that can never become an image attachment: skip the download so a large
+// Kept types (images, documents) and their limits: whatsapp-scoped-group-inbound-media.js.
+// Types that can never become an attachment: skip the download so a large
 // video or voice note cannot hold the serial input queue.
 const NON_IMAGE_MEDIA_TYPES=new Set(['video','audio','ptt','ptv']);
+const skipNote=(body,reason)=>[body.trim(),`[WhatsApp attachment skipped: ${reason}]`].filter(Boolean).join('\n\n');
+// WhatsApp announces a document's type and size before its bytes: an oversized
+// one is skipped without downloading it.
+const announcedTooLarge=message=>{
+  const policy=groupMediaPolicy(message?._data?.mimetype),size=Number(message?._data?.size);
+  return policy && Number.isFinite(size) && size>policy.maxBytes ? policy : null;
+};
 const safeMediaName=value=>path.basename(String(value||'image').replace(/[\\/\0]/g,'_')).replace(/[^a-zA-Z0-9_. -]/g,'_').slice(0,180)||'image';
 
 // Media evidence lives in a side table so group_input keeps the exact four-column
@@ -238,23 +245,26 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
         if(hasMedia) {
           const type=String(message?.type||'').toLowerCase();
           let media=null;
+          const oversized=announcedTooLarge(message);
           if(NON_IMAGE_MEDIA_TYPES.has(type)) media={data:'',mimetype:type,skip:true};
-          else media=(await downloadScopedGroupMedia({client,message,chatId,report,options:mediaDownloadOptions})).media;
-          const mimetype=String(media?.mimetype||'').split(';')[0].trim().toLowerCase();
+          else if(!oversized) media=(await downloadScopedGroupMedia({client,message,chatId,report,options:mediaDownloadOptions})).media;
+          const policy=groupMediaPolicy(media?.mimetype);
+          const mimetype=groupMediaMimetype(media?.mimetype);
           const encoded=String(media?.data||'');
-          if(media?.skip) body=[body.trim(),`[WhatsApp attachment skipped: unsupported media type ${type}]`].filter(Boolean).join('\n\n');
-          else if(!media?.data) body=[body.trim(),'[WhatsApp attachment skipped: download failed]'].filter(Boolean).join('\n\n');
-          else if(!IMAGE_MIME_EXTENSIONS.has(mimetype)) body=[body.trim(),`[WhatsApp attachment skipped: unsupported media type ${mimetype||'unknown'}]`].filter(Boolean).join('\n\n');
-          else if(encoded.length>Math.ceil(MAX_GROUP_MEDIA_BYTES*4/3)+8) body=[body.trim(),'[WhatsApp attachment skipped: file exceeds 10 MiB limit]'].filter(Boolean).join('\n\n');
+          if(oversized) body=skipNote(body,`file exceeds ${oversized.limitLabel} limit`);
+          else if(media?.skip) body=skipNote(body,`unsupported media type ${type}`);
+          else if(!media?.data) body=skipNote(body,'download failed');
+          else if(!policy) body=skipNote(body,`unsupported media type ${mimetype||'unknown'}`);
+          else if(encoded.length>Math.ceil(policy.maxBytes*4/3)+8) body=skipNote(body,`file exceeds ${policy.limitLabel} limit`);
           else {
             const buffer=Buffer.from(encoded,'base64');
-            if(!buffer.length) body=[body.trim(),'[WhatsApp attachment skipped: download was empty]'].filter(Boolean).join('\n\n');
-            else if(buffer.length>MAX_GROUP_MEDIA_BYTES) body=[body.trim(),'[WhatsApp attachment skipped: file exceeds 10 MiB limit]'].filter(Boolean).join('\n\n');
+            if(!buffer.length) body=skipNote(body,'download was empty');
+            else if(buffer.length>policy.maxBytes) body=skipNote(body,`file exceeds ${policy.limitLabel} limit`);
             else {
               await fs.mkdir(mediaDir,{recursive:true,mode:0o700});
-              mediaFilename=safeMediaName(media.filename||`image${IMAGE_MIME_EXTENSIONS.get(mimetype)}`);
+              mediaFilename=safeMediaName(media.filename||message?._data?.filename||`${policy.fallbackName}${policy.extension}`);
               mediaMimetype=mimetype;mediaSize=buffer.length;
-              mediaPath=path.join(mediaDir,`${crypto.createHash('sha256').update(id).digest('hex')}${IMAGE_MIME_EXTENSIONS.get(mimetype)}`);
+              mediaPath=path.join(mediaDir,`${crypto.createHash('sha256').update(id).digest('hex')}${policy.extension}`);
               const temporary=`${mediaPath}.tmp`;
               await fs.writeFile(temporary,buffer,{mode:0o600,flag:'wx'}).catch(async error=>{
                 if(error?.code!=='EEXIST')throw error;

@@ -169,7 +169,7 @@ test('captionless supported image is visibly described and attached; unsupported
   const insert = inboxDb.prepare(`INSERT INTO group_input(id,chat_id,body,created_at,media_path,media_filename,media_mimetype,media_size)
     VALUES(?,?,?,?,?,?,?,?)`);
   insert.run('wa-empty-caption', 'group-1', '', '2026-01-02', imagePath, 'image.png', 'image/png', 5);
-  insert.run('wa-unsupported', 'group-1', 'see attached', '2026-01-02', docPath, 'document.bin', 'application/pdf', 8);
+  insert.run('wa-unsupported', 'group-1', 'see attached', '2026-01-02', docPath, 'document.bin', 'application/zip', 8);
   insert.run('wa-oversize', 'group-1', 'large image', '2026-01-02', largePath, 'large.jpg', 'image/jpeg', 10 * 1024 * 1024 + 1);
   await relay.tick();
   const posts = state.posts.filter(post => post.url.endsWith('/input'));

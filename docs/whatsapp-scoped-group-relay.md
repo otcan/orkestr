@@ -3,12 +3,16 @@
 This optional transport extension uses an already paired WhatsApp Web account
 to route fresh messages authored by that account into existing Orkestr threads.
 Completed answers return to the original group. It does not create groups or
-pair accounts. It supports text, need-input questions and allowlisted image
-attachments (JPEG, PNG, GIF and WebP, up to 10 MiB). Images are staged in a
-private transport media directory, then submitted through the existing
-WhatsApp inbound-media and thread-input path so the thread's normal attachment
-publication policy applies. Unsupported, oversized or unavailable media is
-represented by a visible skip note in the thread. Other participants are
+pair accounts. It supports text, need-input questions and allowlisted
+attachments: images (JPEG, PNG, GIF and WebP, up to 10 MiB) and documents (PDF,
+Word, Excel, PowerPoint, OpenDocument, RTF, plain text, CSV, Markdown and JSON,
+up to 16 MiB, the most a delegated V2 thread accepts per message). Attachments
+are staged in a private transport media directory, then submitted through the
+existing WhatsApp inbound-media and thread-input path so the thread's normal
+attachment publication policy applies; nothing opens or runs them on the way.
+Audio, video, voice notes, archives and every other type, oversized or
+unavailable media are represented by a visible skip note in the thread. The
+list and limits live in `packages/connectors/src/whatsapp-scoped-group-inbound-media.js`. Other participants are
 excluded by default; restoring an existing thread-scoped contact requires the explicit
 [participant admission policy](scoped-group-participant-routing.md).
 

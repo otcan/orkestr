@@ -18,6 +18,7 @@ import {DatabaseSync} from 'node:sqlite';
 import {isReplyDocument, scopedGroupReplyChunks} from './whatsapp-scoped-group-formatting.js';
 import {createRelayReplyFiles} from './whatsapp-scoped-relay-reply-files.js';
 import {quotedGroupInput, relayQuoteLookups, sendQuotedOnce} from './whatsapp-scoped-deep-quote.js'; // Grouped V2 Deep finals.
+import {groupMediaAllowed, groupMediaPolicy} from './whatsapp-scoped-group-inbound-media.js'; // Images and documents.
 import {createProgressBudget, progressPhases, progressPolicy} from './scoped-group-progress.js';
 import {createRouteAge} from './scoped-group-route-age.js';
 import {createMessagePageReader, isSilentNoReply} from './scoped-group-message-pages.js';
@@ -41,8 +42,6 @@ const threadSuppressesUpdates = (thread = {}) => {
 };
 export const scopedRelayErrorCode = error => /^[a-z_]{1,120}$/.test(error?.message || '') ? error.message : wrapperErrorCode(error) || 'operation_failed';
 const errorCode = scopedRelayErrorCode;
-const GROUP_IMAGE_MIMES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
-const GROUP_MEDIA_MAX_BYTES = 10 * 1024 * 1024;
 export {buildReplyTo} from './scoped-group-reply-quote.js';
 
 export function createScopedGroupRelay({config, api, send, log = () => {}, inboxDb, relayDb, formatter, env = process.env, readMediaFile = fs.readFile, now = Date.now,
@@ -300,6 +299,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
     if (!route) {
       let attachments = [];
       let inputBody = String(input.body || '').trim();
+      const media = groupMediaPolicy(input.media_mimetype), mediaName = String(input.media_filename || media?.fallbackName || 'image');
       if (input.media_path) {
         const priorUpload = db.prepare('SELECT attachments FROM input_media_uploads WHERE id=?').get(input.id);
         const priorAttempt = db.prepare('SELECT attempts,state FROM input_media_upload_attempts WHERE id=?').get(input.id);
@@ -320,9 +320,9 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
             const realPath = await fs.realpath(mediaPath).catch(() => '');
             const realRelative = realRoot && realPath ? path.relative(realRoot, realPath) : '..';
             const stat = realPath ? await fs.stat(realPath).catch(() => null) : null;
-            const mimetype = String(input.media_mimetype || '').trim().toLowerCase();
+            const mimetype = media?.mimetype || '';
             if (!realRoot || !realPath || !stat?.isFile() || realRelative.startsWith('..') || path.isAbsolute(realRelative)
-                || !GROUP_IMAGE_MIMES.has(mimetype) || stat.size > GROUP_MEDIA_MAX_BYTES) {
+                || !groupMediaAllowed(mimetype, stat.size)) {
               inputBody = [inputBody, '[WhatsApp attachment skipped: media unavailable or outside supported limits]'].filter(Boolean).join('\n\n');
               if (realPath && realRoot && !realRelative.startsWith('..') && !path.isAbsolute(realRelative))
                 await removeStagedFile(realPath, realRoot);
@@ -336,10 +336,10 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
               }
               if (bytes) {
                 const form = new FormData();
-                form.append('files', new Blob([bytes], {type: mimetype}), String(input.media_filename || 'image'));
+                form.append('files', new Blob([bytes], {type: mimetype}), mediaName);
                 form.append('metadata', JSON.stringify([{
-                  filename: String(input.media_filename || 'image'), name: String(input.media_filename || 'image'),
-                  mimetype, type: mimetype, kind: 'image', size: bytes.length,
+                  filename: mediaName, name: mediaName,
+                  mimetype, type: mimetype, kind: media.kind === 'image' ? 'image' : 'file', size: bytes.length,
                   sourceEventId: String(input.id), chatId: String(input.chat_id), accountId: String(config.accountId || 'main'),
                 }]));
                 form.append('eventId', String(input.id));
@@ -373,7 +373,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
         }
       }
       if (!inputBody) inputBody = attachments.length
-        ? `[Image attached: ${String(input.media_filename || 'image')}]`
+        ? `[${media?.attachedLabel || 'Image attached'}: ${mediaName}]`
         : '[WhatsApp attachment received]';
       const own = input.quote_row ? ownReplyFor(input.quote_id) : null;
       const quoted = buildReplyTo(input, {own: own ? {text: own.text || input.quote_body || '', sentAt: own.sentAt || null} : null,
