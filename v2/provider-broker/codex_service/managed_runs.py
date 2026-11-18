@@ -53,8 +53,9 @@ class Runs:
         scope=value['scope'];require(scope['window_id']==window and scope['window_generation']==generation,'managed_run_scope')
         if value['state']=='open':
             value['state']='closed';atomic(path,value);self.contexts.pop(key(scope),None)
-        # A run's claims carry its run id and therefore belong to its window.
-        for pending in self.ingress.journal.window_paths(window):
+        # A run's claims carry its run id; the journal indexes them by run, so
+        # closing reads this run's claims, not every claim its window kept.
+        for pending in self.ingress.journal.run_paths(run):
             record=metadata(pending,32768)
             if record['source'].get('run_id')==run and record['state'] in ('pending','worker_waiting'):
                 record['state']='cancelled';atomic(pending,record)

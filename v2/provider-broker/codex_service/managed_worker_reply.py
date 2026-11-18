@@ -40,8 +40,8 @@ def bind(ingress,request):
             for r in ingress.pending(source['window_id'],source['window_generation'])),
             'managed_worker_caller_not_live')
     # Four observers correspond to the existing four bounded scheduler slots.
-    # A run's claims all belong to the run's (this claim's) window.
-    active=sum(1 for p in ingress.journal.window_paths(source['window_id']) if (lambda r:r['state']=='worker_waiting'
+    # Only this run's claims are read (the journal indexes claims by run).
+    active=sum(1 for p in ingress.journal.run_paths(value['run_id']) if (lambda r:r['state']=='worker_waiting'
         and r['source']['run_id']==value['run_id'])(metadata(protected(p),32768)))
     require(active<4,'managed_worker_waiter_bound')
     record.update(state='worker_waiting',run_id=value['run_id'],native_task_id=value['task_id'])

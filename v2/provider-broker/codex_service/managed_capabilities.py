@@ -5,11 +5,11 @@ authorization or evidence that a business action will succeed. Other surfaces
 are deliberately outside this incremental manifest's coverage.
 """
 from .contract import identifier, require
-from .managed_ingress import MAX_CONNECTIONS, MAX_WINDOW_REQUESTS
+from .managed_budget import DEFAULTS
+from .managed_ingress import MAX_CONNECTIONS
 from .managed_workers import NAMES
 
 NAME = 'orkestr_capabilities'
-HTTP_REQUESTS_MAX = 128
 
 
 def advertisement():
@@ -22,12 +22,14 @@ def advertisement():
                         'idempotentHint': True, 'openWorldHint': False}}
 
 
-def manifest(scope, registered):
+def manifest(scope, registered, limits=None):
     """Project an already authenticated scope and this request's tools/list.
 
     Copy only fixed tool names, never descriptions, input schemas, operation
     identifiers, host paths, credentials or the rest of the native's identity.
+    `limits` are the manager's admission limits (`managed_budget`).
     """
+    limits = DEFAULTS if limits is None else limits
     conversation = identifier(scope['conversation_id'])
     provider = scope['provider']
     require(provider in ('codex', 'claude'), 'managed_capability_provider')
@@ -54,8 +56,14 @@ def manifest(scope, registered):
             'operations': [], 'requires_operation_authorization': True,
             'setup_action': 'Use the owner-authenticated Core timer capability observation; this managed surface has no trusted bridge yet.'},
         'registered_tools': names,
-        'limits': {'http_requests_per_native_max': HTTP_REQUESTS_MAX,
-                   'operation_requests_per_window_max': MAX_WINDOW_REQUESTS,
+        # Pace limits refuse with retry_after_s; the window maximum lasts until
+        # the execution window closes.
+        'limits': {'operation_requests_per_window_max': limits['window_requests_max'],
+                   'operations_in_flight_per_window_max': limits['window_in_flight_max'],
+                   'operation_requests_per_window_per_minute': limits['window_requests_per_minute'],
+                   'operation_request_burst_per_window': limits['window_request_burst'],
+                   'http_requests_per_native_per_minute': limits['native_http_requests_per_minute'],
+                   'http_request_burst_per_native': limits['native_http_request_burst'],
                    'concurrent_connections_max': MAX_CONNECTIONS,
                    'requires_live_original_native': True,
                    'requires_service_uptime': True},

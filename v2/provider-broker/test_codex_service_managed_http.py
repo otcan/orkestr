@@ -129,7 +129,11 @@ report['memory_result']=result;report['memory_errno']=ctypes.get_errno();print(j
     def test_business_cannot_queue_before_consumed_run(self):
         ingress,_,_=self.prepare_http({'jsonrpc':'2.0','id':3,'method':'tools/call','params':{
             'name':'orkestr_root_request_submit','arguments':{'action':'read','resource':'example.invalid','summary':'Synthetic summary'}}})
-        response=self.read_reply(ingress);self.assertIn('error',response)
+        # The original native is answered with the refusal, not a closed connection.
+        response=self.read_reply(ingress);self.assertEqual(response['status'],200)
+        value=json.loads(response['body']);self.assertEqual(value['id'],3);self.assertTrue(value['result']['isError'])
+        answer=value['result']['structuredContent']
+        self.assertEqual((answer['state'],answer['result']['reason']),('refused','managed_no_consumed_run'))
         self.assertFalse(list(ingress.directory.glob('*.json')))
 
     def test_actual_native_can_read_manifest_without_queueing_business_work(self):

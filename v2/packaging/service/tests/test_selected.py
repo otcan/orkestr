@@ -80,6 +80,25 @@ class Selected(unittest.TestCase):
             self.assertEqual(loaded.environment()['ORKESTR_V2_MANAGED_WORKERS_ENABLED'],'1')
             self.assertEqual(loaded.environment()['ORKESTR_V2_MANAGED_WORKER_EXECUTION_BUDGET_MS'],'300000')
 
+    def test_managed_limits_reach_the_sealed_package_only_with_managed_operations(self):
+        source=self.current_source();self.root.chmod(0o755)
+        provider=self.root/'provider';provider.mkdir(mode=0o700);os.chown(provider,995,986)
+        self.plan.update(authority_uid=994,authority_gid=986,executor_uid=995,executor_gid=986,
+            provider_home=str(provider),managed_limits={'window_in_flight_max':4})
+        for name in ('home','home/data','bootstrap'):os.chown(self.root/name,994,986)
+        with self.assertRaisesRegex(RuntimeError,'managed limits require managed operations'):selected.prepare(self.plan)
+        self.plan.update(managed_operations=True,managed_limits={'window_in_flight_max':0})
+        with self.assertRaises(Exception):selected.prepare(self.plan)
+        self.assertFalse((self.root/'release').exists())
+        self.plan['managed_limits']={'window_in_flight_max':4,'window_requests_max':500}
+        selected.prepare(self.plan)
+        package=self.root/'release/package'
+        runtime=json.loads((package/'service.json').read_bytes())
+        self.assertEqual(runtime['managed_limits'],{'window_in_flight_max':4,'window_requests_max':500})
+        with authority(REPO,source) as (_,manager,_):
+            loaded=manager.Package(package,sha(package/'manifest.json'))
+            self.assertEqual(loaded.runtime['managed_limits']['window_requests_max'],500)
+
     def test_explicit_metrics_port_reaches_service_metadata(self):
         source=self.current_source()
         for bad in (self.plan['port'], 80, 70000, '19850', True):

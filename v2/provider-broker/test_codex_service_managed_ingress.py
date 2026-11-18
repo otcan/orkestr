@@ -47,6 +47,30 @@ class ManagedPackageTests(identity_tests.SplitPackageTests):
             with self.assertRaisesRegex(Refused,'managed_split_configuration'):Package(self.fixture.package,expected)
 
 
+    def test_managed_limits_are_a_closed_bounded_selection_of_managed_operations(self):
+        from codex_service.manager import Manager
+        from codex_service.package import Package
+        self.select_split();service=self.fixture.package/'service.json';manifest=self.fixture.package/'manifest.json'
+        baseline=json.loads(service.read_text())
+        def selected(flags):
+            value=dict(baseline);value.update(flags);service.write_text(json.dumps(value))
+            record=json.loads(manifest.read_text());record['files']['service.json']=self.digest(service)
+            manifest.write_text(json.dumps(record));return self.digest(manifest)
+        for flags in ({'managed_limits':{'window_in_flight_max':4}},
+                      {'managed_operations':True,'managed_limits':{'window_in_flight_max':0}},
+                      {'managed_operations':True,'managed_limits':{'window_requests_max':True}},
+                      {'managed_operations':True,'managed_limits':{'unbounded':1}},
+                      {'managed_operations':True,'managed_limits':[]}):
+            with self.assertRaises(Refused):Package(self.fixture.package,selected(flags))
+        expected=selected({'managed_operations':True,'managed_limits':{'window_in_flight_max':4,'window_requests_max':500}})
+        manager=Manager(self.fixture.package,expected)
+        try:
+            self.assertEqual(manager.managed.limits['window_in_flight_max'],4)
+            self.assertEqual(manager.managed.limits['window_requests_max'],500)
+            self.assertEqual(manager.managed.limits['window_requests_per_minute'],120)
+            self.assertEqual(manager.managed.limits['window_request_burst'],48)
+        finally:manager.close()
+
     def test_native_workers_gate_is_explicit_true_and_requires_managed_split(self):
         from codex_service.package import Package
         self.select_split();service=self.fixture.package/'service.json';manifest=self.fixture.package/'manifest.json'
@@ -203,8 +227,8 @@ class RootCallerTests(unittest.TestCase):
             with self.assertRaisesRegex(Refused,'managed_original_caller_required'):ingress._record(borrowed,REQUEST)
             with self.assertRaisesRegex(Refused,'managed_replay_conflict'):
                 ingress._record(peer,{**REQUEST,'arguments':{**REQUEST['arguments'],'summary':'changed'}})
-            with patch('codex_service.managed_ingress.MAX_WINDOW_REQUESTS',1):
-                with self.assertRaisesRegex(Refused,'managed_window_bound'):
+            with patch.dict(ingress.admission.limits,window_requests_max=1):
+                with self.assertRaisesRegex(Refused,'managed_window_budget_exhausted'):
                     ingress._record(peer,{**REQUEST,'request_key':'synthetic-2'})
             proof.close()
         finally:ingress.close()
