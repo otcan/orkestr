@@ -354,13 +354,18 @@ impl Store {
                 .await
                 .map_err(|_| RuntimeStoreError::Unavailable)?
             }
+            // A Codex Deep or Worker turn always names its model: the owner's,
+            // else the configured default, never the native's catalog default.
             _ => Some(
-                crate::conversation_resources::settings::turn_launch(
-                    &mut tx,
-                    &claim.provider.run.conversation_id,
-                )
-                .await
-                .map_err(|_| RuntimeStoreError::Unavailable)?,
+                crate::conversation_resources::codex_default::with_codex_default(
+                    crate::conversation_resources::settings::turn_launch(
+                        &mut tx,
+                        &claim.provider.run.conversation_id,
+                    )
+                    .await
+                    .map_err(|_| RuntimeStoreError::Unavailable)?,
+                    &crate::conversation_resources::codex_default::codex_default_model(),
+                ),
             ),
         };
         let launch = super::parallel_deep_turns::slot_launch(&mut tx, &row, launch).await?;

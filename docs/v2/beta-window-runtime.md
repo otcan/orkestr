@@ -157,6 +157,19 @@ broker's exit status. The manager logs the static refusal code of a
 `retire`, `reconcile`, `extend`, `uncertain` or `bind_child` request, so the
 next unclean Fast retirement can be diagnosed.
 
+### Codex default model
+
+A Codex Deep or Worker turn always names its model in `turn/start`: the
+chat's own model, else the Codex default. Without one, the native answers
+with the first model of the catalog it downloads from the provider, and the
+provider reorders that catalog without notice. The built-in default is
+`gpt-6.1-sol` (`CODEX_DEFAULT_MODEL`); the plan's `codex_default_model`
+(copied into the beta config) replaces it for the instance. It must be a
+valid Codex launch model, never Claude or Fable. Core applies it when it
+consumes the dispatch, so the owner's settings, their revision and the
+provider generation stay as they are. A read-only parallel Deep slot uses
+the same default. Fast keeps its own default (`gpt-6-luna` at `low`).
+
 ### Host provider environment files
 
 `host_full_access.environment_files` (at most 8 absolute paths) names private

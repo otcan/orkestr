@@ -10,6 +10,7 @@ import { liveAnswerApi } from './headless-live-answer.mjs';
 import { agentAttachmentApi, markedPayload } from './headless-agent-attachments.mjs';
 import { credentialsApi } from './headless-credentials-mock.mjs';
 import { sitesApi } from './headless-sites-mock.mjs';
+import { workspaceFilesApi } from './headless-workspace-files-mock.mjs';
 
 export const A = '00000000-0000-4000-8000-00000000000a';
 export const B = '00000000-0000-4000-8000-00000000000b';
@@ -64,6 +65,8 @@ export function createState() {
     // Chat settings, desktops and timers of conversation A.
     settings: { schema_version: 1, conversation_id: A, revision: 2, provider: 'codex', model: 'synthetic-model', reasoning_effort: 'medium',
       honor_no_reply: true, reply_prefix: 'synthetic:', reply_footer: null, provider_generation: 0, updated_at_ms: 1 },
+    // Its Fast model choice (unset: the Codex Fast defaults apply).
+    fastSettings: { schema_version: 1, conversation_id: A, revision: 0, model: null, reasoning_effort: null, parallel_replies: false, updated_at_ms: null }, fastSettingsPuts: [],
     desktopActions: [], deskReserved: false, deskRuntime: { 'idle-desk': 'inactive', 'held-desk': 'active', 'unbound-desk': 'unknown' }, deskOwnerActions: [], deskStopConflict: false, deskStartFailure: false,
     deskSharing: { schema_version: 1, share_all_desks: false, revision: 0, updated_at_ms: null }, sharingPuts: [], settingsPuts: [], bindingPuts: [], signInPosts: [], signIn: { codex: { signed_in: false, method: null, login: null } }, desktopBindings: {}, timerCalls: [], timerPause: null, chatTimerPause: null,
     // Linked V1 chat management (synthetic V1 state behind the server).
@@ -456,6 +459,7 @@ async function api(state, req, res, url) {
   const [, id, rest = ''] = m;
   if (state.live?.conversation === id && await liveAnswerApi(state, req, res, rest, { json, q })) return;
   if (state.agentAttachments === id && agentAttachmentApi(state, req, res, rest, { json })) return;
+  if (await workspaceFilesApi(state, req, res, id, rest, q, { json, A })) return;
   if (rest === '/intelligence' && req.method === 'GET') {
     const role = (configured, steer, max) => ({ configured, available: false, stop: configured,
       steer: configured && steer, accept: configured, max_parallel: configured ? max : 0 });
@@ -539,6 +543,15 @@ async function api(state, req, res, url) {
       queue_age_ms: null, progress: null, resources: null, capabilities: { stop: true, steer: true } });
   }
   if (rest === '/settings' && req.method === 'GET') return json(res, 200, { ...state.settings, conversation_id: id });
+  if (rest === '/fast/settings' && req.method === 'GET') return json(res, 200, { ...state.fastSettings, conversation_id: id });
+  if (rest === '/fast/settings' && req.method === 'PUT') {
+    const update = JSON.parse(await body(req)); state.fastSettingsPuts.push(update);
+    if (req.headers['x-orkestr-csrf'] !== 'synthetic-csrf') return json(res, 403, { code: 'csrf', message: 'CSRF required' });
+    if (update.expected_revision !== state.fastSettings.revision) return json(res, 409, { code: 'fast_settings_revision_mismatch', message: 'Fast settings changed elsewhere.' });
+    const { expected_revision, parallel_replies = state.fastSettings.parallel_replies, ...fields } = update;
+    state.fastSettings = { ...state.fastSettings, ...fields, parallel_replies, revision: state.fastSettings.revision + 1, updated_at_ms: Date.now() };
+    return json(res, 200, { ...state.fastSettings, conversation_id: id });
+  }
   if (rest === '/settings' && req.method === 'PUT') {
     const update = JSON.parse(await body(req)); state.settingsPuts.push(update);
     if (update.expected_revision !== state.settings.revision) return json(res, 409, { code: 'settings_revision_conflict', message: 'Settings changed elsewhere.' });

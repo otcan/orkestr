@@ -15,6 +15,9 @@ pub use archived_history::{
     archived_checksum_next, archived_message_canonical, archived_message_digest,
 };
 pub mod conversation_resources;
+pub use conversation_resources::codex_default::{
+    codex_default_model, codex_default_valid, configure_codex_default_model, CODEX_DEFAULT_MODEL,
+};
 pub use conversation_resources::{
     DesktopCaller, DesktopFence, PreparedAcquire, ResourceError, V1LeaseGrant,
 };
@@ -86,7 +89,7 @@ pub use production_runtime::{
     EXECUTION_WINDOW_BASE_LIFETIME_MS, EXECUTION_WINDOW_CLEANUP_MS,
     EXECUTION_WINDOW_MAX_LIFETIME_MS, FAST_INPUT_BUDGET, FAST_NOTE_RESERVE,
     MAX_AUXILIARY_FAST_SLOTS, MAX_DEEP_BURST_QUIET_MS, MAX_PARALLEL_DEEP_SLOTS,
-    PARALLEL_DEEP_DEFAULT_EFFORT, PARALLEL_DEEP_DEFAULT_MODEL, PARALLEL_DEFER,
+    PARALLEL_DEEP_DEFAULT_EFFORT, PARALLEL_DEFER,
 };
 pub use production_runtime::{
     ConsumedDeskLogin, DeskLoginConsumption, DeskLoginNativeCall, DeskLoginParent,

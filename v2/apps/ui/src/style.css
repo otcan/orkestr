@@ -87,6 +87,14 @@ details[open] > summary { margin-bottom: .4rem; }
 .settings-form button[type=submit] { justify-self: start; background: var(--accent); color: var(--accent-contrast); border-color: transparent; font-weight: 600; }
 .settings-form .field-help, .timer-list .field-help { font-size: .75rem; color: var(--faint); }
 .settings-status { font-size: .8rem; color: var(--accent-text); }
+/* Chat settings: the Deep and Fast models, and the Fast model change. */
+.model-summary .model-role { display: grid; gap: .2rem; }
+.model-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: .3rem .8rem; margin: 0; }
+.model-facts dt { font-size: .72rem; color: var(--muted); }
+.model-facts dd { margin: 0; font-size: .88rem; overflow-wrap: anywhere; }
+.model-summary .model-drift { color: var(--accent-text); }
+.model-summary .model-change-deep { justify-self: start; }
+.fast-model-form { display: grid; gap: .45rem; }
 .lease-list, .timer-list { list-style: none; padding: 0; margin: 0; display: grid; gap: .35rem; }
 .lease-list li { display: flex; flex-wrap: wrap; gap: .4rem; align-items: baseline; font-size: .85rem; }
 .timer-row { width: 100%; display: flex; flex-wrap: wrap; gap: .25rem .6rem; align-items: baseline; text-align: left; }

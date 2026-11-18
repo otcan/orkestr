@@ -5,6 +5,69 @@
 use orkestr_v2_contracts::{ExecutionPhase, ExecutionStatus, RunId};
 use std::collections::BTreeSet;
 
+/// Whether an assistant message is the run's answer or an interim update
+/// (owner request 2026-11-18: the chat must say which). An accepted reply is
+/// the run's final answer; the live bubble of a run still working is an
+/// update, replaced in place by the next update and then by the answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MessageKind {
+    Update,
+    Final,
+    Stopped,
+    Unfinished,
+}
+
+impl MessageKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Update => "Update",
+            Self::Final => "Final",
+            Self::Stopped => "Stopped",
+            Self::Unfinished => "Not finished",
+        }
+    }
+    pub fn slug(self) -> &'static str {
+        match self {
+            Self::Update => "update",
+            Self::Final => "final",
+            Self::Stopped => "stopped",
+            Self::Unfinished => "unfinished",
+        }
+    }
+}
+
+/// The kind of the live bubble of a run in `phase`.
+pub fn live_kind(phase: ExecutionPhase) -> MessageKind {
+    use ExecutionPhase::*;
+    match phase {
+        Queued | Starting | Running | CancelRequested => MessageKind::Update,
+        AwaitingAcceptance | Completed => MessageKind::Final,
+        Cancelled => MessageKind::Stopped,
+        Failed | Blocked => MessageKind::Unfinished,
+    }
+}
+
+/// The line under a live update while its run still works: the update is
+/// not the answer, more is coming.
+pub fn working_line(phase: ExecutionPhase) -> Option<&'static str> {
+    use ExecutionPhase::*;
+    match phase {
+        Queued | Starting | Running => Some("Still working…"),
+        CancelRequested => Some("Stopping…"),
+        AwaitingAcceptance | Completed | Cancelled | Failed | Blocked => None,
+    }
+}
+
+/// The kind a V1 history message reports by its phase: `commentary` is a
+/// progress note, `final_answer` the answer. Owner messages have none.
+pub fn v1_kind(phase: Option<&str>) -> Option<MessageKind> {
+    match phase? {
+        "commentary" => Some(MessageKind::Update),
+        "final_answer" => Some(MessageKind::Final),
+        _ => None,
+    }
+}
+
 /// The newest text of a run that has reached the screen.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Shown {

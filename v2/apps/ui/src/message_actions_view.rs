@@ -299,6 +299,10 @@ pub fn MessageMenu(
                 },
                 span { "aria-hidden": "true", "⋯" }
             }
+            // The same text, one press away (owner request 2026-11-18).
+            if let Some(text) = copy.clone() {
+                crate::copy_button::CopyButton { text, label: "Copy message", class: "message-copy" }
+            }
             if open() {
                 div { id: "{list}", class: "message-menu-list", role: "group", "aria-label": "Message actions",
                     onkeydown: move |event: KeyboardEvent| { if event.key() == Key::Escape { event.stop_propagation(); on_key(true); } },
@@ -311,9 +315,7 @@ pub fn MessageMenu(
                                 let text = text.clone();
                                 after_copy(true);
                                 spawn(async move {
-                                    let copied = document::eval("const text=await dioxus.recv();try{await navigator.clipboard.writeText(text);return true;}catch{return false;}");
-                                    let _ = copied.send(json!(text));
-                                    let done = copied.join::<bool>().await.unwrap_or(false);
+                                    let done = crate::copy_button::copy_text(text).await;
                                     notice.set(if done { "Copied." } else { "Copy unavailable in this browser. Select the text to copy it." }.into());
                                 });
                             },

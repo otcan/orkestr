@@ -244,7 +244,11 @@ async fn capacity_before_any_tool_call_retries_once_on_the_fallback_and_records_
     assert_eq!(status.phase, ExecutionPhase::AwaitingAcceptance);
     let turns = case.turns();
     assert_eq!(turns.len(), 2, "exactly one retry");
-    assert_eq!(turns[0]["model"], serde_json::Value::Null, "thread default");
+    assert_eq!(
+        turns[0]["model"],
+        orkestr_v2_store_sqlite::CODEX_DEFAULT_MODEL,
+        "an unset chat names the Codex default, never the native's catalog default"
+    );
     assert_eq!(turns[0]["text"], INPUT);
     assert_eq!(turns[1]["model"], "gpt-6-sol");
     let retried = turns[1]["text"].as_str().unwrap();

@@ -9,7 +9,7 @@ use orkestr_v2_ui::{
     accepted_payloads::{adds_work, Answer, HINT_AFTER_MS},
     accepted_results::{next_chat_page, refresh_cursor, valid_page, CHAT_PAGES},
     execution::Execution,
-    live_answer::LiveAnswer,
+    live_answer::{LiveAnswer, MessageKind},
     session_scope::SessionScope,
 };
 use serde_json::{json, Value};
@@ -369,6 +369,12 @@ pub fn AcceptedReplies(
     } }
 }
 
+/// The small "Update" / "Final" mark beside the author of an assistant message.
+#[component]
+pub fn KindLabel(kind: MessageKind) -> Element {
+    rsx! { span { class: "message-kind message-kind-{kind.slug()}", "{kind.label()}" } }
+}
+
 #[component]
 fn AcceptedReply(
     conversation: String,
@@ -416,7 +422,10 @@ fn AcceptedReply(
         "data-completion-event-id": "{row.completion_event_id}",
         "data-acceptance-event-id": "{row.acceptance_event_id}",
         "data-payload-id": "{payload_id}",
+        "data-message-kind": "final",
         strong { "Assistant" }
+        // An accepted reply is its run's answer, never an interim update.
+        KindLabel { kind: MessageKind::Final }
         span { class: "reply-state", "{notice}" }
         if waiting && slow() { span { class: "reply-loading", role: "status", "aria-label": "Loading answer" } }
         if let Some(text)=shown.clone(){div { class: "accepted-output", "data-accepted-output": "true", crate::rich_text_view::RichText { text: orkestr_v2_ui::message_file_refs::display_text(&text), attachments: !orkestr_v2_ui::message_file_refs::references(&text).is_empty() }

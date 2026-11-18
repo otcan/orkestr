@@ -1,6 +1,7 @@
 //! Owner-scoped conversation resources: settings, brokered V1 desktop leases
 //! and V1 worker links. None of these rows admit input, start execution or
 //! create effects; they are preferences, fences and lineage.
+pub mod codex_default;
 mod desktop_inventory;
 pub(crate) mod desktop_sharing;
 pub(crate) mod desktops;

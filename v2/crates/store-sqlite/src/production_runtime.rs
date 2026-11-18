@@ -63,9 +63,7 @@ mod web_rules;
 pub use fast_slots::MAX_AUXILIARY_FAST_SLOTS;
 pub use parallel_deep::MAX_PARALLEL_DEEP_SLOTS;
 mod parallel_deep_turns;
-pub use parallel_deep_turns::{
-    PARALLEL_DEEP_DEFAULT_EFFORT, PARALLEL_DEEP_DEFAULT_MODEL, PARALLEL_DEFER,
-};
+pub use parallel_deep_turns::{PARALLEL_DEEP_DEFAULT_EFFORT, PARALLEL_DEFER};
 mod fence;
 mod held_inputs;
 pub(crate) mod retired_inputs;

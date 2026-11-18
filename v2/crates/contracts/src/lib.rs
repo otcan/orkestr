@@ -43,6 +43,8 @@ mod local_files;
 pub use local_files::*;
 mod local_files_waiting;
 pub use local_files_waiting::*;
+mod workspace_files;
+pub use workspace_files::*;
 mod legacy_workers;
 pub use legacy_workers::*;
 mod sidebar;

@@ -90,7 +90,7 @@ def pair_bytes(plan):
 
 OPTIONAL = {'resource_namespace', 'agent_timer_grants', 'qualification_record', 'deploy_maintenance_marker', 'release_interruption_dir', 'managed_host', 'operator_recovery', 'desk_login', 'managed_operations', 'managed_limits', 'managed_workers', 'managed_worker_execution_budget_ms', 'attachment_export_dir', 'password_rotation_ready', 'authority_uid', 'authority_gid', 'executor_uid', 'executor_gid', 'provider_home', 'roles', 'preserve_state', 'workspace_exec', 'additional_workspace_exec', 'max_active_windows', 'host_full_access',
             'window_max_minutes', 'conversation_window_max_minutes', 'conversation_workspaces', 'provider_routing',
-            'code_mode_host', 'code_mode_host_sha256', 'claude', 'claude_quota_projection', 'codex_quota_projection', 'live_map', 'desktop_broker', 'provider_quota', 'timer_config', 'whatsapp_chats', 'v1_chat_icons_dir', 'metrics_port'}
+            'codex_default_model', 'code_mode_host', 'code_mode_host_sha256', 'claude', 'claude_quota_projection', 'codex_quota_projection', 'live_map', 'desktop_broker', 'provider_quota', 'timer_config', 'whatsapp_chats', 'v1_chat_icons_dir', 'metrics_port'}
 CLAUDE_PATHS = ('executable', 'account', 'workspace', 'home', 'temporary')
 # Account selection stays with the Claude account reference, never the env.
 CLAUDE_FORBIDDEN_ENV = {'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN',
@@ -437,7 +437,7 @@ def prepare(plan):
                 beta['additional_workspace_exec']=plan['additional_workspace_exec']
             if 'max_active_windows' in plan:
                 beta['max_active_windows']=plan['max_active_windows']
-            for key in ('deploy_maintenance_marker', 'release_interruption_dir', 'window_max_minutes', 'conversation_window_max_minutes', 'conversation_workspaces', 'provider_routing'):
+            for key in ('deploy_maintenance_marker', 'release_interruption_dir', 'window_max_minutes', 'conversation_window_max_minutes', 'conversation_workspaces', 'provider_routing', 'codex_default_model'):
                 if key in plan:
                     beta[key]=plan[key]
             for access_key in ('host_full_access', 'managed_host'):

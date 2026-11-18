@@ -108,6 +108,10 @@
 .files-private-toggle::after { content: "\25B8"; color: var(--muted); }
 .files-private-toggle[aria-expanded=true]::after { content: "\25BE"; }
 .thread-files button { margin: .25rem .3rem .25rem 0; }
+/* "More": your computer's folder and private copies, collapsed by default. */
+.files-more { padding: .5rem 0 0; }
+.files-more-toggle { display: flex; align-items: center; min-height: 2.2rem; color: var(--muted); font-size: .85rem; cursor: pointer; }
+.files-more[open] > .files-more-toggle { color: var(--text); font-weight: 600; }
 @container conversation-pane (min-width: 900px) {
  .native-conversation > .files-drawer { grid-area: drawer; z-index: auto; justify-self: stretch; width: clamp(18rem, 30cqi, 24rem); box-shadow: none; }
 }

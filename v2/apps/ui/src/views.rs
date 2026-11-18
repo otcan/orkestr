@@ -360,28 +360,39 @@ pub fn Conversation(
                     h2 { id: "{drawer_id}-title", "Files" }
                     button { r#type: "button", id: "{close_id}", class: "files-drawer-close", "aria-label": "Close Files", onclick: move |_| close_files(), "Close" }
                 }
-                // 1. Every file of this chat, newest first.
+                // 1. The folder this chat's agent works in on the host, read-only.
+                section { class: "files-section files-workspace", "aria-labelledby": "files-workspace-{id}",
+                    h3 { id: "files-workspace-{id}", "Chat folder" }
+                    if files_open {
+                        crate::workspace_files_view::WorkspaceFiles { key: "workspace-{id}-{generation}", conversation: id.clone(), session_scope, onexpired }
+                    }
+                }
+                // 2. Every file of this chat, newest first.
                 section { class: "files-section files-in-chat", "aria-labelledby": "files-in-chat-{id}",
                     h3 { id: "files-in-chat-{id}", "In this chat" }
                     if files_open {
                         crate::chat_files_view::ChatFiles { conversation: id.clone(), files: chat_files(), session_scope }
                     }
                 }
-                // 2. The owner's folder: state, connect/disconnect and its activity.
-                section { class: "files-section files-folder", "aria-labelledby": "files-folder-{id}",
-                    h3 { id: "files-folder-{id}", "Your folder" }
-                    p { class: "files-drawer-note", "A folder on this computer that this chat can work in while this tab stays open on the chat. Disconnect stops it at once." }
-                    crate::local_files_view::LocalFolder { key: "local-folder-{id}-{generation}", conversation: id.clone(), csrf: csrf.clone(), session_scope, chip_root: Some(chip_id.clone()), files_href: Some(files_href.clone()) }
-                }
-                // 3. The encrypted private locker, collapsed.
-                section { class: "files-section files-private",
-                    button { r#type: "button", class: "files-private-toggle", "aria-expanded": "{private_open}", "aria-controls": "files-private-{id}",
-                        onclick: move |_| { let open = !private_open(); private_open.set(open); },
-                        "Private copies"
+                // 3. More, collapsed: the owner's own computer folder and the
+                // private locker. The folder stays mounted, so the composer's
+                // folder chip keeps working while this is closed.
+                details { class: "files-more",
+                    summary { class: "files-more-toggle", "More" }
+                    section { class: "files-section files-folder", "aria-labelledby": "files-folder-{id}",
+                        h3 { id: "files-folder-{id}", "Your folder" }
+                        p { class: "files-drawer-note", "A folder on this computer that this chat can work in while this tab stays open on the chat. Disconnect stops it at once." }
+                        crate::local_files_view::LocalFolder { key: "local-folder-{id}-{generation}", conversation: id.clone(), csrf: csrf.clone(), session_scope, chip_root: Some(chip_id.clone()), files_href: Some(files_href.clone()) }
                     }
-                    div { id: "files-private-{id}", class: "files-private-body", hidden: !private_open(),
-                        if files_open && private_open() {
-                            crate::attachments_view::ThreadFiles { key: "files-{id}-{generation}", id: id.clone(), csrf: csrf.clone(), session_scope, onexpired }
+                    section { class: "files-section files-private",
+                        button { r#type: "button", class: "files-private-toggle", "aria-expanded": "{private_open}", "aria-controls": "files-private-{id}",
+                            onclick: move |_| { let open = !private_open(); private_open.set(open); },
+                            "Private copies"
+                        }
+                        div { id: "files-private-{id}", class: "files-private-body", hidden: !private_open(),
+                            if files_open && private_open() {
+                                crate::attachments_view::ThreadFiles { key: "files-{id}-{generation}", id: id.clone(), csrf: csrf.clone(), session_scope, onexpired }
+                            }
                         }
                     }
                 }

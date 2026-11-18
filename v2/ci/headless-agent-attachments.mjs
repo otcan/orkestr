@@ -89,6 +89,8 @@ export async function agentAttachments({ page, state, origin, conversation, retu
     assert.deepEqual(await page.$eval(listed, n => [n.querySelector('.message-file-from')?.textContent, n.querySelector('strong')?.textContent]), ['Assistant', NAME]);
     await page.$eval(`${listed} button`, button => button.click());
     await page.waitForFunction(selector => document.querySelector(selector)?.getAttribute('data-verified') === 'true', { timeout: 15000 }, listed);
+    // Private copies sit under "More".
+    await page.$eval('.files-more', details => { details.open = true; });
     await page.click('.files-private-toggle');
     await page.waitForFunction(name => [...document.querySelectorAll('.files-drawer [aria-label="Thread files"] button')]
       .some(b => b.textContent === `Open saved copy: ${name}`), { timeout: 15000 }, NAME);
