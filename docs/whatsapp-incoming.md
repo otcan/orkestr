@@ -28,11 +28,15 @@ again after the read; a message whose thread left the grant is dropped.
 server user, not group/other writable, no symlink) that says which read path
 backs each account of an owner. Without it, or for an account that is not
 listed for the owner, the account is reported as `not_connected`, never as
-empty. The file holds no credential.
+empty. The file holds no credential. Its `refKey` (64 hex characters, random)
+keys the opaque chat, sender and message references (HMAC-SHA256): without it
+a reference could be reversed to a phone number by trying candidates. It opens
+nothing; changing it changes every reference and voids open cursors.
 
 ```json
 {
   "format": "orkestr-whatsapp-incoming-sources-v1",
+  "refKey": "<64 random hex characters>",
   "accounts": [
     {
       "account": "orkestr",
@@ -100,7 +104,9 @@ Left out: the owner's own messages, messages from `assistantAuthorIds`
 encryption notices, reactions), status broadcasts and channels.
 
 Group senders appear by masked number and reference only: the bridge returns
-no group sender names. A direct chat's sender is named after the chat.
+no group sender names. A direct chat's sender is named after the chat. A
+contact WhatsApp has no name for is listed under its formatted number, so
+names made of digits, and "+" numbers inside names, are masked like numbers.
 
 ## Answer
 
@@ -113,7 +119,11 @@ no group sender names. A direct chat's sender is named after the chat.
   4000 characters, with `textTruncated`).
 - `hasMore` and `nextCursor`: pass the cursor with the same `account`, `chat`
   and `since` for the next page. Pages are positions (time, reference), so they
-  never overlap or skip, also for messages in the same second.
+  never overlap or skip, also for messages in the same second. Every page reads
+  its window again; if the window now ends later than when the listing started
+  (new messages pushed a busy chat's window back, the active chats changed),
+  the call fails with `whatsapp_cursor_expired` instead of ending the listing
+  early: start again without a cursor.
 - `coverage`: what was read. `completeAfter` is the time after which the
   answer contains every incoming message in scope; a busy chat whose window
   ended before `since`, a chat that failed, or active chats beyond the scan
