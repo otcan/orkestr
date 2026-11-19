@@ -173,43 +173,65 @@ LEASE = {'v1_thread_id': DESCRIPTOR['v1_thread_id'], 'fencing_version': 7}
 
 
 class DeskEnsureTests(unittest.TestCase):
-    def configure(self, module, value, mode=0o755):
-        executable = unittest.mock.Mock()
-        executable.stat.return_value.st_mode = mode
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.program = Path(self.directory.name) / 'desk-ensure'
+        self.program.write_text('#!/bin/false\n')
+        self.program.chmod(0o755)
+        self.entry = {'path': str(self.program), 'sha256': hashlib.sha256(self.program.read_bytes()).hexdigest()}
+
+    def tearDown(self):
+        self.directory.cleanup()
+
+    def configure(self, module, value):
         with patch.object(module, 'read', return_value=json.dumps(value).encode()), \
-             patch.object(module, 'protected', return_value=executable):
+             patch.object(module, 'protected', side_effect=lambda path, directory=False: Path(path)):
             return module.configuration('/etc/example/descriptor.json')
 
-    def test_descriptor_accepts_only_an_executable_desk_ensure_extra(self):
+    def test_descriptor_accepts_only_a_pinned_executable_desk_ensure_extra(self):
         module = load('desktop_control')
         self.assertNotIn('desk_ensure', self.configure(module, DESCRIPTOR))
-        configured = self.configure(module, {**DESCRIPTOR, 'desk_ensure': '/usr/libexec/example/desk-ensure'})
-        self.assertEqual(configured['desk_ensure'], '/usr/libexec/example/desk-ensure')
-        for value, mode in [({**DESCRIPTOR, 'desk_ensure': ['/bin/sh']}, 0o755),
-                            ({**DESCRIPTOR, 'desk_ensure': '/usr/libexec/example/desk-ensure'}, 0o644),
-                            ({**DESCRIPTOR, 'unexpected': True}, 0o755)]:
-            with self.assertRaises(ValueError):
-                self.configure(module, value, mode)
+        self.assertEqual(self.configure(module, {**DESCRIPTOR, 'desk_ensure': self.entry})['desk_ensure'], self.entry)
+        for entry, reason in [(str(self.program), 'desk_ensure_invalid'),
+                              ({**self.entry, 'sha256': 'A' * 64}, 'desk_ensure_invalid'),
+                              ({**self.entry, 'extra': 1}, 'desk_ensure_invalid'),
+                              ({**self.entry, 'sha256': '0' * 64}, 'desk_ensure_changed')]:
+            with self.assertRaisesRegex(ValueError, reason):
+                self.configure(module, {**DESCRIPTOR, 'desk_ensure': entry})
+        with self.assertRaisesRegex(ValueError, 'controller_configuration'):
+            self.configure(module, {**DESCRIPTOR, 'unexpected': True})
+        self.program.chmod(0o644)
+        with self.assertRaisesRegex(ValueError, 'desk_ensure_invalid'):
+            self.configure(module, {**DESCRIPTOR, 'desk_ensure': self.entry})
 
     def test_desk_ensure_gets_desk_thread_and_version_but_no_grant_or_token(self):
         module = load('desktop_control')
-        config = {**DESCRIPTOR, 'desk_ensure': '/usr/libexec/example/desk-ensure'}
+        config = {**DESCRIPTOR, 'desk_ensure': self.entry}
         answer = unittest.mock.Mock(returncode=0, stdout='{"ok":true,"started":true}\n')
         with patch.object(module, 'protected', side_effect=Path), \
              patch.object(module.subprocess, 'run', return_value=answer) as run, \
              patch.dict(module.os.environ, {'ORKESTR_V2_DESKTOP_GRANT': 'f' * 64}):
             module.run_desk_ensure(config, LEASE)
         argv, options = run.call_args
-        self.assertEqual(argv[0], ['/usr/libexec/example/desk-ensure', '--slug', 'desk-a', '--budget-ms', '45000'])
+        self.assertEqual(argv[0], [str(self.program), '--slug', 'desk-a', '--budget-ms', '45000'])
         env = options['env']
         self.assertEqual((env['ORKESTR_DESKTOP_SLUG'], env['ORKESTR_DESKTOP_THREAD_ID'],
                           env['ORKESTR_DESKTOP_FENCING_VERSION']), ('desk-a', LEASE['v1_thread_id'], '7'))
         self.assertFalse({'ORKESTR_V2_DESKTOP_GRANT', 'ORKESTR_DESKTOP_FENCING_TOKEN'} & set(env))
         self.assertEqual(options['cwd'], '/')
 
+    def test_changed_desk_ensure_is_never_run(self):
+        module = load('desktop_control')
+        config = {**DESCRIPTOR, 'desk_ensure': self.entry}
+        self.program.write_text('#!/bin/true\n')
+        with patch.object(module, 'protected', side_effect=Path), patch.object(module.subprocess, 'run') as run:
+            with self.assertRaisesRegex(ValueError, 'desk_ensure_changed'):
+                module.run_desk_ensure(config, LEASE)
+            run.assert_not_called()
+
     def test_desk_ensure_failures_and_foreign_leases_become_safe_reason_codes(self):
         module = load('desktop_control')
-        config = {**DESCRIPTOR, 'desk_ensure': '/usr/libexec/example/desk-ensure'}
+        config = {**DESCRIPTOR, 'desk_ensure': self.entry}
         cases = [('{"ok":false,"error":"desk_start_refused","reason":"no_active_lease_for_caller"}', 69,
                   'controller_desk_start_refused'),
                  ('{"ok":false,"error":"Bad; value"}', 69, 'controller_desk_start_failed'),
@@ -289,7 +311,7 @@ class StartLifecycleTests(unittest.TestCase):
     def test_autostart_runs_under_the_new_lease_and_pins_the_started_target(self):
         with tempfile.TemporaryDirectory() as temporary:
             _module, order, outcome, status, _retry = self.run_start(
-                temporary, lambda config, lease: {'pid': 42}, {'desk_ensure': '/usr/libexec/example/desk-ensure'})
+                temporary, lambda config, lease: {'pid': 42}, {'desk_ensure': {'path': '/usr/libexec/example/desk-ensure', 'sha256': '0' * 64}})
             sessions = list(Path(temporary).glob('session-*.json'))
             self.assertEqual(len(sessions), 1)
             self.assertEqual(json.loads(sessions[0].read_text())['target'], {'pid': 42})
@@ -305,7 +327,7 @@ class StartLifecycleTests(unittest.TestCase):
             raise ValueError('controller_desk_start_failed')
         with tempfile.TemporaryDirectory() as temporary:
             _module, order, outcome, status, retry = self.run_start(
-                temporary, refuse, {'desk_ensure': '/usr/libexec/example/desk-ensure'})
+                temporary, refuse, {'desk_ensure': {'path': '/usr/libexec/example/desk-ensure', 'sha256': '0' * 64}})
             self.assertEqual(list(Path(temporary).glob('session-*.json')), [])
         self.assertEqual(outcome, 'controller_desk_start_failed')
         release = order.lease.call.call_args_list[-1]

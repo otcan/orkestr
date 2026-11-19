@@ -31,9 +31,12 @@ references, not credentials:
 }
 ```
 
-A host that stops idle desks can add an optional `"desk_ensure"` entry: the
-absolute path of a Root-owned executable that starts one stopped desk. When
-`start` finds the configured framebuffer service inactive, it runs that program
+A host that stops idle desks can add an optional entry
+`"desk_ensure": {"path": "/abs/path/desk-ensure", "sha256": "<64 hex>"}`. It
+names a Root-owned executable that starts one stopped desk. The controller
+checks the program's custody and pinned digest on every call, and refuses with
+`controller_desk_ensure_changed` if the file differs. When `start` finds the
+configured framebuffer service inactive, it runs that program
 once under the lease it has just acquired, with `ORKESTR_DESKTOP_SLUG`,
 `ORKESTR_DESKTOP_THREAD_ID` and `ORKESTR_DESKTOP_FENCING_VERSION` set and
 `--slug <desk> --budget-ms <ms>` as arguments. It never receives the grant or

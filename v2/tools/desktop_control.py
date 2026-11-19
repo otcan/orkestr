@@ -92,8 +92,7 @@ def configuration(path):
     require(fields <= set(value) <= fields | {'desk_ensure'} and value['format'] == 'orkestr-desktop-control-v1',
             'controller_configuration')
     if 'desk_ensure' in value:
-        require(isinstance(value['desk_ensure'], str), 'controller_desk_ensure_invalid')
-        require(protected(value['desk_ensure']).stat().st_mode & 0o100, 'controller_desk_ensure_invalid')
+        desk_ensure_program(value)
     uri = urllib.parse.urlsplit(value['v2_url'])
     require(uri.scheme == 'http' and uri.hostname == '127.0.0.1' and uri.port and
             value['v2_url'] == f'http://127.0.0.1:{uri.port}', 'controller_loopback_required')
@@ -212,6 +211,19 @@ def framebuffer_identity(config):
             'executable_sha256': hashlib.sha256(executable.read_bytes()).hexdigest()}
 
 
+def desk_ensure_program(config):
+    """The pinned, Root-owned desk-ensure executable named by the descriptor."""
+    entry = config['desk_ensure']
+    require(isinstance(entry, dict) and set(entry) == {'path', 'sha256'} and isinstance(entry['path'], str) and
+            isinstance(entry['sha256'], str) and re.fullmatch('[0-9a-f]{64}', entry['sha256']),
+            'controller_desk_ensure_invalid')
+    program = protected(entry['path'])
+    require(program.stat().st_mode & 0o100, 'controller_desk_ensure_invalid')
+    require(program.stat().st_size <= 1024**2 and
+            hashlib.sha256(program.read_bytes()).hexdigest() == entry['sha256'], 'controller_desk_ensure_changed')
+    return program
+
+
 def run_desk_ensure(config, lease):
     """Start the configured desk once, inside the caller's own held lease.
 
@@ -221,7 +233,7 @@ def run_desk_ensure(config, lease):
     require(isinstance(lease, dict) and lease.get('v1_thread_id') == config['v1_thread_id'] and
             type(lease.get('fencing_version')) is int and lease['fencing_version'] > 0,
             'controller_lease_response_invalid')
-    program = protected(config['desk_ensure'])
+    program = desk_ensure_program(config)
     env = {'PATH': '/usr/bin:/bin', 'HOME': '/root', 'LANG': 'C.UTF-8', 'PYTHONDONTWRITEBYTECODE': '1',
            'ORKESTR_DESKTOP_SLUG': config['desktop_slug'], 'ORKESTR_DESKTOP_THREAD_ID': lease['v1_thread_id'],
            'ORKESTR_DESKTOP_FENCING_VERSION': str(lease['fencing_version'])}
