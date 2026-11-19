@@ -371,21 +371,25 @@ impl ConfiguredExecution {
                 // transfer preserves this exact child, turn and event cursor.
                 // Keep selection available while HTTP waits on this lock;
                 // explicitly disable it before releasing a failed transfer.
-                let (next_authority, next_pump) = match steering
+                match steering
                     .renew(self.store.clone(), pump, &mut liveness)
                     .await
                 {
-                    Ok(refreshed) => refreshed,
+                    Ok(liveness::Renewal::Renewed((next_authority, next_pump))) => {
+                        let _ = authority.revoke();
+                        authority = next_authority;
+                        pump = next_pump;
+                        if let Some(managed) = managed.as_mut() {
+                            Box::pin(managed.refresh_lease(liveness.authority())).await?;
+                        }
+                    }
+                    // Core wrote nothing: the same child keeps its lease and
+                    // authority; liveness retries within that lease.
+                    Ok(liveness::Renewal::Kept(kept)) => pump = kept,
                     Err(reason) => {
                         run_control.disable();
                         return Err(reason);
                     }
-                };
-                let _ = authority.revoke();
-                authority = next_authority;
-                pump = next_pump;
-                if let Some(managed) = managed.as_mut() {
-                    Box::pin(managed.refresh_lease(liveness.authority())).await?;
                 }
             }
             // A persistence retry may retain an observation during this step.

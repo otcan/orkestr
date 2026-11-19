@@ -14,6 +14,7 @@ mod offline_pump;
 mod offline_result;
 mod provider_write;
 mod pump;
+mod renewal_refusal;
 mod reuse;
 mod session;
 mod steering;
@@ -22,6 +23,7 @@ mod workspace_result;
 pub use claude_pump::{ClaudePump, StoppingClaude};
 pub use claude_session::{PreparingClaude, ReadyClaude};
 pub use pump::{CodexPump, StopFailure, StoppingCodex};
+pub use renewal_refusal::{QuarantineOwned, RenewalRefusal};
 pub use session::{PreparingCodex, ReadyCodex, SetupFailure};
 pub use steering::{SteeringProgress, SteeringReadiness};
 #[cfg(test)]

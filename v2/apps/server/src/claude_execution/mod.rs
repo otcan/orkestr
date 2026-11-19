@@ -120,10 +120,13 @@ impl LiveClaudeExecution {
                 .as_ref()
                 .is_some_and(ClaudePump::renewal_quiescent)
     }
+    /// `Ok(true)`: renewed. `Ok(false)`: Core wrote nothing and the same pump
+    /// keeps its current lease (the caller may retry or `abandon_renewal`).
+    /// `Err`: the renewal is lost and the child quarantined.
     pub async fn renew(
         &mut self,
         authority: &mut orkestr_v2_store_sqlite::RunRenewalAuthority,
-    ) -> Result<(), orkestr_v2_application::runtime::RuntimeStoreError> {
+    ) -> Result<bool, orkestr_v2_application::runtime::RuntimeStoreError> {
         let pump = self
             .pump
             .take()
@@ -133,13 +136,24 @@ impl LiveClaudeExecution {
                 let _ = self.authority.revoke();
                 self.authority = owner;
                 self.pump = Some(pump);
-                Ok(())
+                Ok(true)
             }
-            Err(error) => {
+            Err(orkestr_runtime::execution::RenewalRefusal::Retry { retained, .. }) => {
+                self.pump = Some(*retained);
+                Ok(false)
+            }
+            Err(refusal) => {
                 self.quarantined = true;
-                Err(error)
+                Err(refusal.error())
             }
         }
+    }
+    /// Give up a kept renewal exactly as a lost one: quarantine the child.
+    pub fn abandon_renewal(&mut self) {
+        if let Some(pump) = self.pump.take() {
+            orkestr_runtime::execution::QuarantineOwned::quarantine_owned(pump);
+        }
+        self.quarantined = true;
     }
     /// The exact pump must have committed its genuine completion proposal.
     /// This only closes owned transport; Core separately requires acceptance.

@@ -96,10 +96,19 @@ impl WorkerLease {
         store: Store,
         pump: CodexPump,
     ) -> Result<(Authority, CodexPump), &'static str> {
-        let (authority, pump) = pump
-            .renew_lease(store, &mut self.authority)
-            .await
-            .map_err(|_| "Worker renewal transfer requires reconciliation")?;
+        // Workers schedule renewals with their own extendable() probe; any
+        // refusal here keeps its original meaning and quarantines the child.
+        let (authority, pump) =
+            pump.renew_lease(store, &mut self.authority)
+                .await
+                .map_err(|refusal| {
+                    eprintln!(
+                        "owned Worker liveness transfer refused: {}",
+                        self.authority.refusal_detail(refusal.error())
+                    );
+                    let _ = refusal.into_lost();
+                    "Worker renewal transfer requires reconciliation"
+                })?;
         self.lease_deadline_ms = pump.lease_deadline_ms();
         self.schedule(Instant::now())?;
         Ok((authority, pump))
