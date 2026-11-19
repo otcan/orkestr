@@ -7,8 +7,8 @@
       "advisoryId": "RUSTSEC-2024-0429",
       "approvedBy": "owner",
       "reviewRef": "ORK-799",
-      "approvedAt": "2026-11-12T17:00:00Z",
-      "expiresAt": "2026-11-19T17:00:00Z",
+      "approvedAt": "2026-11-19T17:10:00Z",
+      "expiresAt": "2026-11-26T17:00:00Z",
       "rationale": "Locked only via orkestr-v2-ui's optional mobile feature (dioxus-desktop 0.7 -> gtk 0.18 on Linux/BSD). cargo tree 2026-11-12: absent from the workspace and server on all targets, the shipped wasm32 UI (web,execution-controls) and mobile builds for iOS and Android; no workflow builds the UI for desktop Linux. No Orkestr code uses glib or VariantStrIter. Fix is glib 0.20; gtk 0.18 cannot take it and dioxus-desktop 0.7 needs wry 0.53/tao 0.34 (gtk 0.18)."
     },
     {
@@ -17,8 +17,8 @@
       "advisoryId": "RUSTSEC-2026-0097",
       "approvedBy": "owner",
       "reviewRef": "ORK-800",
-      "approvedAt": "2026-11-12T17:00:00Z",
-      "expiresAt": "2026-11-19T17:00:00Z",
+      "approvedAt": "2026-11-19T17:10:00Z",
+      "expiresAt": "2026-11-26T17:00:00Z",
       "rationale": "Build-time only: phf_generator 0.8 in the selectors 0.24 build script, via kuchikiki 0.8.8 which wry 0.53.5 pins for Android, under orkestr-v2-ui's optional mobile feature. cargo tree 2026-11-12: absent from the workspace, server and shipped wasm32 UI on all targets. The advisory needs rand's log feature and a custom logger calling thread_rng; rand 0.7.3 has no log dependency in Cargo.lock. The 0.7 line has no fix; removal needs dioxus 0.8 (alpha only)."
     },
     {
@@ -27,8 +27,8 @@
       "advisoryId": "RUSTSEC-2023-0071",
       "approvedBy": "owner",
       "reviewRef": "ORK-801",
-      "approvedAt": "2026-11-12T17:00:00Z",
-      "expiresAt": "2026-11-19T17:00:00Z",
+      "approvedAt": "2026-11-19T17:10:00Z",
+      "expiresAt": "2026-11-26T17:00:00Z",
       "rationale": "Marvin timing attack on RSA private-key decryption. Locked only through sqlx-mysql 0.8.6, sqlx's optional MySQL driver; the workspace enables only sqlite. cargo tree --all-features --target all (2026-11-12) finds rsa and sqlx-mysql in no build graph: they are lockfile-only. Orkestr has no RSA code and no MySQL connection, so there is no decryption oracle. Fixed in rsa 0.10.0, which only sqlx 0.9 uses; that upgrade needs the vendored sqlx-sqlite 0.8.6 patch ported."
     }
   ]
