@@ -823,6 +823,10 @@ class Ledger:
             if kind == "final" and data.get("origin") is None and not data.get("activity_notice"):
                 from .activity import withdraw_heartbeats
                 withdraw_heartbeats(self, db, data["remote_id"])
+            if kind == "final" and data.get("deep_updates"):
+                # No "Update:" line after the answer (deep_updates.py).
+                from .deep_updates import withdraw
+                withdraw(self, db, data)
             # A real reply to V1-local input also goes to the group, once.
             from . import local_reply_mirror
             if local_reply_mirror.wanted(data, kind, message):
@@ -873,7 +877,8 @@ class Ledger:
             self.save(data, db)
             count = db.execute("SELECT count(*) FROM exports WHERE input_id=? AND kind='progress' "
                                "AND source_key NOT LIKE 'stalled:%' AND source_key NOT LIKE 'heartbeat:%' "
-                               "AND source_key NOT LIKE 'continued:%'", (data["remote_id"],)).fetchone()[0]
+                               "AND source_key NOT LIKE 'continued:%' AND source_key NOT LIKE 'update:%'",
+                               (data["remote_id"],)).fetchone()[0]
             if count >= PROGRESS_LIMIT:
                 return None
             message = {"id": str(uuid.uuid4()), "role": "assistant", "state": "completed", "phase": "commentary",

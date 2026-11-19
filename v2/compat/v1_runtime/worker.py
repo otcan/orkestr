@@ -21,6 +21,7 @@ from . import recovery
 from . import thread_ask_relay
 from . import input_revisions
 from . import deep_group
+from . import deep_updates
 from . import parallel_watch
 from .peer_observation import before_send_refused, alert_held
 from . import switch_command
@@ -232,6 +233,8 @@ class Worker:
         self.progress_updates = progress_updates
         # Core-template "still working" line for a long Deep turn (activity.py).
         self.deep_heartbeat = True
+        # Throttled "Update:" progress of a long Deep run (deep_updates.py).
+        self.deep_updates = False
         self.fast_reply_policy = "legacy"
         # Steer owner messages into the running head turn (auto_steer.MODES).
         self.auto_steer = "off"
@@ -875,6 +878,7 @@ class Worker:
         ids -= parallel_watch.ignored(data)
         if len(ids) > 128:
             raise Refused("too_many_runs")
+        deep_updates.note_runs(data, events, ids)
         data["matched_runs"] = sorted(ids)
         data["cursor"] = max([data["cursor"]] + [event["sequence"] for event in events])
         self.ledger.save(data)
@@ -918,6 +922,7 @@ class Worker:
         if not deep_only:
             capture_first_response(self, data, statuses, ids)
         self.capture_progress(data, statuses["deep"], ids)
+        deep_updates.capture(self, data, statuses["deep"], ids)
         observe_activity(self, data, statuses)
         accepted = data.setdefault("accepted", {})
         if self.continue_after_deadline(data, statuses, ids):

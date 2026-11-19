@@ -112,6 +112,7 @@ class Handler(BaseHTTPRequestHandler):
             members = sum(entry["role"] == participants.MEMBER for entry in binding.config["participants"])
             return self.answer(200, dict(ok=True, state=binding.state, error=binding.error, inputKinds=INPUT_KINDS,
                                          enabled=binding.state == "enabled", members=members,
+                                         deepUpdates=bool(getattr(binding.worker, "deep_updates", False)),
                                          instructionsError=getattr(binding.worker, "instructions_error", None),
                                          worker=binding.worker_status(),
                                          **binding.ledger.health()))
