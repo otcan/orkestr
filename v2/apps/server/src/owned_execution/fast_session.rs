@@ -250,6 +250,9 @@ impl ConfiguredExecution {
             if phase == ExecutionPhase::Running
                 && Instant::now() >= renew_at
                 && live.renewal_quiescent()
+                && self
+                    .run_renewal_ready(live.lease_deadline_ms(), heartbeat)
+                    .await?
             {
                 if live.renew().await.is_err() {
                     control.disable();

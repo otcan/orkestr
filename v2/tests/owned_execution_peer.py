@@ -99,7 +99,7 @@ for line in sys.stdin:
             continue
         # A test-owned barrier keeps the first turn in flight. It does not sleep
         # for an assumed scheduling interval or alter any product checkpoint.
-        deadline = time.monotonic() + 15
+        deadline = time.monotonic() + (60 if Path("hold-first-long").exists() else 15)
         while turn == 1 and Path("hold-first").exists() and not Path("release-first").exists():
             assert time.monotonic() < deadline
             time.sleep(0.01)

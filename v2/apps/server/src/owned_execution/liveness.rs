@@ -7,6 +7,18 @@ use std::time::{Duration, Instant};
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(20);
 
+/// Refresh on the usual interval, but early enough that the lease still keeps
+/// the margin when the refresh falls due (as Worker leases schedule theirs).
+/// An unreadable clock refreshes at once.
+fn refresh_after(lease_deadline_ms: i64, wall_now_ms: Option<i64>) -> Duration {
+    let Some(wall) = wall_now_ms else {
+        return Duration::ZERO;
+    };
+    let remaining =
+        Duration::from_millis(u64::try_from(lease_deadline_ms.saturating_sub(wall)).unwrap_or(0));
+    REFRESH_INTERVAL.min(remaining.saturating_sub(super::supervisor_lease::LEASE_MARGIN))
+}
+
 pub(super) struct RunningLease {
     authority: RunRenewalAuthority,
     next_refresh: Instant,
@@ -26,10 +38,20 @@ impl RunningLease {
             .authorize_running_renewal(capability)
             .await
             .map_err(|_| "execution liveness authority refused")?;
-        Ok(Self {
+        let mut lease = Self {
             authority,
-            next_refresh: Instant::now() + REFRESH_INTERVAL,
-        })
+            next_refresh: Instant::now(),
+        };
+        lease.schedule();
+        Ok(lease)
+    }
+
+    fn schedule(&mut self) {
+        self.next_refresh = Instant::now()
+            + refresh_after(
+                self.authority.lease_deadline_ms(),
+                super::supervisor_lease::wall_now_ms(),
+            );
     }
 
     pub(super) fn due(&self, now: Instant) -> bool {
@@ -54,7 +76,7 @@ impl RunningLease {
             .renew_lease_with_steering(store, &mut self.authority, steering)
             .await
             .map_err(|_| "execution liveness transfer refused; reconciliation required")?;
-        self.next_refresh = Instant::now() + REFRESH_INTERVAL;
+        self.schedule();
         Ok(result)
     }
 
@@ -69,7 +91,7 @@ impl RunningLease {
             .renew_lease(store, &mut self.authority)
             .await
             .map_err(|_| "execution liveness transfer refused; reconciliation required")?;
-        self.next_refresh = Instant::now() + REFRESH_INTERVAL;
+        self.schedule();
         Ok(result)
     }
 
@@ -81,7 +103,27 @@ impl RunningLease {
         live.renew(&mut self.authority)
             .await
             .map_err(|_| "Claude liveness transfer refused; reconciliation required")?;
-        self.next_refresh = Instant::now() + REFRESH_INTERVAL;
+        self.schedule();
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn refresh_keeps_the_margin_on_a_short_lease() {
+        let margin = super::super::supervisor_lease::LEASE_MARGIN;
+        let wall = 1_000_000;
+        // A full lease refreshes on the usual interval.
+        assert_eq!(refresh_after(wall + 60_000, Some(wall)), REFRESH_INTERVAL);
+        // A short lease refreshes while the margin is still left.
+        let short = wall + i64::try_from(margin.as_millis()).unwrap() + 5_000;
+        assert_eq!(refresh_after(short, Some(wall)), Duration::from_secs(5));
+        // Down to the margin, past it, or no clock: refresh now.
+        assert_eq!(refresh_after(wall + 10_000, Some(wall)), Duration::ZERO);
+        assert_eq!(refresh_after(wall - 1, Some(wall)), Duration::ZERO);
+        assert_eq!(refresh_after(wall + 60_000, None), Duration::ZERO);
     }
 }

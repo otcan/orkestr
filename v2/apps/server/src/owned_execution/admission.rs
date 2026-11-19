@@ -39,74 +39,6 @@ impl ConfiguredExecution {
         }
     }
 
-    pub(super) async fn maintain(&self, heartbeat: &mut Instant) -> Result<(), &'static str> {
-        self.current().await?;
-        let now = Instant::now();
-        if heartbeat_due(*heartbeat, now) && !self.supervisor_lease.retry_pending(now) {
-            self.renew_supervisor(heartbeat).await?;
-        }
-        Ok(())
-    }
-
-    /// A due run-lease renewal waits while the supervisor heartbeat is
-    /// deferred: the store is refusing writes, and a refused renewal
-    /// quarantines the native child. It goes ahead once a heartbeat is
-    /// accepted again, or when the run's own lease nears its end.
-    pub(super) fn run_renewal_held(&self, liveness: &liveness::RunningLease) -> bool {
-        self.supervisor_lease.hold_run_renewal(
-            liveness.lease_deadline_ms(),
-            supervisor_lease::wall_now_ms(),
-        )
-    }
-
-    /// One supervisor heartbeat. A transient store refusal (Busy/Unavailable)
-    /// defers it with backoff while Core's lease keeps its margin; only lost
-    /// authority or a lease that would really lapse pauses the window. See
-    /// `supervisor_lease`.
-    async fn renew_supervisor(&self, heartbeat: &mut Instant) -> Result<(), &'static str> {
-        let error = match self.store.heartbeat_supervisor().await {
-            Ok(deadline) => {
-                self.supervisor_lease.granted(deadline);
-                *heartbeat = Instant::now();
-                return Ok(());
-            }
-            Err(error) => error,
-        };
-        if !supervisor_lease::transient(&error) {
-            eprintln!("owned execution heartbeat refused: {error:?}");
-            return Err("execution supervisor heartbeat refused");
-        }
-        // Core's own record says how much lease is left; the read needs no
-        // write lock. If Core cannot answer that either, fall back to the last
-        // deadline it granted.
-        let remaining = match self.store.supervisor_lease_remaining_ms().await {
-            Ok(remaining) => Some(remaining),
-            Err(read) if supervisor_lease::transient(&read) => self
-                .supervisor_lease
-                .granted_remaining_ms(supervisor_lease::wall_now_ms()),
-            Err(read) => {
-                eprintln!("owned execution heartbeat refused: {error:?}; lease read {read:?}");
-                return Err("execution supervisor heartbeat refused");
-            }
-        };
-        match self.supervisor_lease.refused(remaining, Instant::now()) {
-            Some(retry) => {
-                eprintln!(
-                    "owned execution heartbeat deferred: {error:?} lease_remaining_ms={} retry_ms={}",
-                    remaining.unwrap_or_default(),
-                    retry.as_millis()
-                );
-                Ok(())
-            }
-            None => {
-                eprintln!(
-                    "owned execution heartbeat refused: {error:?}; supervisor lease would lapse (lease_remaining_ms={remaining:?})"
-                );
-                Err("execution supervisor heartbeat refused")
-            }
-        }
-    }
-
     /// Called only after setup or committed owner acceptance. Core owns the
     /// earliest unconsumed scope sequence; active input is never claimed early.
     pub(super) async fn next(
@@ -175,10 +107,10 @@ impl ConfiguredExecution {
                 }
             };
             self.current().await?;
-            // Same deferral as `maintain`: a deferred heartbeat already proved
-            // the lease keeps its margin, so admission proceeds on that lease.
-            if !self.supervisor_lease.retry_pending(Instant::now()) {
-                self.renew_supervisor(heartbeat).await?;
+            // The admitted run's lease is capped at the supervisor deadline:
+            // admit only on a heartbeat Core accepted just now.
+            if !self.accepted_heartbeat(shutdown, heartbeat).await? {
+                return Ok(None);
             }
             // The FIFO head can change between the prospective read and claim
             // (parallel slots). Re-evaluate the actual lease before any admission.

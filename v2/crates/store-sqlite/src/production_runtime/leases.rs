@@ -47,27 +47,32 @@ impl Store {
     }
 
     /// Read-only: how long Core's lease for this bound supervisor context has
-    /// left, in ms of Core's own clock (zero or negative once it lapsed).
+    /// left, in ms of Core's own clock.
     ///
     /// `heartbeat_supervisor` is a `BEGIN IMMEDIATE` write, so it reports
     /// Busy/Unavailable while another writer holds SQLite past busy_timeout.
-    /// This read needs no write lock and still answers then, so the caller can
-    /// tell a transient refusal from a lease that is really about to lapse. It
-    /// never renews or revives the lease. A replaced incarnation or generation
-    /// (a takeover) is Fenced.
+    /// This read runs the heartbeat's own `validate` (machine session, window
+    /// scope, incarnation, generation, expiry) in a plain read transaction,
+    /// which needs no write lock and still answers then, and takes the
+    /// remaining time from the same snapshot. So it refuses exactly as the
+    /// heartbeat would (Unauthorized, Fenced, Expired), and it never renews or
+    /// revives the lease.
     pub async fn supervisor_lease_remaining_ms(&self) -> Result<i64> {
         let context = self.context()?;
-        let row: Option<(i64, i64)> = sqlx::query_as(
-            "SELECT lease_deadline_ms, CAST((julianday('now')-2440587.5)*86400000 AS INTEGER) FROM production_supervisors WHERE context_id=? AND incarnation_id=? AND generation=?",
+        let mut tx = self.pool.begin().await.map_err(db)?;
+        context.validate(&mut tx).await?;
+        let remaining: i64 = sqlx::query_scalar(
+            "SELECT lease_deadline_ms-CAST((julianday('now')-2440587.5)*86400000 AS INTEGER) FROM production_supervisors WHERE context_id=? AND incarnation_id=? AND generation=?",
         )
         .bind(&context.id)
         .bind(&context.incarnation)
         .bind(context.generation)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *tx)
         .await
-        .map_err(db)?;
-        let (deadline, clock) = row.ok_or(RuntimeStoreError::Fenced)?;
-        Ok(deadline.saturating_sub(clock))
+        .map_err(db)?
+        .ok_or(RuntimeStoreError::Fenced)?;
+        tx.commit().await.map_err(db)?;
+        Ok(remaining)
     }
 
     pub(crate) async fn production_renew(
@@ -336,15 +341,20 @@ mod tests {
         assert!(f.handle.supervisor_lease_remaining_ms().await.unwrap() > during);
     }
 
-    /// The read never revives a lapsed lease and refuses a replaced context.
+    /// The read refuses exactly as the heartbeat would: a lapsed lease is
+    /// Expired (never revived), a takeover is Fenced, a revoked machine
+    /// session is Unauthorized.
     #[tokio::test]
-    async fn lease_read_reports_lapse_and_refuses_a_takeover() {
+    async fn lease_read_refuses_as_the_heartbeat_would() {
         let f = setup().await;
         sqlx::query("UPDATE production_supervisors SET lease_deadline_ms=0")
             .execute(&f.store.pool)
             .await
             .unwrap();
-        assert!(f.handle.supervisor_lease_remaining_ms().await.unwrap() <= 0);
+        assert!(matches!(
+            f.handle.supervisor_lease_remaining_ms().await,
+            Err(RuntimeStoreError::Expired)
+        ));
         assert!(matches!(
             f.handle.heartbeat_supervisor().await,
             Err(RuntimeStoreError::Expired)
@@ -364,6 +374,16 @@ mod tests {
             f.handle.supervisor_lease_remaining_ms().await,
             Err(RuntimeStoreError::Fenced)
         ));
-        assert!(successor.supervisor_lease_remaining_ms().await.unwrap() > 0);
+        let fresh = successor.supervisor_lease_remaining_ms().await.unwrap();
+        assert!((50_000..=60_000).contains(&fresh), "fresh lease {fresh}");
+        f.store.revoke_session(&f.token).await.unwrap();
+        assert!(matches!(
+            successor.supervisor_lease_remaining_ms().await,
+            Err(RuntimeStoreError::Unauthorized)
+        ));
+        assert!(matches!(
+            successor.heartbeat_supervisor().await,
+            Err(RuntimeStoreError::Unauthorized)
+        ));
     }
 }

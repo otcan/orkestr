@@ -362,7 +362,9 @@ impl ConfiguredExecution {
             if phase == ExecutionPhase::Running
                 && liveness.due(Instant::now())
                 && pump.renewal_quiescent()
-                && !self.run_renewal_held(&liveness)
+                && self
+                    .run_renewal_ready(liveness.lease_deadline_ms(), heartbeat)
+                    .await?
             {
                 // Same scheduling lock as HTTP Stop and provider observation.
                 // Core rechecks auth/state inside the sealed transition. The

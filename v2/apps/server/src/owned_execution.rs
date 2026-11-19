@@ -35,6 +35,7 @@ mod run_status;
 mod session;
 mod steering;
 mod stopping;
+mod supervisor_heartbeat;
 mod supervisor_lease;
 #[cfg(all(test, unix))]
 mod supervisor_lease_tests;
