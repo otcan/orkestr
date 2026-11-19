@@ -55,6 +55,28 @@ test('group input keeps the four-column shape earlier builds write positionally'
  assert.equal(row.mimetype,'image/png');assert.equal(row.filename,'sample.png');assert.ok(fs.existsSync(row.path));
  assert.equal(check.prepare('SELECT body FROM group_input WHERE id=?').get('legacy-1').body,'legacy text');
 });
+test('an existing journal gains the send indexes the relay and echo checks use', t => {
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'scoped-group-send-index-'));
+ t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+ const dbPath=path.join(dir,'group.sqlite');
+ // A journal written before the indexes existed, already holding many sends.
+ const legacy=new DatabaseSync(dbPath);
+ legacy.exec(`CREATE TABLE group_send(id TEXT PRIMARY KEY,hash TEXT NOT NULL,chat_id TEXT NOT NULL,parent_id TEXT NOT NULL,state TEXT NOT NULL,provider_id TEXT,created_at TEXT NOT NULL);`);
+ const insert=legacy.prepare("INSERT INTO group_send VALUES(?,'h','120000000001@g.us','p','sent',?,'2026-01-01')");
+ for(let i=0;i<500;i++)insert.run(`send-${i}`,`provider-${i}`);
+ legacy.close();
+ const now=Date.now(),own='15550000001@c.us',group='120000000001@g.us';
+ const config={ownChatId:own,activatedAt:new Date(now-1000).toISOString(),groups:[{chatId:group,threadId:'thread-1'}],mediaDir:path.join(dir,'media')};
+ createScopedGroupTransport({config,token:'test-token',base:{},dbPath,now:()=>now}).close();
+ const check=new DatabaseSync(dbPath,{readOnly:true});
+ t.after(()=>check.close());
+ const plan=sql=>check.prepare(`EXPLAIN QUERY PLAN ${sql}`).all().map(row=>row.detail).join(' | ');
+ // The relay's per-input delivery barrier (whatsapp-scoped-group-relay.js).
+ assert.match(plan("SELECT 1 FROM group_send WHERE state IN ('sending','uncertain') LIMIT 1"),/USING (COVERING )?INDEX group_send_state/);
+ assert.match(plan("SELECT 1 FROM group_send WHERE state='uncertain' LIMIT 1"),/USING (COVERING )?INDEX group_send_state/);
+ assert.match(plan('SELECT 1 FROM group_send WHERE provider_id=?'),/USING (COVERING )?INDEX group_send_provider/);
+ assert.equal(check.prepare('SELECT count(*) n FROM group_send').get().n,500,'existing sends are kept');
+});
 test('journals migrated with media columns still accept new input', async t => {
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'scoped-group-legacy-media-'));
  t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
