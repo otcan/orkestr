@@ -204,6 +204,9 @@ is outside this Compose beta's supported scope.
 
 ### First conversation, review and Stop
 
+For a release-pinned setup walkthrough and a fictional two-turn check, see
+[Connect Codex and check your first conversation](../docs/v2/tutorials/connect-model-first-conversation.md).
+
 Reload the page, open the global conversation or create a new one, and send a
 simple question. Observe Fast and Deep separately. Confirm a real answer and
 ask a follow-up to check continuity. In **Chat settings**, enable review before
