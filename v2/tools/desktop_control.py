@@ -2,7 +2,9 @@
 
 An operator descriptor binds one conversation, its existing desktop grant, one
 local framebuffer service, and private output paths. No browser profiles,
-password stores, shell commands or provider credentials are read.
+password stores, shell commands or provider credentials are read. A descriptor
+may also name the host's desk-ensure program, which `start` runs under its own
+fresh lease when the desk was stopped (for example by an idle-stop policy).
 """
 import argparse
 import datetime
@@ -14,13 +16,26 @@ import os
 from pathlib import Path
 import re
 import shlex
+import signal
 import stat
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+
+# A start stays inside the 90 s host-command budget: desk-ensure gets what is left
+# after the lease calls, minus a reserve for the framebuffer to settle and the screenshot.
+START_BUDGET_SECONDS = 80.0
+START_RESERVE_SECONDS = 20.0
+DESK_ENSURE_BUDGET_MS = 45000
+DESK_ENSURE_MINIMUM_MS = 5000
+FRAMEBUFFER_SETTLE_SECONDS = 10.0
+# A framebuffer that a desk start is still bringing up reports one of these.
+FRAMEBUFFER_SETTLING = {'controller_framebuffer_inactive', 'controller_framebuffer_pid',
+                        'controller_listener_not_owned'}
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -79,7 +94,12 @@ def configuration(path):
     fields = {'format', 'v2_url', 'conversation_id', 'v1_thread_id', 'desktop_slug', 'grant_file',
               'framebuffer_port', 'framebuffer_unit', 'state_directory', 'output_directory',
               'output_uid', 'output_gid', 'broker_file', 'broker_uid'}
-    require(set(value) == fields and value['format'] == 'orkestr-desktop-control-v1', 'controller_configuration')
+    require(fields <= set(value) <= fields | {'desk_ensure'} and value['format'] == 'orkestr-desktop-control-v1',
+            'controller_configuration')
+    if 'desk_ensure' in value:
+        # Shape only: the digest is checked when a start runs the program, so a
+        # desk-ensure update never blocks status or release of a live session.
+        desk_ensure_entry(value)
     uri = urllib.parse.urlsplit(value['v2_url'])
     require(uri.scheme == 'http' and uri.hostname == '127.0.0.1' and uri.port and
             value['v2_url'] == f'http://127.0.0.1:{uri.port}', 'controller_loopback_required')
@@ -198,6 +218,105 @@ def framebuffer_identity(config):
             'executable_sha256': hashlib.sha256(executable.read_bytes()).hexdigest()}
 
 
+def desk_ensure_entry(config):
+    entry = config['desk_ensure']
+    require(isinstance(entry, dict) and set(entry) == {'path', 'sha256'} and isinstance(entry['path'], str) and
+            isinstance(entry['sha256'], str) and re.fullmatch('[0-9a-f]{64}', entry['sha256']),
+            'controller_desk_ensure_invalid')
+    return entry
+
+
+def desk_ensure_program(config):
+    """The pinned, Root-owned desk-ensure executable named by the descriptor."""
+    entry = desk_ensure_entry(config)
+    program = protected(entry['path'])
+    require(program.stat().st_mode & 0o100, 'controller_desk_ensure_invalid')
+    require(program.stat().st_size <= 1024**2 and
+            hashlib.sha256(program.read_bytes()).hexdigest() == entry['sha256'], 'controller_desk_ensure_changed')
+    return program
+
+
+def run_desk_ensure(config, lease, budget_ms):
+    """Start the configured desk once, inside the caller's own held lease.
+
+    The program receives only the desk, V1 thread and fencing version, never
+    the grant or the fencing token, and answers with one JSON line. It runs in
+    its own process group, which is killed as a whole if it overruns.
+    """
+    require(isinstance(lease, dict) and lease.get('v1_thread_id') == config['v1_thread_id'] and
+            type(lease.get('fencing_version')) is int and lease['fencing_version'] > 0,
+            'controller_lease_response_invalid')
+    program = desk_ensure_program(config)
+    env = {'PATH': '/usr/bin:/bin', 'HOME': '/root', 'LANG': 'C.UTF-8', 'PYTHONDONTWRITEBYTECODE': '1',
+           'ORKESTR_DESKTOP_SLUG': config['desktop_slug'], 'ORKESTR_DESKTOP_THREAD_ID': lease['v1_thread_id'],
+           'ORKESTR_DESKTOP_FENCING_VERSION': str(lease['fencing_version'])}
+    child = subprocess.Popen([str(program), '--slug', config['desktop_slug'], '--budget-ms', str(budget_ms)],
+                             env=env, cwd='/', stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                             stderr=subprocess.DEVNULL, text=True, start_new_session=True)
+    try:
+        stdout, _ = child.communicate(timeout=budget_ms / 1000 + 5)
+    except subprocess.TimeoutExpired:
+        os.killpg(child.pid, signal.SIGKILL)
+        child.communicate()
+        raise ValueError('controller_desk_start_timeout') from None
+    lines = (stdout or '').strip().splitlines()
+    try:
+        answer = json.loads(lines[-1]) if lines else None
+    except ValueError:
+        answer = None
+    if child.returncode == 0 and isinstance(answer, dict) and answer.get('ok') is True:
+        return
+    code = answer.get('error') if isinstance(answer, dict) else None
+    raise ValueError('controller_' + code if isinstance(code, str) and re.fullmatch(r'desk_[a-z_]{1,40}', code)
+                     else 'controller_desk_start_failed')
+
+
+def ensure_framebuffer(config, lease, deadline, clock=time.monotonic, pause=time.sleep):
+    """Return the framebuffer identity, running desk-ensure first if the desk is stopped."""
+    try:
+        return framebuffer_identity(config)
+    except ValueError as error:
+        if str(error) != 'controller_framebuffer_inactive':
+            raise
+    budget_ms = int(min(DESK_ENSURE_BUDGET_MS, (deadline - clock() - START_RESERVE_SECONDS) * 1000))
+    require(budget_ms >= DESK_ENSURE_MINIMUM_MS, 'controller_start_budget_exhausted')
+    run_desk_ensure(config, lease, budget_ms)
+    deadline = clock() + FRAMEBUFFER_SETTLE_SECONDS
+    while True:
+        try:
+            return framebuffer_identity(config)
+        except ValueError as error:
+            if str(error) not in FRAMEBUFFER_SETTLING or clock() >= deadline:
+                raise
+        pause(0.5)
+
+
+def failure_reason(error):
+    return str(error) if isinstance(error, ValueError) and re.fullmatch('[a-z0-9_]+', str(error)) else type(error).__name__
+
+
+def abandon_start(lease, acquired, journal, fingerprint, state_path, error):
+    """Release the lease of a start that failed; a start never sends input.
+
+    Never raises, so the original error stays visible. If the release cannot be
+    confirmed, the intent journal stays as it is and `status` keeps reporting
+    an unknown outcome.
+    """
+    try:
+        lease.call('release', {'fencing_token': acquired['fencing_token'],
+                               'reason': 'native-desktop-controller-start-failed'})
+    except Exception:
+        return
+    try:
+        replace(journal, {'state': 'failed', 'fingerprint': fingerprint, 'error': failure_reason(error)})
+        if state_path.exists():
+            state = json.loads(read(state_path))
+            state['state'] = 'released'
+            replace(state_path, state)
+    except Exception:
+        pass
+
+
 def argument_shape(operation, values):
     counts = {'start': 0, 'status': 0, 'screenshot': 0, 'release': 0, 'move': 2, 'click': 3, 'key': 1, 'type': 1}
     require(operation in counts and len(values) == counts[operation], 'controller_action_arguments')
@@ -222,38 +341,59 @@ def execute(config, operation, values, session_id, request_id):
     directory = Path(config['state_directory'])
     journal = directory / ('request-' + request_id + '.json')
     if operation == 'status':
+        if not journal.exists():
+            # Intent is persisted before any lease or input, so nothing ran under this ID.
+            return {'ok': True, 'state': 'not_recorded', 'session_id': None, 'result': None, 'automatic_retry': False}
         previous = json.loads(read(journal))
         return {'ok': True, 'state': previous['state'], 'session_id': previous.get('session_id'),
-                'result': previous.get('result'), 'automatic_retry': False}
+                'result': previous.get('result'), 'automatic_retry': False,
+                **({'error': previous['error']} if 'error' in previous else {})}
     fingerprint = hashlib.sha256(json.dumps([operation, values, session_id], separators=(',', ':')).encode()).hexdigest()
     if journal.exists():
         previous = json.loads(read(journal))
         require(previous['fingerprint'] == fingerprint, 'controller_request_id_conflict')
+        require(previous['state'] != 'failed', 'controller_request_failed_use_new_request_id')
         require(previous['state'] == 'complete', 'controller_action_outcome_unknown_no_retry')
         return {**previous['result'], 'duplicate': True}
+    deadline = time.monotonic() + START_BUDGET_SECONDS
     lease = Lease(config)
     lease.binding()
-    target = framebuffer_identity(config) if operation != 'release' else None
+    autostart = operation == 'start' and 'desk_ensure' in config
+    target = framebuffer_identity(config) if operation != 'release' and not autostart else None
     if operation == 'start':
         session_id = str(uuid.uuid4())
         state_path = directory / ('session-' + session_id + '.json')
         # Persist intent before acquiring. A lost answer is reconciled, never retried automatically.
         write(journal, {'state': 'intent', 'fingerprint': fingerprint})
         acquired = lease.call('acquire', {'ttl_ms': 300000, 'purpose': 'owner-authorized-native-desktop'})
-        state = {'session_id': session_id, 'target': target, 'fencing_token': acquired['fencing_token'],
-                 'conversation_id': config['conversation_id'], 'desktop_slug': config['desktop_slug'], 'state': 'active'}
-        write(state_path, state)
-        replace(journal, {'state': 'intent', 'fingerprint': fingerprint, 'session_id': session_id})
-    else:
-        state_path = directory / ('session-' + session_id + '.json')
-        state = json.loads(read(state_path))
-        require(state['state'] == 'active' and state['session_id'] == session_id and
-                state['conversation_id'] == config['conversation_id'] and
-                state['desktop_slug'] == config['desktop_slug'] and
-                (operation == 'release' or state['target'] == target),
-                'controller_session_or_target_changed')
-        lease.call('heartbeat', {'fencing_token': state['fencing_token'], 'extend_ttl_ms': 300000})
-        write(journal, {'state': 'intent', 'fingerprint': fingerprint})
+        try:
+            if autostart:
+                # Checked under the new lease, so an idle-stop cannot race the start.
+                target = ensure_framebuffer(config, acquired.get('lease'), deadline)
+            state = {'session_id': session_id, 'target': target, 'fencing_token': acquired['fencing_token'],
+                     'conversation_id': config['conversation_id'], 'desktop_slug': config['desktop_slug'],
+                     'state': 'active'}
+            write(state_path, state)
+            replace(journal, {'state': 'intent', 'fingerprint': fingerprint, 'session_id': session_id})
+            return perform(config, operation, values, session_id, state, state_path, target, lease, journal,
+                           fingerprint)
+        except Exception as error:
+            abandon_start(lease, acquired, journal, fingerprint, state_path, error)
+            raise
+    state_path = directory / ('session-' + session_id + '.json')
+    state = json.loads(read(state_path))
+    require(state['state'] == 'active' and state['session_id'] == session_id and
+            state['conversation_id'] == config['conversation_id'] and
+            state['desktop_slug'] == config['desktop_slug'] and
+            (operation == 'release' or state['target'] == target),
+            'controller_session_or_target_changed')
+    lease.call('heartbeat', {'fencing_token': state['fencing_token'], 'extend_ttl_ms': 300000})
+    write(journal, {'state': 'intent', 'fingerprint': fingerprint})
+    return perform(config, operation, values, session_id, state, state_path, target, lease, journal, fingerprint)
+
+
+def perform(config, operation, values, session_id, state, state_path, target, lease, journal, fingerprint):
+    """Run one journaled action on a held session and record its result."""
     result = {'ok': True, 'session_id': session_id, 'desktop_slug': config['desktop_slug'], 'operation': operation}
     if operation == 'release':
         lease.call('release', {'fencing_token': state['fencing_token'], 'reason': 'native-desktop-controller-finished'})
@@ -320,6 +460,5 @@ if __name__ == '__main__':
     except (ValueError, OSError, KeyError, urllib.error.URLError, subprocess.SubprocessError) as error:
         # A failure after intent may follow a real click. Inspect the journal;
         # never repeat it with a new request ID merely because capture failed.
-        reason = str(error) if isinstance(error, ValueError) and re.fullmatch('[a-z0-9_]+', str(error)) else type(error).__name__
-        print(json.dumps({'ok': False, 'error': reason, 'reconcile_before_retry': True}))
+        print(json.dumps({'ok': False, 'error': failure_reason(error), 'reconcile_before_retry': True}))
         raise SystemExit(1)

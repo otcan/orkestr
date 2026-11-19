@@ -31,6 +31,25 @@ references, not credentials:
 }
 ```
 
+A host that stops idle desks can add an optional entry
+`"desk_ensure": {"path": "/abs/path/desk-ensure", "sha256": "<64 hex>"}`. It
+names a Root-owned executable that starts one stopped desk. Reading the
+descriptor checks only the entry's shape, so a program update never blocks
+`status` or `release`. When `start` finds the configured framebuffer service
+inactive, it checks the program's custody and pinned digest
+(`controller_desk_ensure_changed` if the file differs). It then runs the program
+once, in its own process group, under the lease it has just acquired. The
+program gets `ORKESTR_DESKTOP_SLUG`, `ORKESTR_DESKTOP_THREAD_ID` and
+`ORKESTR_DESKTOP_FENCING_VERSION`, with `--slug <desk> --budget-ms <ms>` as
+arguments. It never receives the grant or the fencing token. The budget is
+whatever remains of the start's 80 s, less a reserve for the framebuffer to
+settle and the screenshot, and at most 45 s. An overrun kills the whole group
+(`controller_desk_start_timeout`). The program prints one JSON line: `"ok":
+true` on success, or an `"error"` code such as `desk_start_refused`, which
+`start` reports as `controller_desk_start_refused`. The controller then waits
+briefly for the framebuffer listener and pins that identity for the session.
+Without `desk_ensure`, a stopped desk is refused before any lease is taken.
+
 The grant file contains the existing `ORKESTR_V2_DESKTOP_GRANT` assignment.
 The broker file is the existing service-private V1 broker configuration.
 The state directory must be private to Root. The output directory stays owned
@@ -87,3 +106,10 @@ has an uncertain outcome: do not retry it under a new ID. Use `status` with
 the original `--request-id` to inspect the safe receipt, reconcile the visible
 state, and release the recorded session. The fencing token stays private.
 There is no automatic retry or automatic deletion of active control state.
+
+`status` reports `not_recorded` when no intent exists for a request ID: the
+controller stopped before taking a lease, so nothing happened. A `start` sends
+no input. If it fails after acquiring its lease, for example while starting the
+desk or taking its first screenshot, it releases the lease and marks its session
+released. It also records `failed` with the `error`. A new request ID may be
+used. If that release cannot be confirmed, the request stays `intent`.
