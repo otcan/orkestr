@@ -216,7 +216,8 @@ for line in frames():"#,
     };
     let (mut authority, mut pump) = ready.attach(bound.clone(), cap).unwrap();
     let original_scope = pump.source.scope.clone();
-    let deadline = Instant::now() + Duration::from_secs(5);
+    // Mode 14 waits out one SQLite busy_timeout (5 s) inside the loop.
+    let deadline = Instant::now() + Duration::from_secs(if stop_mode == 14 { 20 } else { 5 });
     loop {
         #[cfg(feature = "fixture-test-controls")]
         if stop_mode == 3 && pump.prepared_for_provider_write() {
