@@ -17,6 +17,7 @@ from . import config as config_module
 from .export_changes import ExportChanges
 from .ledger import Ledger
 from .auto_steer import default_mode as auto_steer_mode
+from .deep_updates import enabled as deep_updates_enabled
 from . import release_interruption
 from .worker import DEFAULT_BURST_QUIET_S, Signal, Worker, attachment_export_settings
 
@@ -28,7 +29,7 @@ WORKER_HEALTHY_S = 300
 
 MUTABLE_KEYS = ("enabled", "revoked", "progress_updates", "attachments", "max_outstanding_inputs", "max_input_age_seconds",
                 "participants", "owner_label", "instructions_path", "fast_reply_policy", "auto_steer",
-                "owner_only_verified", "deep_heartbeat", "local_reply_mirror")
+                "owner_only_verified", "deep_heartbeat", "local_reply_mirror", "deep_updates")
 
 
 class Binding:
@@ -216,6 +217,7 @@ class Registry:
             polls.watch = getattr(self, "watch", None)
         binding.worker.progress_updates = binding.config["progress_updates"]
         binding.worker.deep_heartbeat = binding.config.get("deep_heartbeat", True) is not False
+        binding.worker.deep_updates = deep_updates_enabled(binding.config)
         binding.worker.fast_reply_policy = binding.config["fast_reply_policy"]
         binding.ledger.owner_only = binding.config["fast_reply_policy"] == "owner_only"
         binding.ledger.scrub_paths = scrubs_paths(binding.config)
