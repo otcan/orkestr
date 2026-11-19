@@ -227,6 +227,7 @@ impl ConfiguredExecution {
                     if status.phase == ExecutionPhase::Running
                         && liveness.due(Instant::now())
                         && live.renewal_quiescent()
+                        && !self.run_renewal_held(&liveness)
                     {
                         // Same scheduling lock as HTTP Stop and observation.
                         if let Err(reason) = liveness.refresh_claude(&mut live).await {

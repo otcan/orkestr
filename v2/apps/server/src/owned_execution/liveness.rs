@@ -36,6 +36,11 @@ impl RunningLease {
         now >= self.next_refresh
     }
 
+    /// The run's current lease deadline (Core clock, ms): scheduling only.
+    pub(super) fn lease_deadline_ms(&self) -> i64 {
+        self.authority.lease_deadline_ms()
+    }
+
     /// Caller owns the per-run scheduling lock and has checked current Running
     /// status plus Runtime quiescence. A failed consuming transfer remains
     /// uncertain and owns cleanup; the same grant is never submitted again.

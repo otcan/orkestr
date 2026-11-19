@@ -156,6 +156,7 @@ impl ConfiguredExecution {
             window: Some(context),
             companion: None,
             window_activated: std::sync::atomic::AtomicBool::new(false),
+            supervisor_lease: Default::default(),
             fast_factory: None,
             deep_slots: None,
             parallel_factory: None,

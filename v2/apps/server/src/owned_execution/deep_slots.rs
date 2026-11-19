@@ -682,6 +682,7 @@ impl ConfiguredExecution {
             if status.phase == ExecutionPhase::Running
                 && liveness.due(Instant::now())
                 && pump.renewal_quiescent()
+                && !self.run_renewal_held(&liveness)
             {
                 let (next_authority, next_pump) =
                     match liveness.refresh_plain(self.store.clone(), pump).await {
