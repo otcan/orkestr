@@ -291,3 +291,95 @@ async fn refresh_keeps_original_five_second_physical_budget() {
     assert_eq!(actions, 0);
     assert!(started.elapsed() < Duration::from_millis(6_500));
 }
+
+/// A Root workspace check that does not answer within the physical budget,
+/// as when a busy manager queues the snapshot request.
+struct SlowRenewalCheck {
+    inner: Arc<RootCheck>,
+    armed: AtomicBool,
+}
+impl RootWorkspaceCustody for SlowRenewalCheck {
+    fn check_original_actor(&self) -> Result<()> {
+        self.inner.check_original_actor()
+    }
+    fn check(
+        &self,
+        paths: &[PathBuf; 3],
+        identities: [WorkspaceDirectoryIdentity; 3],
+    ) -> Result<()> {
+        self.inner.check(paths, identities)?;
+        if self.armed.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(5_500));
+        }
+        Ok(())
+    }
+}
+
+/// The 2026-11-19 PA cancellation: a slow Root workspace check refuses a
+/// running renewal before the writer. That is `Busy`: Core wrote nothing, the
+/// authority is unchanged, and the same authority renews once the check
+/// answers again. It used to surface as a consuming failure.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn slow_root_check_leaves_a_running_renewal_retryable() {
+    let f = setup().await;
+    let slow = Arc::new(SlowRenewalCheck {
+        inner: root_check(&f),
+        armed: AtomicBool::new(false),
+    });
+    let metadata = prepared_with_check(&f, slow.clone()).await;
+    let capability = consumed(&f, metadata).await;
+    let original = capability.provider().clone();
+    let mut authority = f
+        .handle
+        .authorize_running_renewal(&capability)
+        .await
+        .unwrap();
+    f.handle
+        .append_provider_event(
+            &f.owner,
+            &original,
+            &crate::production_runtime::observation_tests::input(
+                &original,
+                1,
+                ProviderEvent::Started,
+            ),
+        )
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    f.handle.heartbeat_supervisor().await.unwrap();
+
+    slow.armed.store(true, Ordering::SeqCst);
+    let before = crate::production_runtime::tests::snapshot(&f.store).await;
+    let started = std::time::Instant::now();
+    assert!(matches!(
+        f.handle.renew_running(&mut authority).await,
+        Err(RuntimeStoreError::Busy)
+    ));
+    assert!(
+        started.elapsed() >= Duration::from_secs(4),
+        "the renewal must really have waited out the physical budget"
+    );
+    assert_eq!(
+        authority.last_refusal().map(|refusal| refusal.stage),
+        Some(RenewalStage::Workspace)
+    );
+    assert_eq!(
+        authority.lease_deadline_ms(),
+        original.run.lease_deadline_ms
+    );
+    assert_eq!(
+        crate::production_runtime::tests::snapshot(&f.store).await,
+        before,
+        "a refused renewal wrote nothing"
+    );
+
+    slow.armed.store(false, Ordering::SeqCst);
+    let transition = f.handle.renew_running(&mut authority).await.unwrap();
+    assert_eq!(transition.previous(), &original);
+    assert_eq!(
+        transition.current().run.lease_generation,
+        original.run.lease_generation + 1
+    );
+    assert_eq!(authority.last_refusal(), None);
+}

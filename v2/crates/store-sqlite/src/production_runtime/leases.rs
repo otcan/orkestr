@@ -101,6 +101,29 @@ impl Store {
         running_only: bool,
         worker_budget: Option<i64>,
     ) -> Result<RunAdmission> {
+        let mut stage = RenewalStage::Scope;
+        self.renew_exact_tracked(
+            admission,
+            expected_generation,
+            running_only,
+            worker_budget,
+            &mut stage,
+        )
+        .await
+    }
+
+    /// `renew_exact_budget`, recording in `stage` how far it got. Nothing is
+    /// written unless it fails at `RenewalStage::Commit`: every earlier step
+    /// runs before the transaction commits, and a dropped transaction rolls back.
+    pub(super) async fn renew_exact_tracked(
+        &self,
+        admission: &RunAdmission,
+        expected_generation: u64,
+        running_only: bool,
+        worker_budget: Option<i64>,
+        stage: &mut RenewalStage,
+    ) -> Result<RunAdmission> {
+        *stage = RenewalStage::Scope;
         let context = self.context()?;
         if admission.owner_id != context.owner {
             return Err(RuntimeStoreError::Unauthorized);
@@ -111,6 +134,7 @@ impl Store {
         if expected_generation == 0 || expected_generation > i64::MAX as u64 {
             return Err(RuntimeStoreError::InvalidInput);
         }
+        *stage = RenewalStage::Workspace;
         #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
         let workspace = self
             .check_run_workspace_before_writer(&admission.run_id)
@@ -119,7 +143,9 @@ impl Store {
         let store = &*workspace;
         #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
         let store = self;
+        *stage = RenewalStage::Writer;
         let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        *stage = RenewalStage::Checks;
         context.validate(&mut tx).await?;
         let row =
             sqlx::query("SELECT * FROM production_runs WHERE id=? AND owner_id=? AND context_id=?")
@@ -209,6 +235,7 @@ impl Store {
             .execute(&mut *tx).await.map_err(db)?;
         provider.run.lease_generation = next;
         provider.run.lease_deadline_ms = extended;
+        *stage = RenewalStage::Commit;
         tx.commit().await.map_err(db)?;
         Ok(provider.run)
     }

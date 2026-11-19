@@ -1,6 +1,6 @@
 //! Only Runtime's consuming same-child transition may refresh the retained issuer.
 //! Unsupported periods retain ordinary queued input; no authority is inferred.
-use super::liveness::RunningLease;
+use super::liveness::{Renewal, RunningLease};
 use crate::{control_registry::RunControl, steering_registry::RunSteering};
 use orkestr_runtime::{
     containment::Authority,
@@ -33,12 +33,14 @@ impl RunningSteering {
     }
     /// Caller holds the run scheduling lock. Taking the issuer does not clone
     /// authority or require queued HTTP selections to relinquish their handles.
+    /// `Renewal::Kept` returns the same pump with its current lease; the
+    /// unchanged issuer goes back into its slot.
     pub(super) async fn renew(
         &mut self,
         store: Store,
         pump: CodexPump,
         liveness: &mut RunningLease,
-    ) -> Result<(Authority, CodexPump), &'static str> {
+    ) -> Result<Renewal<(Authority, CodexPump), CodexPump>, &'static str> {
         if self.disabled || !self.bound || self.pending_until.is_some() {
             return Err("steering renewal unavailable");
         }
@@ -49,14 +51,20 @@ impl RunningSteering {
             .await
             .take()
             .ok_or("steering issuer unavailable")?;
-        let (authority, pump, issuer) = liveness.refresh(store, pump, previous).await?;
+        let (renewed, pump, issuer) = match liveness.refresh(store, pump, previous).await? {
+            Renewal::Renewed((authority, pump, issuer)) => (Some(authority), pump, issuer),
+            Renewal::Kept((pump, issuer)) => (None, pump, issuer),
+        };
         let mut slot = self.handle.authority().await;
         if slot.is_some() {
             return Err("steering issuer transfer conflicted");
         }
         *slot = Some(issuer);
         self.handle.ready(pump.steering_readiness().ready);
-        Ok((authority, pump))
+        Ok(match renewed {
+            Some(authority) => Renewal::Renewed((authority, pump)),
+            None => Renewal::Kept(pump),
+        })
     }
     pub(super) async fn tick(
         &mut self,

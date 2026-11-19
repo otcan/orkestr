@@ -204,12 +204,12 @@ for line in frames():"#,
     else {
         panic!("unique dispatch")
     };
-    let mut renewal = if (10..=13).contains(&stop_mode) {
+    let mut renewal = if (10..=14).contains(&stop_mode) {
         Some(bound.authorize_running_renewal(&cap).await.unwrap())
     } else {
         None
     };
-    let mut steering_issuer = if stop_mode >= 12 {
+    let mut steering_issuer = if (12..=13).contains(&stop_mode) {
         Some(bound.authorize_codex_steering(&cap).await.unwrap())
     } else {
         None
@@ -327,7 +327,7 @@ for line in frames():"#,
             .await
             .unwrap()
             .unwrap();
-        if (10..=13).contains(&stop_mode)
+        if (10..=14).contains(&stop_mode)
             && renewal.is_some()
             && status.phase == orkestr_v2_contracts::ExecutionPhase::Running
             && pump.renewal_quiescent()
@@ -338,10 +338,21 @@ for line in frames():"#,
             let before = std::fs::read(root.join("workspace/native-methods.log")).unwrap();
             tokio::time::sleep(Duration::from_millis(20)).await;
             bound.heartbeat_supervisor().await.unwrap();
-            if stop_mode >= 12 {
+            if (12..=13).contains(&stop_mode) {
                 pump.bind_steering_turn(&bound, steering_issuer.as_ref().unwrap())
                     .await
                     .unwrap();
+            }
+            if stop_mode == 14 {
+                pump = renewal_refused_before_write_keeps_the_child(
+                    &root,
+                    pump,
+                    &bound,
+                    renewal.as_mut().unwrap(),
+                    &before,
+                )
+                .await;
+                bound.heartbeat_supervisor().await.unwrap();
             }
             if stop_mode == 11 || stop_mode == 13 {
                 bound
@@ -560,7 +571,7 @@ for line in frames():"#,
         assert!(Instant::now() < deadline);
         tokio::time::sleep(Duration::from_millis(2)).await;
     }
-    if stop_mode == 10 {
+    if stop_mode == 10 || stop_mode == 14 {
         assert!(renewal.is_none());
     }
     assert!(matches!(
@@ -646,6 +657,60 @@ async fn retained_durable_stopped_yields_single_use_original_scope_reap_proof() 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn running_lease_refresh_preserves_same_child_sequence_and_retires_old_authority() {
     exercise(true, 10).await;
+}
+
+/// A held SQLite writer refuses the renewal before Core writes anything: the
+/// same child, admission, cursor and current lease come back for a retry, and
+/// no native byte is written. The run then renews normally (the caller of
+/// `exercise` continues to the durable proposal on the same child).
+async fn renewal_refused_before_write_keeps_the_child(
+    root: &std::path::Path,
+    pump: CodexPump,
+    bound: &Store,
+    renewal: &mut orkestr_v2_store_sqlite::RunRenewalAuthority,
+    native_before: &[u8],
+) -> CodexPump {
+    let held = root.join("write-lock-held");
+    let mut holder = std::process::Command::new("python3")
+        .arg("-c")
+        .arg(
+            "import sqlite3,sys,time; c=sqlite3.connect(sys.argv[1], isolation_level=None, timeout=5); \
+             c.execute('BEGIN EXCLUSIVE'); open(sys.argv[2],'w').write('held'); time.sleep(600)",
+        )
+        .arg(root.join("state.sqlite3"))
+        .arg(&held)
+        .spawn()
+        .expect("python3");
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while !held.exists() {
+        assert!(Instant::now() < deadline, "write lock never held");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let admission = pump.admission.clone();
+    let sequence = pump.cursor.next_control_sequence().unwrap();
+    let refused = pump.renew_lease(bound.clone(), renewal).await;
+    let _ = holder.kill();
+    let _ = holder.wait();
+    let (retained, error) = match refused {
+        Err(RenewalRefusal::Retry { retained, error }) => (retained, error),
+        Err(other) => panic!("a renewal Core wrote nothing for must keep the child: {other:?}"),
+        Ok(_) => panic!("renewed while another writer held SQLite"),
+    };
+    assert_eq!(error, RuntimeStoreError::Busy);
+    let pump = *retained;
+    assert_eq!(pump.admission, admission, "the current lease is unchanged");
+    assert_eq!(pump.cursor.next_control_sequence().unwrap(), sequence);
+    assert!(pump.renewal_quiescent(), "the same child stays live");
+    assert_eq!(
+        std::fs::read(root.join("workspace/native-methods.log")).unwrap(),
+        native_before
+    );
+    pump
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn renewal_refused_before_write_keeps_the_same_child_and_renews_later() {
+    exercise(true, 14).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

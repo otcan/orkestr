@@ -153,6 +153,7 @@ async fn parent_renewal_preserves_exact_delegation_lineage_without_extending_chi
         incarnation: c.incarnation.clone(),
         worker_budget: None,
         renewed: false,
+        refusal: None,
     };
     extend(&f).await;
     let renewed = f.handle.renew_running(&mut a).await.unwrap();
@@ -242,4 +243,61 @@ async fn independent_pool_renewal_has_one_generation_winner() {
             .await
             .unwrap();
     assert_eq!(count, 2);
+}
+
+/// A writer held past busy_timeout refuses a running renewal before anything
+/// is written: `Busy` with stage `Writer`, the authority unchanged, and the
+/// same authority renews once the writer is free. Only a failed commit would
+/// stay `Unavailable` (uncertain).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_held_writer_leaves_a_running_renewal_retryable() {
+    let f = setup().await;
+    let cap = consumed(&f).await;
+    let old = cap.provider().clone();
+    let mut authority = f.handle.authorize_running_renewal(&cap).await.unwrap();
+    f.handle
+        .append_provider_event(&f.owner, &old, &input(&old, 1, ProviderEvent::Started))
+        .await
+        .unwrap();
+    extend(&f).await;
+    let before = snapshot(&f.store).await;
+    let mut writer = f.store.pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
+    sqlx::query("UPDATE production_supervisors SET lease_deadline_ms=lease_deadline_ms")
+        .execute(&mut *writer)
+        .await
+        .unwrap();
+    assert!(matches!(
+        f.handle.renew_running(&mut authority).await,
+        Err(RuntimeStoreError::Busy)
+    ));
+    assert_eq!(
+        authority.last_refusal(),
+        Some(RenewalRefusalInfo {
+            stage: RenewalStage::Writer,
+            fence: None
+        })
+    );
+    assert_eq!(authority.lease_deadline_ms(), old.run.lease_deadline_ms);
+    writer.rollback().await.unwrap();
+    assert_eq!(snapshot(&f.store).await, before, "nothing was written");
+    let transition = f.handle.renew_running(&mut authority).await.unwrap();
+    assert_eq!(transition.previous(), &old);
+    assert_eq!(authority.last_refusal(), None);
+}
+
+/// Authority loss keeps its own error and names its stage.
+#[tokio::test]
+async fn a_refused_renewal_names_its_stage() {
+    let f = setup().await;
+    let cap = consumed(&f).await;
+    let mut authority = f.handle.authorize_running_renewal(&cap).await.unwrap();
+    // Not yet Running: the running-only check refuses inside the writer.
+    assert!(matches!(
+        f.handle.renew_running(&mut authority).await,
+        Err(RuntimeStoreError::Fenced)
+    ));
+    assert_eq!(
+        authority.last_refusal().map(|refusal| refusal.stage),
+        Some(RenewalStage::Checks)
+    );
 }

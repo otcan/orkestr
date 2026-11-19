@@ -62,7 +62,7 @@ pub(super) fn wall_now_ms() -> Option<i64> {
         .and_then(|elapsed| i64::try_from(elapsed.as_millis()).ok())
 }
 
-fn retry_delay(failures: u32) -> Duration {
+pub(super) fn retry_delay(failures: u32) -> Duration {
     RETRY_BASE
         .saturating_mul(1u32 << failures.saturating_sub(1).min(16))
         .min(RETRY_MAX)

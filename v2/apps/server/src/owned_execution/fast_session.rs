@@ -55,6 +55,7 @@ impl ConfiguredExecution {
             .map_err(|_| "Fast control registration refused")?;
         let mut budget = self.config.execution_budget.start(Instant::now());
         let mut renew_at = Instant::now() + Duration::from_secs(20);
+        let mut renew_failures = 0u32;
         loop {
             if self.window.is_some() && Instant::now() >= meter_at {
                 meter(&live);
@@ -159,6 +160,7 @@ impl ConfiguredExecution {
                         .map_err(|_| "Fast continuation controls refused")?;
                     budget = self.config.execution_budget.start(Instant::now());
                     renew_at = Instant::now() + Duration::from_secs(20);
+                    renew_failures = 0;
                     continue;
                 }
                 ExecutionPhase::AwaitingAcceptance => {
@@ -254,11 +256,40 @@ impl ConfiguredExecution {
                     .run_renewal_ready(live.lease_deadline_ms(), heartbeat)
                     .await?
             {
-                if live.renew().await.is_err() {
-                    control.disable();
-                    return Err("Fast lease transfer refused; reconciliation required");
+                match live.renew().await {
+                    Ok(true) => {
+                        renew_failures = 0;
+                        renew_at = Instant::now() + Duration::from_secs(20);
+                    }
+                    // Core wrote nothing: the same child keeps its lease.
+                    // Retry within it, or give up while the margin is left.
+                    Ok(false) => {
+                        renew_failures = renew_failures.saturating_add(1);
+                        let retry = super::liveness::retry_after(
+                            live.lease_deadline_ms(),
+                            super::supervisor_lease::wall_now_ms(),
+                            renew_failures,
+                        );
+                        let detail = live.renewal_refusal_detail();
+                        let Some(delay) = retry else {
+                            eprintln!(
+                                "owned Fast liveness transfer refused: {detail}; run lease would lapse"
+                            );
+                            live.abandon_renewal();
+                            control.disable();
+                            return Err("Fast lease transfer refused; reconciliation required");
+                        };
+                        eprintln!(
+                            "owned Fast liveness transfer deferred: {detail} retry_ms={}",
+                            delay.as_millis()
+                        );
+                        renew_at = Instant::now() + delay;
+                    }
+                    Err(_) => {
+                        control.disable();
+                        return Err("Fast lease transfer refused; reconciliation required");
+                    }
                 }
-                renew_at = Instant::now() + Duration::from_secs(20);
             }
             control.set_available(phase == ExecutionPhase::Running && live.pending().is_none());
             drop(step);

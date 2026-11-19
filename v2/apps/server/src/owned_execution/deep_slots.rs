@@ -686,17 +686,19 @@ impl ConfiguredExecution {
                     .run_renewal_ready(liveness.lease_deadline_ms(), heartbeat)
                     .await?
             {
-                let (next_authority, next_pump) =
-                    match liveness.refresh_plain(self.store.clone(), pump).await {
-                        Ok(refreshed) => refreshed,
-                        Err(reason) => {
-                            run_control.disable();
-                            return Err(reason);
-                        }
-                    };
-                let _ = authority.revoke();
-                authority = next_authority;
-                pump = next_pump;
+                match liveness.refresh_plain(self.store.clone(), pump).await {
+                    Ok(liveness::Renewal::Renewed((next_authority, next_pump))) => {
+                        let _ = authority.revoke();
+                        authority = next_authority;
+                        pump = next_pump;
+                    }
+                    // Core wrote nothing: the same child keeps its lease.
+                    Ok(liveness::Renewal::Kept(kept)) => pump = kept,
+                    Err(reason) => {
+                        run_control.disable();
+                        return Err(reason);
+                    }
+                }
             }
             run_control
                 .set_available(status.phase == ExecutionPhase::Running && pump.pending().is_none());

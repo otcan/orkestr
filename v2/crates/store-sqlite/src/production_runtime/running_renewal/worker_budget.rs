@@ -81,6 +81,7 @@ impl Store {
             incarnation: c.incarnation.clone(),
             worker_budget: Some(deadline),
             renewed: false,
+            refusal: None,
         })
     }
 

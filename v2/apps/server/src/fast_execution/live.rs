@@ -97,7 +97,9 @@ impl LiveFast {
     /// Same live child/turn only. The factory enforces its finite run budget and
     /// owns the same scheduling lock as HTTP Stop. Core rechecks current Running,
     /// original machine authentication, context and unexpired lease atomically.
-    pub async fn renew(&mut self) -> Result<(), FastFailure> {
+    /// `Ok(true)`: renewed. `Ok(false)`: Core wrote nothing; the same child
+    /// keeps its current lease and authority (retry, or `abandon_renewal`).
+    pub async fn renew(&mut self) -> Result<bool, FastFailure> {
         if !self.renewal_quiescent() {
             return Err(FastFailure::Store(RuntimeStoreError::Busy));
         }
@@ -109,10 +111,25 @@ impl LiveFast {
             .owned
             .take()
             .ok_or(FastFailure::Store(RuntimeStoreError::Fenced))?;
-        let (next_authority, next_pump) = pump
-            .renew_lease(self.store.clone(), &mut renewal)
-            .await
-            .map_err(FastFailure::Store)?;
+        let (next_authority, next_pump) =
+            match pump.renew_lease(self.store.clone(), &mut renewal).await {
+                Ok(renewed) => renewed,
+                Err(orkestr_runtime::execution::RenewalRefusal::Retry { retained, .. }) => {
+                    self.owned = Some(OwnedFast {
+                        authority,
+                        pump: *retained,
+                        renewal,
+                    });
+                    return Ok(false);
+                }
+                Err(refusal) => {
+                    eprintln!(
+                        "owned Fast liveness transfer refused: {}",
+                        renewal.refusal_detail(refusal.error())
+                    );
+                    return Err(FastFailure::Store(refusal.error()));
+                }
+            };
         // Runtime has atomically retired the old owner; its Drop cannot signal
         // the transferred child. Failed transfers return no executable pump.
         drop(authority);
@@ -121,7 +138,26 @@ impl LiveFast {
             pump: next_pump,
             renewal,
         });
-        Ok(())
+        Ok(true)
+    }
+
+    /// Why the last renewal was refused (value-free), for a deferral log.
+    pub fn renewal_refusal_detail(&self) -> String {
+        self.owned.as_ref().map_or_else(
+            || "Busy stage=pump fence=-".into(),
+            |owned| owned.renewal.refusal_detail(RuntimeStoreError::Busy),
+        )
+    }
+
+    /// Give up a kept renewal exactly as a lost one: quarantine the child.
+    pub fn abandon_renewal(&mut self) {
+        if let Some(OwnedFast {
+            authority, pump, ..
+        }) = self.owned.take()
+        {
+            orkestr_runtime::execution::QuarantineOwned::quarantine_owned(pump);
+            drop(authority);
+        }
     }
 
     async fn accepted(&self, credential: &str) -> Result<(), FastFailure> {

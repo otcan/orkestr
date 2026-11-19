@@ -88,7 +88,13 @@ impl RootWorkspaceCustody for Custody {
         paths: &[PathBuf; 3],
         identities: [WorkspaceDirectoryIdentity; 3],
     ) -> std::result::Result<(), RuntimeStoreError> {
-        let (snapshot, _new_handles) = self.fetch().map_err(|_| RuntimeStoreError::Fenced)?;
+        // No answer in time (a busy single-threaded manager) attests nothing
+        // either way: Unavailable, so a caller may retry. A refusal, a wrong
+        // peer or a malformed proof is a custody failure: Fenced.
+        let (snapshot, _new_handles) = self.fetch().map_err(|error| match error {
+            ManagerError::Deadline | ManagerError::Unavailable => RuntimeStoreError::Unavailable,
+            _ => RuntimeStoreError::Fenced,
+        })?;
         if &snapshot.paths != paths
             || snapshot.executor_uid != self.executor
             || snapshot.project_owner_uid != identities[0].uid()

@@ -232,12 +232,18 @@ impl ConfiguredExecution {
                             .await?
                     {
                         // Same scheduling lock as HTTP Stop and observation.
-                        if let Err(reason) = liveness.refresh_claude(&mut live).await {
-                            run_control.disable();
-                            return Err(reason);
-                        }
-                        if let Some(managed) = managed.as_mut() {
-                            Box::pin(managed.refresh_lease(liveness.authority())).await?;
+                        match liveness.refresh_claude(&mut live).await {
+                            Ok(true) => {
+                                if let Some(managed) = managed.as_mut() {
+                                    Box::pin(managed.refresh_lease(liveness.authority())).await?;
+                                }
+                            }
+                            // Core wrote nothing: the same child keeps its lease.
+                            Ok(false) => {}
+                            Err(reason) => {
+                                run_control.disable();
+                                return Err(reason);
+                            }
                         }
                     }
                     if let Some(managed) = managed.as_mut() {

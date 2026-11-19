@@ -78,7 +78,9 @@ pub use fast_source::FastSource;
 pub(crate) mod inspection;
 mod leases;
 mod running_renewal;
-pub use running_renewal::{RunLeaseTransition, RunRenewalAuthority};
+pub use running_renewal::{
+    RenewalRefusalInfo, RenewalStage, RunLeaseTransition, RunRenewalAuthority,
+};
 mod metadata;
 #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
 mod workspace;

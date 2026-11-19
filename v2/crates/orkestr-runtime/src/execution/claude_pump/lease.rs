@@ -3,7 +3,10 @@
 use super::ClaudePump;
 use crate::{
     containment::{Authority, Error},
-    execution::fence::StoreFence,
+    execution::{
+        fence::StoreFence,
+        renewal_refusal::{QuarantineOwned, RenewalRefusal},
+    },
 };
 use orkestr_v2_application::runtime::RuntimeStoreError;
 use orkestr_v2_store_sqlite::{RunRenewalAuthority, Store};
@@ -26,29 +29,38 @@ impl ClaudePump {
             && self.cursor.next_control_sequence().is_ok()
     }
 
-    /// Consume on every outcome. Failed or uncertain renewal quarantines the
-    /// owned process; the same native child keeps its turn and cursor.
+    /// Consume on every outcome but one. A failed or uncertain renewal
+    /// quarantines the owned process; the same native child keeps its turn and
+    /// cursor. Only when Core wrote nothing (`Busy`) does the untouched pump
+    /// come back as `RenewalRefusal::Retry`.
     pub async fn renew_lease(
         mut self,
         store: Store,
         authority: &mut RunRenewalAuthority,
-    ) -> Result<(Authority, Self), RuntimeStoreError> {
+    ) -> Result<(Authority, Self), RenewalRefusal<Self>> {
         if !self.renewal_quiescent() {
             self.source.child.quarantine();
-            return Err(RuntimeStoreError::Busy);
+            return Err(RenewalRefusal::Lost(RuntimeStoreError::Busy));
         }
         let transition = match store.renew_running(authority).await {
             Ok(transition) => transition,
+            // Core wrote nothing; the child keeps its current lease and fence.
+            Err(RuntimeStoreError::Busy) => {
+                return Err(RenewalRefusal::Retry {
+                    retained: Box::new(self),
+                    error: RuntimeStoreError::Busy,
+                })
+            }
             Err(error) => {
                 self.source.child.quarantine();
-                return Err(error);
+                return Err(RenewalRefusal::Lost(error));
             }
         };
         if transition.previous() != &self.admission
             || self.cursor.refresh_admission(&transition).is_err()
         {
             self.source.child.quarantine();
-            return Err(RuntimeStoreError::Fenced);
+            return Err(RenewalRefusal::Lost(RuntimeStoreError::Fenced));
         }
         let fence = Arc::new(StoreFence::from_renewal(
             store,
@@ -59,13 +71,21 @@ impl ClaudePump {
             .source
             .child
             .refresh_lease_fence(&self.source.scope, fence)
-            .map_err(|error| match error {
-                Error::Revoked | Error::WrongScope => RuntimeStoreError::Fenced,
-                _ => RuntimeStoreError::Unavailable,
+            .map_err(|error| {
+                RenewalRefusal::Lost(match error {
+                    Error::Revoked | Error::WrongScope => RuntimeStoreError::Fenced,
+                    _ => RuntimeStoreError::Unavailable,
+                })
             })?;
         self.source.child = child;
         self.source.admission = transition.current().run.clone();
         self.admission = transition.current().clone();
         Ok((owner, self))
+    }
+}
+
+impl QuarantineOwned for ClaudePump {
+    fn quarantine_owned(self) {
+        self.source.child.quarantine();
     }
 }
