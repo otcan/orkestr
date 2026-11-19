@@ -21,6 +21,12 @@ impl RunRenewalAuthority {
     pub fn hard_deadline_ms(&self) -> Option<i64> {
         self.worker_budget
     }
+    /// The run's current lease deadline (Core clock, ms), for trusted
+    /// scheduling only: it decides when to renew, never whether an effect is
+    /// allowed. Every renewal moves it.
+    pub fn lease_deadline_ms(&self) -> i64 {
+        self.provider.run.lease_deadline_ms
+    }
 }
 
 /// One committed old -> new lease transition. No input text, reservation or

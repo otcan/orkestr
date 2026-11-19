@@ -341,9 +341,11 @@ def main():
     from owned_execution_followup import two_turn, in_flight_followup
     from owned_execution_stop import stop
     from owned_execution_streaming_stop import streaming_stop
+    from owned_execution_store_lock import held_write_lock
     for scenario in ["success", "revoked_after_start", "revoked_in_flight", "shutdown_with_open_events",
                      "revoked_at_start", "queued_at_start", "two_turn", "in_flight_followup",
-                     "stop_terminal", "stop_ack_only", "streaming_stop", "streaming_stop_burst"]:
+                     "stop_terminal", "stop_ack_only", "streaming_stop", "streaming_stop_burst",
+                     "held_write_lock"]:
         case = Case()
         try:
             case.setup()
@@ -363,6 +365,8 @@ def main():
                 stop(case, wait_for, scenario == "stop_terminal")
             elif scenario in ("streaming_stop", "streaming_stop_burst"):
                 streaming_stop(case, wait_for, scenario == "streaming_stop_burst")
+            elif scenario == "held_write_lock":
+                held_write_lock(case, wait_for)
             else:
                 if scenario == "queued_at_start":
                     assert case.message()[0] == 202

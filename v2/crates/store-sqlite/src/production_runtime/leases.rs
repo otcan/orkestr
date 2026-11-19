@@ -46,6 +46,35 @@ impl Store {
         Ok(deadline)
     }
 
+    /// Read-only: how long Core's lease for this bound supervisor context has
+    /// left, in ms of Core's own clock.
+    ///
+    /// `heartbeat_supervisor` is a `BEGIN IMMEDIATE` write, so it reports
+    /// Busy/Unavailable while another writer holds SQLite past busy_timeout.
+    /// This read runs the heartbeat's own `validate` (machine session, window
+    /// scope, incarnation, generation, expiry) in a plain read transaction,
+    /// which needs no write lock and still answers then, and takes the
+    /// remaining time from the same snapshot. So it refuses exactly as the
+    /// heartbeat would (Unauthorized, Fenced, Expired), and it never renews or
+    /// revives the lease.
+    pub async fn supervisor_lease_remaining_ms(&self) -> Result<i64> {
+        let context = self.context()?;
+        let mut tx = self.pool.begin().await.map_err(db)?;
+        context.validate(&mut tx).await?;
+        let remaining: i64 = sqlx::query_scalar(
+            "SELECT lease_deadline_ms-CAST((julianday('now')-2440587.5)*86400000 AS INTEGER) FROM production_supervisors WHERE context_id=? AND incarnation_id=? AND generation=?",
+        )
+        .bind(&context.id)
+        .bind(&context.incarnation)
+        .bind(context.generation)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(db)?
+        .ok_or(RuntimeStoreError::Fenced)?;
+        tx.commit().await.map_err(db)?;
+        Ok(remaining)
+    }
+
     pub(crate) async fn production_renew(
         &self,
         admission: &RunAdmission,
@@ -277,5 +306,84 @@ mod tests {
             Err(RuntimeStoreError::Expired)
         ));
         assert_eq!(snapshot(&f.store).await, expired);
+    }
+
+    /// A writer that holds SQLite past busy_timeout makes the supervisor
+    /// heartbeat (BEGIN IMMEDIATE) fail as Unavailable. The read-only lease
+    /// check still answers with Core's real remaining lease, and the lease is
+    /// renewable again once the writer is gone.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn lease_read_answers_while_a_writer_blocks_the_heartbeat() {
+        let f = setup().await;
+        let fresh = f.handle.supervisor_lease_remaining_ms().await.unwrap();
+        assert!((50_000..=60_000).contains(&fresh), "fresh lease {fresh}");
+        let mut writer = f.store.pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
+        sqlx::query("UPDATE production_supervisors SET lease_deadline_ms=lease_deadline_ms")
+            .execute(&mut *writer)
+            .await
+            .unwrap();
+        let started = std::time::Instant::now();
+        assert!(matches!(
+            f.handle.heartbeat_supervisor().await,
+            Err(RuntimeStoreError::Unavailable)
+        ));
+        assert!(
+            started.elapsed() >= Duration::from_secs(4),
+            "the heartbeat must have waited on the held write lock"
+        );
+        let during = f.handle.supervisor_lease_remaining_ms().await.unwrap();
+        assert!(
+            during > 0 && during <= fresh,
+            "lease read while locked: {during}"
+        );
+        writer.rollback().await.unwrap();
+        f.handle.heartbeat_supervisor().await.unwrap();
+        assert!(f.handle.supervisor_lease_remaining_ms().await.unwrap() > during);
+    }
+
+    /// The read refuses exactly as the heartbeat would: a lapsed lease is
+    /// Expired (never revived), a takeover is Fenced, a revoked machine
+    /// session is Unauthorized.
+    #[tokio::test]
+    async fn lease_read_refuses_as_the_heartbeat_would() {
+        let f = setup().await;
+        sqlx::query("UPDATE production_supervisors SET lease_deadline_ms=0")
+            .execute(&f.store.pool)
+            .await
+            .unwrap();
+        assert!(matches!(
+            f.handle.supervisor_lease_remaining_ms().await,
+            Err(RuntimeStoreError::Expired)
+        ));
+        assert!(matches!(
+            f.handle.heartbeat_supervisor().await,
+            Err(RuntimeStoreError::Expired)
+        ));
+        let incarnation = f.handle.supervisor_incarnation().unwrap().to_owned();
+        let successor = f
+            .store
+            .authorize_supervisor(
+                &f.token,
+                crate::production_runtime::tests::config(ProductionTakeover::ExpiredPredecessor {
+                    incarnation_id: incarnation,
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            f.handle.supervisor_lease_remaining_ms().await,
+            Err(RuntimeStoreError::Fenced)
+        ));
+        let fresh = successor.supervisor_lease_remaining_ms().await.unwrap();
+        assert!((50_000..=60_000).contains(&fresh), "fresh lease {fresh}");
+        f.store.revoke_session(&f.token).await.unwrap();
+        assert!(matches!(
+            successor.supervisor_lease_remaining_ms().await,
+            Err(RuntimeStoreError::Unauthorized)
+        ));
+        assert!(matches!(
+            successor.heartbeat_supervisor().await,
+            Err(RuntimeStoreError::Unauthorized)
+        ));
     }
 }

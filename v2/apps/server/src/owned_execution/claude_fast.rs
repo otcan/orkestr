@@ -70,6 +70,7 @@ impl ConfiguredExecution {
             window_workers: None,
             companion: Some(companion.clone()),
             window_activated: std::sync::atomic::AtomicBool::new(false),
+            supervisor_lease: self.supervisor_lease.clone(),
             fast_factory: None,
             deep_slots: None,
             parallel_factory: None,

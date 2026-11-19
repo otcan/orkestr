@@ -35,6 +35,10 @@ mod run_status;
 mod session;
 mod steering;
 mod stopping;
+mod supervisor_heartbeat;
+mod supervisor_lease;
+#[cfg(all(test, unix))]
+mod supervisor_lease_tests;
 mod window_roles;
 mod window_task;
 mod worker;
@@ -86,6 +90,9 @@ pub struct ConfiguredExecution {
     companion: Option<std::sync::Arc<window_roles::Companion>>,
     /// Claude windows activate on their first native setup only.
     window_activated: std::sync::atomic::AtomicBool,
+    /// Heartbeat deferral state, shared by every execution of this window that
+    /// heartbeats the same supervisor context.
+    supervisor_lease: std::sync::Arc<supervisor_lease::SupervisorLease>,
     fast_factory: Option<Box<ConfiguredExecution>>,
     /// Read-only parallel Deep slots of this window (docs/v2/parallel-deep.md):
     /// shared by the writer (which waits for them before window close) and
@@ -241,6 +248,7 @@ impl ConfiguredExecution {
             window_workers: None,
             companion: None,
             window_activated: std::sync::atomic::AtomicBool::new(false),
+            supervisor_lease: Default::default(),
             fast_factory: None,
             deep_slots: None,
             parallel_factory: None,

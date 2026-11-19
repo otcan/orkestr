@@ -39,18 +39,6 @@ impl ConfiguredExecution {
         }
     }
 
-    pub(super) async fn maintain(&self, heartbeat: &mut Instant) -> Result<(), &'static str> {
-        self.current().await?;
-        if heartbeat_due(*heartbeat, Instant::now()) {
-            self.store.heartbeat_supervisor().await.map_err(|error| {
-                eprintln!("owned execution heartbeat refused: {error:?}");
-                "execution supervisor heartbeat refused"
-            })?;
-            *heartbeat = Instant::now();
-        }
-        Ok(())
-    }
-
     /// Called only after setup or committed owner acceptance. Core owns the
     /// earliest unconsumed scope sequence; active input is never claimed early.
     pub(super) async fn next(
@@ -119,11 +107,11 @@ impl ConfiguredExecution {
                 }
             };
             self.current().await?;
-            self.store
-                .heartbeat_supervisor()
-                .await
-                .map_err(|_| "execution supervisor heartbeat refused")?;
-            *heartbeat = Instant::now();
+            // The admitted run's lease is capped at the supervisor deadline:
+            // admit only on a heartbeat Core accepted just now.
+            if !self.accepted_heartbeat(shutdown, heartbeat).await? {
+                return Ok(None);
+            }
             // The FIFO head can change between the prospective read and claim
             // (parallel slots). Re-evaluate the actual lease before any admission.
             if let Some(proof) = self.provider_input_refusal(&claim.message_id).await? {
@@ -200,7 +188,7 @@ impl ConfiguredExecution {
     }
 }
 
-fn heartbeat_due(previous: Instant, now: Instant) -> bool {
+pub(super) fn heartbeat_due(previous: Instant, now: Instant) -> bool {
     now.saturating_duration_since(previous) >= Duration::from_secs(10)
 }
 
