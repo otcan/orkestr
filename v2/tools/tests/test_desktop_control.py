@@ -7,6 +7,7 @@ import struct
 import tempfile
 import threading
 import unittest
+import unittest.mock
 from unittest.mock import patch
 import uuid
 import zlib
@@ -158,3 +159,180 @@ class ControllerTests(unittest.TestCase):
                                   ('key', ['Return; command']), ('type', ['hidden\ntext']), ('start', ['target'])]:
             with self.assertRaises(ValueError):
                 module.argument_shape(operation, values)
+
+
+DESCRIPTOR = {
+    'format': 'orkestr-desktop-control-v1', 'v2_url': 'http://127.0.0.1:19822',
+    'conversation_id': '11111111-1111-4111-8111-111111111111',
+    'v1_thread_id': '22222222-2222-4222-8222-222222222222', 'desktop_slug': 'desk-a',
+    'grant_file': '/etc/example/grant.env', 'broker_file': '/var/lib/example/broker.json', 'broker_uid': 1001,
+    'framebuffer_port': 15900, 'framebuffer_unit': 'desk-a-x11vnc.service',
+    'state_directory': '/var/lib/example/state', 'output_directory': '/var/lib/example/images',
+    'output_uid': 1002, 'output_gid': 1002}
+LEASE = {'v1_thread_id': DESCRIPTOR['v1_thread_id'], 'fencing_version': 7}
+
+
+class DeskEnsureTests(unittest.TestCase):
+    def configure(self, module, value, mode=0o755):
+        executable = unittest.mock.Mock()
+        executable.stat.return_value.st_mode = mode
+        with patch.object(module, 'read', return_value=json.dumps(value).encode()), \
+             patch.object(module, 'protected', return_value=executable):
+            return module.configuration('/etc/example/descriptor.json')
+
+    def test_descriptor_accepts_only_an_executable_desk_ensure_extra(self):
+        module = load('desktop_control')
+        self.assertNotIn('desk_ensure', self.configure(module, DESCRIPTOR))
+        configured = self.configure(module, {**DESCRIPTOR, 'desk_ensure': '/usr/libexec/example/desk-ensure'})
+        self.assertEqual(configured['desk_ensure'], '/usr/libexec/example/desk-ensure')
+        for value, mode in [({**DESCRIPTOR, 'desk_ensure': ['/bin/sh']}, 0o755),
+                            ({**DESCRIPTOR, 'desk_ensure': '/usr/libexec/example/desk-ensure'}, 0o644),
+                            ({**DESCRIPTOR, 'unexpected': True}, 0o755)]:
+            with self.assertRaises(ValueError):
+                self.configure(module, value, mode)
+
+    def test_desk_ensure_gets_desk_thread_and_version_but_no_grant_or_token(self):
+        module = load('desktop_control')
+        config = {**DESCRIPTOR, 'desk_ensure': '/usr/libexec/example/desk-ensure'}
+        answer = unittest.mock.Mock(returncode=0, stdout='{"ok":true,"started":true}\n')
+        with patch.object(module, 'protected', side_effect=Path), \
+             patch.object(module.subprocess, 'run', return_value=answer) as run, \
+             patch.dict(module.os.environ, {'ORKESTR_V2_DESKTOP_GRANT': 'f' * 64}):
+            module.run_desk_ensure(config, LEASE)
+        argv, options = run.call_args
+        self.assertEqual(argv[0], ['/usr/libexec/example/desk-ensure', '--slug', 'desk-a', '--budget-ms', '45000'])
+        env = options['env']
+        self.assertEqual((env['ORKESTR_DESKTOP_SLUG'], env['ORKESTR_DESKTOP_THREAD_ID'],
+                          env['ORKESTR_DESKTOP_FENCING_VERSION']), ('desk-a', LEASE['v1_thread_id'], '7'))
+        self.assertFalse({'ORKESTR_V2_DESKTOP_GRANT', 'ORKESTR_DESKTOP_FENCING_TOKEN'} & set(env))
+        self.assertEqual(options['cwd'], '/')
+
+    def test_desk_ensure_failures_and_foreign_leases_become_safe_reason_codes(self):
+        module = load('desktop_control')
+        config = {**DESCRIPTOR, 'desk_ensure': '/usr/libexec/example/desk-ensure'}
+        cases = [('{"ok":false,"error":"desk_start_refused","reason":"no_active_lease_for_caller"}', 69,
+                  'controller_desk_start_refused'),
+                 ('{"ok":false,"error":"Bad; value"}', 69, 'controller_desk_start_failed'),
+                 ('not json', 0, 'controller_desk_start_failed'),
+                 ('{"ok":true}', 1, 'controller_desk_start_failed')]
+        for stdout, code, reason in cases:
+            answer = unittest.mock.Mock(returncode=code, stdout=stdout)
+            with patch.object(module, 'protected', side_effect=Path), \
+                 patch.object(module.subprocess, 'run', return_value=answer):
+                with self.assertRaisesRegex(ValueError, '^' + reason + '$'):
+                    module.run_desk_ensure(config, LEASE)
+        for lease in [None, {**LEASE, 'v1_thread_id': 'other'}, {**LEASE, 'fencing_version': '7'}]:
+            with patch.object(module.subprocess, 'run') as run:
+                with self.assertRaisesRegex(ValueError, 'lease_response_invalid'):
+                    module.run_desk_ensure(config, lease)
+                run.assert_not_called()
+
+    def test_stopped_desk_is_started_once_and_awaited(self):
+        module = load('desktop_control')
+        steps = [ValueError('controller_framebuffer_inactive'), ValueError('controller_listener_not_owned'),
+                 {'pid': 42}]
+        with patch.object(module, 'framebuffer_identity', side_effect=steps), \
+             patch.object(module, 'run_desk_ensure') as ensure:
+            pauses = []
+            self.assertEqual(module.ensure_framebuffer(DESCRIPTOR, LEASE, clock=lambda: 0.0, pause=pauses.append),
+                             {'pid': 42})
+        ensure.assert_called_once_with(DESCRIPTOR, LEASE)
+        self.assertEqual(pauses, [0.5])
+
+    def test_running_or_foreign_framebuffer_never_runs_desk_ensure(self):
+        module = load('desktop_control')
+        for outcome in [{'pid': 42}, ValueError('controller_network_namespace')]:
+            with patch.object(module, 'framebuffer_identity', side_effect=[outcome]), \
+                 patch.object(module, 'run_desk_ensure') as ensure:
+                if isinstance(outcome, dict):
+                    self.assertEqual(module.ensure_framebuffer(DESCRIPTOR, LEASE), outcome)
+                else:
+                    with self.assertRaisesRegex(ValueError, 'network_namespace'):
+                        module.ensure_framebuffer(DESCRIPTOR, LEASE)
+                ensure.assert_not_called()
+
+    def test_framebuffer_that_never_settles_fails_after_the_deadline(self):
+        module = load('desktop_control')
+        times = iter([0.0, 5.0, 11.0])
+        with patch.object(module, 'framebuffer_identity', side_effect=ValueError('controller_framebuffer_inactive')), \
+             patch.object(module, 'run_desk_ensure'):
+            with self.assertRaisesRegex(ValueError, 'framebuffer_inactive'):
+                module.ensure_framebuffer(DESCRIPTOR, LEASE, clock=lambda: next(times), pause=lambda _s: None)
+
+
+class StartLifecycleTests(unittest.TestCase):
+    def run_start(self, temporary, ensure, config_extra):
+        module = load('desktop_control')
+        config = {**DESCRIPTOR, 'state_directory': temporary, **config_extra}
+        request = str(uuid.uuid4())
+        order = unittest.mock.Mock()
+        lease = order.lease
+        lease.call.side_effect = lambda operation, body=None: (
+            {'fencing_token': 'synthetic-token', 'lease': LEASE} if operation == 'acquire' else {'ok': True})
+        order.ensure.side_effect = ensure
+        with patch.object(module, 'read', side_effect=lambda p: Path(p).read_bytes()), \
+             patch.object(module, 'Lease', return_value=lease), \
+             patch.object(module, 'ensure_framebuffer', order.ensure), \
+             patch.object(module, 'framebuffer_identity', order.identity), \
+             patch.object(module, 'protected', side_effect=ValueError('stop_before_framebuffer')):
+            try:
+                module.execute(config, 'start', [], '', request)
+            except ValueError as error:
+                outcome = str(error)
+            status = module.execute(config, 'status', [], '', request)
+            try:
+                module.execute(config, 'start', [], '', request)
+            except ValueError as error:
+                retry = str(error)
+        return module, order, outcome, status, retry
+
+    def test_autostart_runs_under_the_new_lease_and_pins_the_started_target(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            _module, order, outcome, status, _retry = self.run_start(
+                temporary, lambda config, lease: {'pid': 42}, {'desk_ensure': '/usr/libexec/example/desk-ensure'})
+            sessions = list(Path(temporary).glob('session-*.json'))
+            self.assertEqual(len(sessions), 1)
+            self.assertEqual(json.loads(sessions[0].read_text())['target'], {'pid': 42})
+        self.assertEqual(outcome, 'stop_before_framebuffer')
+        names = [entry[0] for entry in order.mock_calls]
+        self.assertLess(names.index('lease.call'), names.index('ensure'))
+        self.assertEqual(order.lease.call.call_args_list[0].args[0], 'acquire')
+        order.identity.assert_not_called()
+        self.assertEqual(status['state'], 'intent')
+
+    def test_failed_autostart_releases_the_lease_and_records_a_definite_failure(self):
+        def refuse(config, lease):
+            raise ValueError('controller_desk_start_failed')
+        with tempfile.TemporaryDirectory() as temporary:
+            _module, order, outcome, status, retry = self.run_start(
+                temporary, refuse, {'desk_ensure': '/usr/libexec/example/desk-ensure'})
+            self.assertEqual(list(Path(temporary).glob('session-*.json')), [])
+        self.assertEqual(outcome, 'controller_desk_start_failed')
+        release = order.lease.call.call_args_list[-1]
+        self.assertEqual(release.args[0], 'release')
+        self.assertEqual(release.args[1]['fencing_token'], 'synthetic-token')
+        self.assertEqual((status['state'], status['error'], status['session_id']),
+                         ('failed', 'controller_desk_start_failed', None))
+        self.assertEqual(retry, 'controller_request_failed_use_new_request_id')
+
+    def test_without_desk_ensure_a_stopped_desk_refuses_before_any_lease(self):
+        def stopped(config):
+            raise ValueError('controller_framebuffer_inactive')
+        with tempfile.TemporaryDirectory() as temporary:
+            module = load('desktop_control')
+            config = {**DESCRIPTOR, 'state_directory': temporary}
+            request = str(uuid.uuid4())
+            with patch.object(module, 'read', side_effect=lambda p: Path(p).read_bytes()), \
+                 patch.object(module, 'Lease') as lease, \
+                 patch.object(module, 'framebuffer_identity', side_effect=stopped):
+                with self.assertRaisesRegex(ValueError, 'framebuffer_inactive'):
+                    module.execute(config, 'start', [], '', request)
+                lease.return_value.call.assert_not_called()
+                self.assertEqual(module.execute(config, 'status', [], '', request)['state'], 'not_recorded')
+
+    def test_status_of_an_unknown_request_reports_nothing_ran(self):
+        module = load('desktop_control')
+        with tempfile.TemporaryDirectory() as temporary:
+            self.assertEqual(module.execute({'state_directory': temporary}, 'status', [], '', str(uuid.uuid4())),
+                             {'ok': True, 'state': 'not_recorded', 'session_id': None, 'result': None,
+                              'automatic_retry': False})

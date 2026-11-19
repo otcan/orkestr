@@ -31,6 +31,18 @@ references, not credentials:
 }
 ```
 
+A host that stops idle desks can add an optional `"desk_ensure"` entry: the
+absolute path of a Root-owned executable that starts one stopped desk. When
+`start` finds the configured framebuffer service inactive, it runs that program
+once under the lease it has just acquired, with `ORKESTR_DESKTOP_SLUG`,
+`ORKESTR_DESKTOP_THREAD_ID` and `ORKESTR_DESKTOP_FENCING_VERSION` set and
+`--slug <desk> --budget-ms <ms>` as arguments. It never receives the grant or
+the fencing token. The program prints one JSON line with `"ok": true` on
+success, or an `"error"` code such as `desk_start_refused`, which `start`
+reports as `controller_desk_start_refused`. The controller then waits briefly
+for the framebuffer listener and pins that identity for the session. Without
+`desk_ensure`, a stopped desk is refused before any lease is taken.
+
 The grant file contains the existing `ORKESTR_V2_DESKTOP_GRANT` assignment.
 The broker file is the existing service-private V1 broker configuration.
 The state directory must be private to Root. The output directory stays owned
@@ -87,3 +99,9 @@ has an uncertain outcome: do not retry it under a new ID. Use `status` with
 the original `--request-id` to inspect the safe receipt, reconcile the visible
 state, and release the recorded session. The fencing token stays private.
 There is no automatic retry or automatic deletion of active control state.
+
+`status` reports `not_recorded` when no intent exists for a request ID: the
+controller stopped before taking a lease, so nothing happened. A `start` that
+took a lease but could not reach the framebuffer releases that lease and
+records `failed` with its `error`; no input was sent, and a new request ID may
+be used. If that release cannot be confirmed, the request stays `intent`.
