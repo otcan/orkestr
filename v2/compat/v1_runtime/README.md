@@ -158,7 +158,8 @@ Each binding is `<bindings_dir>/<remote_thread_id>.json`:
 | `outbound_role` | Exactly `"deep"` |
 | `enabled` | `false` pauses intake and execution; exports and acknowledgements continue |
 | `revoked` | `true` permanently withdraws the route (intake and export answer 410) |
-| `progress_updates` | Export intermediate Deep progress for this binding |
+| `progress_updates` | Export intermediate Deep progress for this binding (at most three early notes per input) |
+| `deep_updates` | Optional. While a Deep run is running, the chat gets its latest progress text as `Update: …` (about 600 characters), the first 15 minutes into the run, then at most one every 30 minutes; see [Long-run updates](#long-run-updates). Unset: on for an owner-only binding (no `participants`), off for a group with participants; `true`/`false` decides explicitly. Adapters before this field refuse a binding that contains it (`binding_fields`): deploy the adapter first. |
 | `local_reply_mirror` | Optional, default `true`. Copy each real reply to V1-local input (connected assistant, CLI, thread watch, Worker, mailbox, V1 web UI) to the group, marked as a reply to its requester; see [V1-local input](#v1-local-input). `false` keeps those replies in Orkestr only. Adapters before this field refuse a binding that contains it (`binding_fields`): deploy the adapter first. |
 | `deep_heartbeat` | Optional, default `true`. A running Deep turn for a person's WhatsApp input (owner or member; never timer, post or web-mirror input) without a final gets one short status line from an adapter template (never model text): `🧠 Still working… N min so far, the full answer follows.` (English, Turkish or German). Lines come after a quiet spell with no delivered message for that input of 3, 5, 7, then 15 minutes (3, 8, 15, 30, 45, 60 minutes into an otherwise silent turn), at most 6 per input and at most one per chat every 5 minutes, and stop at the final: none once the input has a final export (pending or delivered) or its final is ready, none while any person's answer final in the chat is still unreported by V1, and a delivered answer in the chat restarts the quiet spell (a follow-up's line never lands right after the previous answer). A final export retires every line V1 has not taken yet (`superseded`, `heartbeat_withdrawn` in the log); a late ACK of one is still recorded. A person's input still queued behind an earlier running turn (fresh proof, at most 120 s old, that the earlier input's own Deep run is running) gets the same lines on the same clock, counted from its arrival, with the template `🧠 Still on it… N min so far. An earlier task is finishing first, then the full answer follows.`; once its own turn is observed the clock continues there. Set `false` for chats where no person waits (health probe, canary); it keeps the legacy 10-minute `activity_running` notice. Adapters before this field refuse a binding that contains it (`binding_fields`): deploy the adapter first. |
 | `fast_reply_policy` | Optional: `legacy` (default) preserves the progress-dependent Fast policy. Explicit `owner_only` enables immediate Fast replies for a group the operator verified has only owner-visible recipients; participant grants do not establish that visibility. `disabled` suppresses Fast replies (for example a coordinator chat). |
@@ -983,6 +984,49 @@ A write or custody failure keeps the reference-only note.
 
 Final replies also carry the conversation's `provider` and `model` (from
 `GET /settings`, when available) so V1 can show them in its debug footer.
+
+### Long-run updates
+
+`progress_updates` stops after three early notes, and V1 keeps a reply to
+V1-local input in Orkestr, so a long turn used to show nothing in the group
+until its final (2026-11-19: a 3.5-hour run, 62 updates in Core, none in
+WhatsApp). With `deep_updates` (see the binding table for its default), while
+an input's own Deep run is `running`, the run's latest progress payload is
+exported as `Update: <text>`, cut at a word to about 600 characters:
+
+- the first once the run has run 15 minutes, then at most one every 30
+  minutes per run (the start is the run's first Core event; a run matched
+  before this adapter was deployed counts from the input's admission);
+- never a text this input already sent (an update or an ordinary progress
+  note, compared without case and spacing); the next new text goes out, and
+  an ordinary note never repeats the run's last update;
+- never empty text, `NO_REPLY`, a question (sent at once as its own post) or
+  a snapshot still being written (held as in `outbound_text.py`), and never
+  within 2 minutes after this input's own heartbeat line;
+- nothing once the input's final is exported or ready, and the final's
+  export withdraws (`superseded`, `deep_update_withdrawn` in the log) every
+  update V1 has not taken yet. One V1 already imported cannot be recalled
+  (for a person's input the relay itself drops progress overtaken by its
+  final); a late ACK is still recorded.
+
+Each update is the input's own `kind: "progress"` export (source key
+`update:<input>:<run>:<payload>`), written in one transaction with the run's
+last-sent time and the text's digest (`deep_updates` in the input row), so a
+restart or replay never sends it twice. V1's scoped relay delivers it as a
+reply to a person's WhatsApp input through the bound assistant account. For
+a V1-local request whose reply is mirrored to the group (`group_mirror`) and
+for a V2 timer run, whose progress V1 never posts, the same transaction also
+writes a group copy on a pseudo timer parent with source id `status` (the
+Deep heartbeat's shape; the relay marks it an update). A pending update
+holds that input's heartbeat line, and a delivered one restarts its quiet
+spell. Updates do not use the three `progress_updates` notes.
+`GET /threads/<id>/health` reports `deepUpdates`. The log line is
+`deep_update conversation=… input=… run=… n=… route=input|copy`.
+
+Rollback: remove any `deep_updates` key from the binding files, then install
+the older adapter. It reads the ledger unchanged; an unreported update is
+retired when its input's final transport settles, like other progress, and a
+group copy already exported is still delivered.
 
 ## Adding a binding
 

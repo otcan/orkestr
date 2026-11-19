@@ -304,6 +304,9 @@ def observe(worker, data, statuses, now=None):
             # The chat just saw an answer, or one is on its way: not quiet.
             answers, in_transit = chat_answers(db, since, now)
             times += answers
+            # An "Update:" line of this input is on its way (deep_updates.py).
+            from .deep_updates import pending as update_pending
+            in_transit = in_transit or update_pending(db, data["remote_id"])
         ledger.save(data, db)
         if has_final(db, data) or (heartbeat and in_transit):
             return  # No status line after (or racing) a final.
