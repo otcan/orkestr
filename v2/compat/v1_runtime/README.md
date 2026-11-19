@@ -998,7 +998,8 @@ exported as `Update: <text>`, cut at a word to about 600 characters:
   minutes per run (the start is the run's first Core event; a run matched
   before this adapter was deployed counts from the input's admission);
 - never a text this input already sent (an update or an ordinary progress
-  note, compared without case and spacing); the next new text goes out;
+  note, compared without case and spacing); the next new text goes out, and
+  an ordinary note never repeats the run's last update;
 - never empty text, `NO_REPLY`, a question (sent at once as its own post) or
   a snapshot still being written (held as in `outbound_text.py`), and never
   within 2 minutes after this input's own heartbeat line;

@@ -242,10 +242,18 @@ def export(ledger, data, run, payload_id, line, identity, kind, now):
             copy(ledger, db, data, message, run, now)
         state = data["deep_updates"]
         value = digest(line)
-        state["runs"][run].update(sent_at=now, sent=state["runs"][run].get("sent", 0) + 1, digest=value)
+        state["runs"][run].update(sent_at=now, sent=state["runs"][run].get("sent", 0) + 1, digest=value,
+                                  payload=payload_id)
         state["digests"] = (state.get("digests", []) + [value])[-DIGEST_LIMIT:]
         ledger.save(data, db)
     return message
+
+
+def sent(data, run, payload_id):
+    """Whether `payload_id` is the run's last "Update:" line (the ordinary
+    progress note must not repeat it)."""
+    entry = ((data.get("deep_updates") or {}).get("runs") or {}).get(run) or {}
+    return bool(payload_id) and entry.get("payload") == payload_id
 
 
 def copy_ids(export_id):

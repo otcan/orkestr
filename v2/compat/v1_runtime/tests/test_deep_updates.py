@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from v2.compat.v1_runtime import activity, config as config_module, deep_updates, outbound_text
+from v2.compat.v1_runtime import activity, config as config_module, deep_updates, outbound_text, worker as worker_module
 from v2.compat.v1_runtime.ledger import Ledger
 from v2.compat.v1_runtime.questions import QUESTION_PREFIX
 from v2.compat.v1_runtime.rust_client import ClientError
@@ -414,10 +414,27 @@ class WorkerPassTests(unittest.TestCase):
             rows = db.execute("SELECT kind,outcome,json_extract(message,'$.text') FROM exports WHERE input_id=? "
                               "ORDER BY seq", (data["remote_id"],)).fetchall()
             stored = json.loads(db.execute("SELECT data FROM inputs WHERE remote_id=?", (data["remote_id"],)).fetchone()[0])
+        self.assertEqual(stored["deep_updates"]["runs"]["deep-run"]["payload"], "p2")
         # V1 never reported the two updates here: the final withdrew them.
         self.assertEqual(rows, [("progress", "superseded", "Update: working on p1."),
                                 ("progress", "superseded", "Update: working on p2."), ("final", None, "deep result")])
         self.assertEqual(stored["deep_updates"]["runs"]["deep-run"]["sent"], 2)
+
+    def test_an_ordinary_progress_note_never_repeats_this_runs_update(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        ledger = Ledger(Path(temp.name) / "ledger.sqlite3", {"test_scope": "one"})
+        data, _ = ledger.enqueue(dict(publicMessageId="public", publicThreadId="thread", chatId="chat",
+                                      accountId="account", text="request"), OWNER)
+        data["deep_updates"] = {"runs": {"deep-run": {"started_at": 0, "payload": "p1", "sent": 1}}}
+        ledger.save(data)
+        worker = Worker(Peer(), ledger, progress_updates=True, legacy_companions=True)
+        with patch.object(worker_module, "PROGRESS_INTERVAL_S", 0):
+            for _ in range(2):
+                worker.capture_progress(data, dict(run_id="deep-run", phase="running",
+                                                   progress=dict(payload_id="p1")), {"deep-run"})
+        self.assertEqual([m for m in ledger.messages() if m["role"] == "assistant"], [])
+        self.assertNotIn("p1", data.get("progress_seen", []), "the three ordinary notes stay available")
 
 
 if __name__ == "__main__":

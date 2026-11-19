@@ -312,6 +312,8 @@ class Worker:
             return
         if payload_id in data.get("question_payloads", []):
             return  # Its own durable post is the only transport path.
+        if deep_updates.sent(data, status.get("run_id"), payload_id):
+            return  # Already in the chat as this run's "Update:" line.
         now = time.time()
         if now - data.get("progress_at", data.get("admitted_at", now)) < PROGRESS_INTERVAL_S:
             return
