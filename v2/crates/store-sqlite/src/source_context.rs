@@ -121,35 +121,6 @@ pub(crate) fn stop_origin(guarded: bool, key: &str) -> &'static str {
     }
 }
 
-#[cfg(test)]
-mod stop_origin_tests {
-    use super::stop_origin;
-
-    #[test]
-    fn only_the_web_ui_key_is_the_owner_and_unknown_is_not() {
-        for (guarded, key, origin) in [
-            (false, "6f9619ff-8b86-4011-b42d-00c04fc964ff", "internal"),
-            (false, "execution-run-budget-expired", "internal"),
-            (
-                true,
-                "release-043be0906976-6f9619ff-8b86-4011-b42d-00c04fc964ff",
-                "release",
-            ),
-            (true, "release-db-synthetic", "release"),
-            (true, "forced-release-synthetic", "release"),
-            (true, "lead-stop-academic", "operator"),
-            (true, "lead:force-deploy-stop:5", "operator"),
-            (true, "6f9619ff-8b86-4011-b42d-00c04fc964ff", "owner"),
-            (true, "6F9619FF-8B86-4011-B42D-00C04FC964FF", "other"),
-            (true, "6f9619ff8b864011b42d00c04fc964ff", "other"),
-            (true, "stop:1", "other"),
-            (true, "", "other"),
-        ] {
-            assert_eq!(stop_origin(guarded, key), origin, "{key}");
-        }
-    }
-}
-
 /// Acceptance releases the exact occupied binding and advances its generation
 /// once in the same transaction. Only that recorded completion can explain a
 /// ready binding one generation ahead; reuse, replacement or retirement cannot.
@@ -230,4 +201,33 @@ pub(super) async fn source_binding_released_once(
         .bind(&holder).bind(&holder).bind(&holder)
         .fetch_one(&mut *tx).await.map_err(db)?;
     Ok(valid == 1)
+}
+
+#[cfg(test)]
+mod stop_origin_tests {
+    use super::stop_origin;
+
+    #[test]
+    fn only_the_web_ui_key_is_the_owner_and_unknown_is_not() {
+        for (guarded, key, origin) in [
+            (false, "6f9619ff-8b86-4011-b42d-00c04fc964ff", "internal"),
+            (false, "execution-run-budget-expired", "internal"),
+            (
+                true,
+                "release-043be0906976-6f9619ff-8b86-4011-b42d-00c04fc964ff",
+                "release",
+            ),
+            (true, "release-db-synthetic", "release"),
+            (true, "forced-release-synthetic", "release"),
+            (true, "lead-stop-academic", "operator"),
+            (true, "lead:force-deploy-stop:5", "operator"),
+            (true, "6f9619ff-8b86-4011-b42d-00c04fc964ff", "owner"),
+            (true, "6F9619FF-8B86-4011-B42D-00C04FC964FF", "other"),
+            (true, "6f9619ff8b864011b42d00c04fc964ff", "other"),
+            (true, "stop:1", "other"),
+            (true, "", "other"),
+        ] {
+            assert_eq!(stop_origin(guarded, key), origin, "{key}");
+        }
+    }
 }
