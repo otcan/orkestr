@@ -135,6 +135,37 @@ class RefusalTests(unittest.TestCase):
         self.assertEqual([m for m in self.assistant() if m.get("refusal")], [])
         self.assertIsNone(self.ledger.next_input())
 
+    def test_a_window_reconciling_for_minutes_alerts_once(self):
+        import contextlib
+        import io
+        from v2.compat.v1_runtime import foreground
+        self.ledger.enqueue(body("first"))
+        data = self.ledger.next_input()
+        clock = [1000.0]
+        alerts = io.StringIO()
+        with contextlib.redirect_stderr(alerts):
+            for step in (0, 60, 119, 121, 300):
+                foreground.reconciling_wait(self.worker, data, now=clock[0] + step)
+        lines = [line for line in alerts.getvalue().splitlines() if "window_reconciling" in line]
+        self.assertEqual(len(lines), 1, alerts.getvalue())
+        self.assertIn("input=%s waiting_s=121" % data["remote_id"], lines[0])
+        # A step that went through ends the wait; a new 409 starts counting again.
+        foreground.reconciling_cleared(self.worker, data)
+        self.assertNotIn(data["remote_id"], self.worker._reconciling_since)
+
+    def test_reconciling_waits_are_counted_through_the_worker_loop(self):
+        self.ledger.enqueue(body("first"))
+        original = self.peer.request
+        def request(method, route, **kwargs):
+            if method == "GET" and route == "/window":
+                raise ClientError("unexpected_status", 409)
+            return original(method, route, **kwargs)
+        self.peer.request = request
+        self.worker.run_once(Stop())
+        data = self.ledger.next_input()
+        self.assertNotIn("refused", data)
+        self.assertIn(data["remote_id"], self.worker._reconciling_since)
+
     def test_other_window_status_refusals_keep_their_meaning(self):
         self.ledger.enqueue(body("first"))
         original = self.peer.request

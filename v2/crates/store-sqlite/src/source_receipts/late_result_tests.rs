@@ -8,7 +8,7 @@ use super::continuation_groups::{
     accept, claim, count, hand_back, inbox, result, start, start_claimed,
 };
 use super::*;
-use orkestr_v2_application::IntakeStore;
+use orkestr_v2_application::{runtime::RunAdmissionResult, IntakeStore};
 use orkestr_v2_contracts::{
     MessageId, Receipt, SourceContextProof, SourceContextQuery, SourceSuccessor,
 };
@@ -356,4 +356,131 @@ async fn a_successor_that_is_not_current_is_not_named() {
     assert!(!proof.eligible_for_continuation);
     assert_eq!(proof.successor, None);
     close(f).await;
+}
+
+/// Source accepted, then the owner's next message started `turn` on the same
+/// session: the plain successor case the variants below change.
+async fn superseded_by_a_turn(f: &Case, source: &ProviderAdmission) -> RunAdmissionResult {
+    accept(f, source, "accept-source").await;
+    unfenced(f, "synthetic-next-input", false).await;
+    let (turn, _, _) = start(f, "next-turn").await;
+    assert_eq!(
+        lookup(f, &source.run.run_id)
+            .await
+            .successor
+            .map(|s| s.run_id),
+        Some(turn.provider.run.run_id.clone())
+    );
+    turn
+}
+
+async fn execute(f: &Case, sql: &str, run: &ProviderAdmission) {
+    sqlx::query(sql)
+        .bind(run.run.run_id.to_string())
+        .execute(&f.store.pool)
+        .await
+        .unwrap();
+}
+
+/// Review M3: a read-only parallel slot run is never the successor, even one
+/// that would itself be eligible.
+#[tokio::test]
+async fn a_parallel_slot_run_is_never_named() {
+    let (f, source, _, _) = fixture().await;
+    let turn = superseded_by_a_turn(&f, &source).await;
+    execute(
+        &f,
+        "UPDATE production_runs SET deep_slot=1 WHERE id=?",
+        &turn.provider,
+    )
+    .await;
+    assert!(
+        lookup(&f, &turn.provider.run.run_id)
+            .await
+            .eligible_for_continuation
+    );
+    assert_eq!(lookup(&f, &source.run.run_id).await.successor, None);
+    close(f).await;
+}
+
+/// Review M4: the successor continues the source's own session. A turn on a
+/// reset native session, or after a provider handoff, is current in its own
+/// right but is not the source's successor.
+#[tokio::test]
+async fn a_reset_or_handed_off_session_names_no_successor() {
+    for change in ["native_reset", "provider"] {
+        let (f, source, _, _) = fixture().await;
+        let turn = superseded_by_a_turn(&f, &source).await;
+        let session = turn.provider.run.session_id.to_string();
+        let (column, value) = if change == "native_reset" {
+            ("native_session_id", "synthetic-reset-native")
+        } else {
+            sqlx::query("INSERT INTO conversation_settings(conversation_id,owner_id,revision,provider,honor_no_reply,provider_generation,updated_at_ms) VALUES(?,?,1,'claude',1,1,0)")
+                .bind(f.conversation.to_string()).bind(f.owner.to_string())
+                .execute(&f.store.pool).await.unwrap();
+            ("provider_kind", "claude")
+        };
+        sqlx::query(&format!(
+            "UPDATE session_bindings SET {column}=? WHERE id=?"
+        ))
+        .bind(value)
+        .bind(&session)
+        .execute(&f.store.pool)
+        .await
+        .unwrap();
+        sqlx::query(&format!("UPDATE production_runs SET {column}=? WHERE id=?"))
+            .bind(value)
+            .bind(turn.provider.run.run_id.to_string())
+            .execute(&f.store.pool)
+            .await
+            .unwrap();
+        assert!(
+            lookup(&f, &turn.provider.run.run_id)
+                .await
+                .eligible_for_continuation,
+            "{change}"
+        );
+        let proof = lookup(&f, &source.run.run_id).await;
+        assert!(!proof.eligible_for_continuation, "{change}");
+        assert_eq!(proof.successor, None, "{change}");
+        close(f).await;
+    }
+}
+
+/// Review M4: a source the owner stopped has no successor; one cut by an
+/// internal Stop (a release, a deadline) still has one.
+#[tokio::test]
+async fn an_owner_stopped_source_names_no_successor() {
+    for owner_stop in [false, true] {
+        let (f, source, _, _) = fixture().await;
+        stopped_for_release(&f, &source).await;
+        if owner_stop {
+            // What the owner's Stop records: his request revision on the cancellation.
+            execute(
+                &f,
+                "UPDATE production_cancellations SET request_revision=0 WHERE run_id=?",
+                &source,
+            )
+            .await;
+        }
+        unfenced(&f, "synthetic-next-input", false).await;
+        let (turn, _, _) = start(&f, "next-turn").await;
+        assert!(
+            lookup(&f, &turn.provider.run.run_id)
+                .await
+                .eligible_for_continuation
+        );
+        let proof = lookup(&f, &source.run.run_id).await;
+        assert!(!proof.eligible_for_continuation);
+        assert_eq!(
+            proof.successor.map(|s| s.run_id),
+            if owner_stop {
+                None
+            } else {
+                Some(turn.provider.run.run_id.clone())
+            },
+            "owner_stop={owner_stop}"
+        );
+        close(f).await;
+    }
 }

@@ -298,17 +298,15 @@ impl ManagedTools {
         Ok(())
     }
     pub(super) async fn cancel(&mut self) -> Result<(), &'static str> {
+        let unavailable = |error: &ManagerError| matches!(error, ManagerError::Unavailable);
         if !self.run_closed {
             let (manager, window, parent) =
                 (&self.context.manager, &self.context.window, &self.parent);
-            close::retry_idempotent(
-                &close::CLOSE_ATTEMPTS,
-                |error: &ManagerError| {
-                    matches!(error, ManagerError::Deadline | ManagerError::Unavailable)
-                },
-                move |deadline| {
-                    manager.close_managed_run(window, parent, Instant::now() + deadline)
-                },
+            close::bounded(
+                Instant::now() + close::CONTROL_BUDGET,
+                &close::UNAVAILABLE_BACKOFF,
+                unavailable,
+                move |deadline| manager.close_managed_run(window, parent, deadline),
             )
             .await
             .map_err(|error| {
@@ -320,20 +318,23 @@ impl ManagedTools {
         let Some(operation) = self.operation.as_ref() else {
             return Ok(());
         };
-        let until = Instant::now() + Duration::from_secs(4);
+        let (manager, window) = (&self.context.manager, &self.context.window);
+        // One budget for the whole cleanup: the cancel request and the polls
+        // that wait for the operation to read terminal.
+        let until = Instant::now() + close::CONTROL_BUDGET;
         let mut cancel = true;
         loop {
-            let receipt = self
-                .context
-                .manager
-                .query_managed(
-                    &self.context.window,
-                    operation,
-                    cancel,
-                    Instant::now() + Duration::from_secs(1),
-                )
-                .await
-                .map_err(|_| "managed cancellation cleanup unknown")?;
+            let receipt = close::bounded(
+                until,
+                &close::UNAVAILABLE_BACKOFF,
+                unavailable,
+                move |deadline| manager.query_managed(window, operation, cancel, deadline),
+            )
+            .await
+            .map_err(|error| {
+                eprintln!("owned execution managed cancellation cleanup refused: {error:?}");
+                "managed cancellation cleanup unknown"
+            })?;
             if receipt.terminal.is_some() {
                 self.operation = None;
                 return Ok(());
