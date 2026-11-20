@@ -3096,7 +3096,8 @@ test("CLI attach with an explicit thread does not fetch the thread list", async 
   });
 
   assert.equal(code, 0);
-  assert.deepEqual(seen.map((entry) => entry.key), ["POST /api/threads/Demo/attach"]);
+  // The thread read decides V1 vs V2; it is not the thread list.
+  assert.deepEqual(seen.map((entry) => entry.key), ["GET /api/threads/Demo", "POST /api/threads/Demo/attach"]);
   assert.match(stdout.text(), /orkestr-demo/);
 });
 
@@ -3178,6 +3179,7 @@ test("CLI attach read-only passes non-mutating watch options", async () => {
 
   assert.equal(code, 0);
   assert.equal(stdout.text(), "watching\n");
+  assert.equal(seen.shift().key, "GET /api/threads/Demo", "attach first checks whether V2 serves the thread");
   assert.equal(seen[0].body.readOnly, true);
   assert.equal(seen[0].body.intervalMs, 2000);
   assert.equal(seen[0].body.timeoutMs, 60000);
@@ -3221,6 +3223,7 @@ test("CLI attach takeover waits through watch-and-wait before attaching", async 
   assert.equal(code, 0);
   assert.equal(stdout.text(), "watching\n");
   assert.equal(attempts, 2);
+  assert.equal(seen.shift().key, "GET /api/threads/Demo", "attach first checks whether V2 serves the thread");
   assert.equal(seen[0].body.takeover, true);
   assert.equal(seen[1].body.takeover, true);
   assert.deepEqual(spawned, [{ command: "tmux", args: ["attach-session", "-t", "orkestr-thread-demo"] }]);
@@ -3277,6 +3280,7 @@ test("CLI attach interactive watch hotkey interrupts and takes over", async () =
 
   assert.equal(code, 0);
   assert.match(stdout.text(), /Interrupt takeover requested/);
+  assert.equal(seen.shift().key, "GET /api/threads/Demo", "attach first checks whether V2 serves the thread");
   assert.equal(seen.length, 2);
   assert.deepEqual(spawned, [{ command: "tmux", args: ["attach-session", "-t", "orkestr-thread-demo"] }]);
   assert.equal(stdin.isRaw, false);
@@ -3315,6 +3319,7 @@ test("CLI attach interactive watch approval hotkey uses thread input", async () 
   assert.equal(code, 0);
   assert.match(stdout.text(), /Approval sent/);
   assert.match(stdout.text(), /Read-only watch enabled/);
+  assert.equal(seen.shift().key, "GET /api/threads/Demo", "attach first checks whether V2 serves the thread");
   assert.deepEqual(seen.map((entry) => entry.key), [
     "POST /api/threads/Demo/attach",
     "POST /api/threads/Demo/input",
