@@ -145,7 +145,7 @@ class Refused(RuntimeError):
 # Failures that may clear by themselves; the same frozen request is retried.
 # A revoked owner session refuses every binding until the service restarts, so
 # it is not a property of the input.
-TRANSIENT_CODES = ("transport_failed", "transport_outcome_unknown", "session_revoked")
+TRANSIENT_CODES = ("transport_failed", "transport_outcome_unknown", "session_revoked", "window_reconciling")
 
 
 # A ledger that cannot be opened is retried after 1, 2, 4, ... up to 30 s; the
@@ -383,7 +383,17 @@ class Worker:
             self.ledger.save(data)
 
     def call(self, method, route, body=None, allowed=(200,)):
-        return self.client.request(method, route, body=body, allowed=allowed)[1]
+        try:
+            return self.client.request(method, route, body=body, allowed=allowed)[1]
+        except ClientError as error:
+            # Reading the window status reconciles the previous window; while
+            # that conflicts (a window pausing or awaiting reconciliation),
+            # Core answers 409. That is the window's state, never a property
+            # of this input: retry the same frozen request instead of refusing
+            # it (an owner message was refused this way on 2026-11-20).
+            if method == "GET" and route == "/window" and getattr(error, "status", None) == 409:
+                raise ClientError("window_reconciling", 409) from None
+            raise
 
     def timer_inputs(self, after, limit=TIMER_PAGE):
         value = self.call("GET", "/timer-inputs?after_sequence=%d&limit=%d" % (after, limit))

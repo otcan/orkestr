@@ -23,6 +23,11 @@ impl Store {
             .bind(query.source_message_id.to_string()).fetch_optional(&mut *tx).await.map_err(db)?.ok_or(StoreError::NotFound)?;
         let eligible =
             source_binding_is_current(&mut tx, owner, conversation, &query.source_run_id).await?;
+        let successor = if eligible {
+            None
+        } else {
+            current_successor(&mut tx, owner, conversation, &query.source_run_id).await?
+        };
         let proof = SourceContextProof {
             schema_version: 1,
             owner_id: owner.clone(),
@@ -34,9 +39,85 @@ impl Store {
             provider_generation: row.get("provider_generation"),
             binding_generation: row.get("binding_generation"),
             eligible_for_continuation: eligible,
+            successor,
         };
         tx.commit().await.map_err(db)?;
         Ok(proof)
+    }
+}
+
+/// The latest Deep run started after `source` that continues the source's own
+/// session: the same binding (`session_id`), native session and provider, on
+/// the canonical writer (`deep_slot=0`, never a read-only parallel slot). It is
+/// named only when it is itself eligible for continuation under the rule below
+/// (binding, native session, provider and provider generation still current),
+/// and never for a source the owner himself stopped (`stop_origin` below; a
+/// release, operator or internal Stop keeps the successor). A result of the
+/// superseded
+/// source is handed to this run as an input; Core's fence then applies to it
+/// exactly as to any other continuation. A reset, replaced or handed-off
+/// session, or a later run that is not current, names none.
+async fn current_successor(
+    tx: &mut sqlx::SqliteConnection,
+    owner: &OwnerId,
+    conversation: &ConversationId,
+    source: &RunId,
+) -> Result<Option<orkestr_v2_contracts::SourceSuccessor>> {
+    let latest: Option<(String, String)> = sqlx::query_as("SELECT l.id,l.message_id FROM production_runs l JOIN production_runs r ON r.owner_id=l.owner_id AND r.conversation_id=l.conversation_id AND r.session_id=l.session_id AND r.native_session_id=l.native_session_id AND r.provider_kind=l.provider_kind WHERE r.id=? AND r.owner_id=? AND r.conversation_id=? AND r.role='deep' AND r.deep_slot=0 AND l.role='deep' AND l.deep_slot=0 AND l.id!=r.id AND l.scope_sequence>r.scope_sequence ORDER BY l.scope_sequence DESC LIMIT 1")
+        .bind(source.to_string()).bind(owner.to_string()).bind(conversation.to_string())
+        .fetch_optional(&mut *tx).await.map_err(db)?;
+    let Some((run, message)) = latest else {
+        return Ok(None);
+    };
+    // A source the owner himself stopped has no successor (stop_origin below).
+    let stopped: Option<(Option<i64>, String)> = sqlx::query_as(
+        "SELECT request_revision,request_key FROM production_cancellations WHERE run_id=?",
+    )
+    .bind(source.to_string())
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(db)?;
+    if stopped.is_some_and(|(revision, key)| stop_origin(revision.is_some(), &key) == "owner") {
+        return Ok(None);
+    }
+    let run = RunId(uuid::Uuid::parse_str(&run).map_err(|_| StoreError::Invalid)?);
+    let message = orkestr_v2_contracts::MessageId(
+        uuid::Uuid::parse_str(&message).map_err(|_| StoreError::Invalid)?,
+    );
+    if !source_binding_is_current(tx, owner, conversation, &run).await? {
+        return Ok(None);
+    }
+    Ok(Some(orkestr_v2_contracts::SourceSuccessor {
+        run_id: run,
+        message_id: message,
+    }))
+}
+
+/// Who asked for a run's Stop, from its cancellation record. Only `owner`
+/// ends a superseded run's successors. The release train and operators stop
+/// through the same guarded route as the owner, so the guard alone
+/// (`request_revision`) cannot tell them apart; the request keys each caller
+/// uses do, and anything unknown is not the owner:
+///
+/// - `internal`: an unguarded Stop (deadline, budget, shutdown, worker);
+/// - `release`: the release train, `release-<head>-<run>` (also `release-db…`)
+///   or `forced-release…`;
+/// - `operator`: an operator Stop, `lead-…` or `lead:…`;
+/// - `owner`: the owner's web UI Stop button, whose key is its
+///   `crypto.randomUUID()` (apps/ui transport::key), a canonical lowercase
+///   UUID; WhatsApp has no V2 Stop;
+/// - `other`: any other guarded key.
+pub(crate) fn stop_origin(guarded: bool, key: &str) -> &'static str {
+    if !guarded {
+        "internal"
+    } else if key.starts_with("release-") || key.starts_with("forced-release") {
+        "release"
+    } else if key.starts_with("lead-") || key.starts_with("lead:") {
+        "operator"
+    } else if uuid::Uuid::parse_str(key).is_ok_and(|id| id.hyphenated().to_string() == key) {
+        "owner"
+    } else {
+        "other"
     }
 }
 
@@ -120,4 +201,33 @@ pub(super) async fn source_binding_released_once(
         .bind(&holder).bind(&holder).bind(&holder)
         .fetch_one(&mut *tx).await.map_err(db)?;
     Ok(valid == 1)
+}
+
+#[cfg(test)]
+mod stop_origin_tests {
+    use super::stop_origin;
+
+    #[test]
+    fn only_the_web_ui_key_is_the_owner_and_unknown_is_not() {
+        for (guarded, key, origin) in [
+            (false, "6f9619ff-8b86-4011-b42d-00c04fc964ff", "internal"),
+            (false, "execution-run-budget-expired", "internal"),
+            (
+                true,
+                "release-043be0906976-6f9619ff-8b86-4011-b42d-00c04fc964ff",
+                "release",
+            ),
+            (true, "release-db-synthetic", "release"),
+            (true, "forced-release-synthetic", "release"),
+            (true, "lead-stop-academic", "operator"),
+            (true, "lead:force-deploy-stop:5", "operator"),
+            (true, "6f9619ff-8b86-4011-b42d-00c04fc964ff", "owner"),
+            (true, "6F9619FF-8B86-4011-B42D-00C04FC964FF", "other"),
+            (true, "6f9619ff8b864011b42d00c04fc964ff", "other"),
+            (true, "stop:1", "other"),
+            (true, "", "other"),
+        ] {
+            assert_eq!(stop_origin(guarded, key), origin, "{key}");
+        }
+    }
 }

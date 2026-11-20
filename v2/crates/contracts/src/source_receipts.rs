@@ -24,6 +24,19 @@ pub struct SourceContextProof {
     pub provider_generation: i64,
     pub binding_generation: i64,
     pub eligible_for_continuation: bool,
+    /// Present only when the source run is no longer eligible: the Deep run
+    /// that holds the conversation now and is itself eligible. A host result
+    /// of the superseded run goes to it as an input, never as a replay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub successor: Option<SourceSuccessor>,
+}
+
+/// The current Deep run that succeeded a superseded source run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceSuccessor {
+    pub run_id: RunId,
+    pub message_id: MessageId,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

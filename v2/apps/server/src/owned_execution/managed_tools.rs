@@ -6,6 +6,8 @@ use orkestr_v2_store_sqlite::{
     ManagedOperationParent, ManagedOperationSetup,
 };
 use std::time::Instant;
+#[path = "managed_close.rs"]
+mod close;
 #[path = "managed_pace.rs"]
 mod pace;
 #[path = "managed_workers.rs"]
@@ -296,35 +298,43 @@ impl ManagedTools {
         Ok(())
     }
     pub(super) async fn cancel(&mut self) -> Result<(), &'static str> {
+        let unavailable = |error: &ManagerError| matches!(error, ManagerError::Unavailable);
+        // One budget for the closure and the cleanup together: a run's
+        // cancellation must leave the drain and the lease margin their time.
+        let until = Instant::now() + close::CONTROL_BUDGET;
         if !self.run_closed {
-            self.context
-                .manager
-                .close_managed_run(
-                    &self.context.window,
-                    &self.parent,
-                    Instant::now() + Duration::from_secs(1),
-                )
-                .await
-                .map_err(|_| "managed run closure uncertain")?;
+            let (manager, window, parent) =
+                (&self.context.manager, &self.context.window, &self.parent);
+            close::bounded(
+                until,
+                &close::UNAVAILABLE_BACKOFF,
+                unavailable,
+                move |deadline| manager.close_managed_run(window, parent, deadline),
+            )
+            .await
+            .map_err(|error| {
+                eprintln!("owned execution managed run closure refused: {error:?}");
+                "managed run closure uncertain"
+            })?;
             self.run_closed = true;
         }
         let Some(operation) = self.operation.as_ref() else {
             return Ok(());
         };
-        let until = Instant::now() + Duration::from_secs(4);
+        let (manager, window) = (&self.context.manager, &self.context.window);
         let mut cancel = true;
         loop {
-            let receipt = self
-                .context
-                .manager
-                .query_managed(
-                    &self.context.window,
-                    operation,
-                    cancel,
-                    Instant::now() + Duration::from_secs(1),
-                )
-                .await
-                .map_err(|_| "managed cancellation cleanup unknown")?;
+            let receipt = close::bounded(
+                until,
+                &close::UNAVAILABLE_BACKOFF,
+                unavailable,
+                move |deadline| manager.query_managed(window, operation, cancel, deadline),
+            )
+            .await
+            .map_err(|error| {
+                eprintln!("owned execution managed cancellation cleanup refused: {error:?}");
+                "managed cancellation cleanup unknown"
+            })?;
             if receipt.terminal.is_some() {
                 self.operation = None;
                 return Ok(());
