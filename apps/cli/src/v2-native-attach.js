@@ -15,7 +15,7 @@ import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import { buildNativeLaunch } from "./v2-native-launch.js";
-import { acquireHold, readHold, releaseHold, renewHold, RENEW_MS } from "./v2-native-hold.js";
+import { acquireHold, readHold, releaseHold, renewHold, RENEW_MS, TTL_MS } from "./v2-native-hold.js";
 import { groupId, nativeAttachConfig, processesNaming, readNativeSession, readSelectedPlan } from "./v2-native-target.js";
 import { v2AttachError } from "./v2-owner-session.js";
 
@@ -132,14 +132,20 @@ export async function runNativeAttach(target, session, agent, ctx, { takeover = 
     if (!hold?.live || hold.holder_pid !== record.holder_pid) throw v2AttachError("v2_native_hold_lost", "the hold was taken over before the session opened");
     emit(`Opening the ${native.provider} session ${native.nativeSessionId} of ${target.name ? `"${target.name}"` : target.conversationId}: V2's own native session, as V2's executor in V2's file namespace, without the orkestr_managed tools. V2 queues the chat's messages until you leave; exit the session to hand back.\n`);
     let child = null;
+    let renewedAt = now();
     renewTimer = setInterval(() => {
-      let ok = false;
+      let lost = false;
       try {
-        ok = renewHold(config.holdDir, record, { fsImpl, now, gid });
-      } catch {}
+        lost = !renewHold(config.holdDir, record, { fsImpl, now, gid });
+        if (!lost) renewedAt = now();
+      } catch {
+        // The hold directory is briefly unwritable (storage busy): keep the
+        // session while the last renewal still covers it, then give it up.
+        lost = now() - renewedAt > TTL_MS - (ctx.renewMs || RENEW_MS);
+      }
       // A lost hold means V2 may resume the session: never keep a second writer.
-      if (!ok && child) {
-        emit("\nThe hold was lost (taken over or expired); closing this terminal session so V2 is the only writer.\n");
+      if (lost && child) {
+        emit("\nThe hold was lost (taken over, or it could not be renewed); closing this terminal session so V2 is the only writer.\n");
         try {
           child.kill("SIGTERM");
         } catch {}
