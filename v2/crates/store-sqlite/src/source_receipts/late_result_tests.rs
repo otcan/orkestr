@@ -490,7 +490,8 @@ async fn guarded_stop(f: &Case, source: &ProviderAdmission, key: &str) {
 /// Review R1: only the owner's own Stop ends a source's successors. The
 /// release train, an operator and Core itself stop through the same cut, and
 /// the result of such a run still goes to the turn after it. Every Stop but
-/// the internal one goes through the guarded path the HTTP route takes.
+/// the internal one goes through the guarded path the HTTP route takes; the
+/// rule is read from the cancellation record (request revision and key).
 #[tokio::test]
 async fn only_an_owner_stop_suppresses_the_successor() {
     for (key, origin) in [
@@ -509,13 +510,6 @@ async fn only_an_owner_stop_suppresses_the_successor() {
             Some(key) => guarded_stop(&f, &source, key).await,
             None => stopped_for_release(&f, &source).await,
         }
-        let recorded: String =
-            sqlx::query_scalar("SELECT stop_origin FROM production_cancellations WHERE run_id=?")
-                .bind(source.run.run_id.to_string())
-                .fetch_one(&f.store.pool)
-                .await
-                .unwrap();
-        assert_eq!(recorded, origin);
         unfenced(&f, "synthetic-next-input", false).await;
         let (turn, _, _) = start(&f, "next-turn").await;
         assert!(

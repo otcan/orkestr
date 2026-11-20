@@ -387,8 +387,7 @@ async fn populated_payload_prefix_upgrade_preserves_all_rows_and_foreign_links()
                         || !["role", "parent_session_id", "worker_delegation_id"]
                             .contains(&column.as_str()))
                         && (table != "production_cancellations"
-                            || !["request_control_revision", "stop_origin"]
-                                .contains(&column.as_str()))
+                            || column != "request_control_revision")
                 })
                 .collect();
             let expression = columns
