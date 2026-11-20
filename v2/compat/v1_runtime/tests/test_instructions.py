@@ -1,9 +1,12 @@
 """Per-binding chat rules: a frozen leading line on intakes, never part of input identity."""
+import contextlib
 import hashlib
+import io
 import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 from v2.compat.v1_runtime import config as config_module, instructions
 from v2.compat.v1_runtime.ledger import Ledger
@@ -110,12 +113,80 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config_module.binding(binding_doc(1, instructions_path=str(good)), OWNER)["instructions_path"],
                          str(good))
         self.assertIsNone(config_module.binding(binding_doc(1), OWNER)["instructions_path"])
-        large = Path(self.temp.name) / "large.md"
-        large.write_bytes(b"x" * (instructions.MAX_BYTES + 1))
-        for bad in ("relative.md", str(Path(self.temp.name) / "missing.md"), self.temp.name, str(large), 7):
+        for bad in ("relative.md", str(Path(self.temp.name) / "missing.md"), self.temp.name, 7):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 config_module.binding(binding_doc(1, instructions_path=bad), OWNER)
         self.assertNotIn("instructions_path", config_module.binding(binding_doc(1, instructions_path=str(good)), OWNER)["scope"])
+
+    def test_size_never_invalidates_the_binding(self):
+        large = Path(self.temp.name) / "large.md"
+        large.write_bytes(b"x" * (instructions.SOFT_BYTES * 8))
+        self.assertEqual(config_module.binding(binding_doc(1, instructions_path=str(large)), OWNER)["instructions_path"],
+                         str(large))
+
+
+class OversizeTests(RulesTests):
+    def setUp(self):
+        super().setUp()
+        self.rules.write_bytes(b"rule\n" * (instructions.SOFT_BYTES // 5 + 10))
+        self.size = self.rules.stat().st_size
+        self.assertGreater(self.size, instructions.SOFT_BYTES)
+
+    def alerts(self, err):
+        return [l for l in err.getvalue().splitlines() if l.startswith("ALERT orkestr-v2-wa-adapter instructions_oversize")]
+
+    def test_oversize_between_reloads_still_sends_the_line_and_warns(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            data, _ = self.inbound("wa-1")
+            self.worker.step(data)
+        self.assertTrue(self.sent()[0].startswith(expected(self.rules) + "\n\n"))
+        self.assertIsNone(self.worker.instructions_error)
+        self.assertEqual(self.worker.instructions_warning, {"code": "instructions_oversize", "bytes": self.size})
+        self.assertEqual(len(self.alerts(err)), 1)
+        self.assertIn("bytes=%d" % self.size, self.alerts(err)[0])
+
+    def test_one_alert_per_file_per_day(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            for number in range(3):
+                data, _ = self.inbound("wa-%d" % number)
+                self.worker.step(data)
+            self.assertEqual(len(self.alerts(err)), 1)
+            with mock.patch("time.strftime", return_value="2099-01-01"):
+                data, _ = self.inbound("wa-next-day")
+                self.worker.step(data)
+        self.assertEqual(len(self.alerts(err)), 2)
+
+    def test_shrinking_the_file_clears_the_warning(self):
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.worker.check_instructions()
+        self.assertIsNotNone(self.worker.instructions_warning)
+        self.rules.write_text("short\n")
+        self.worker.check_instructions()
+        self.assertIsNone(self.worker.instructions_warning)
+
+
+class ReloadTests(Harness):
+    def test_oversize_file_on_reload_keeps_the_binding_valid(self):
+        rules = Path(self.temp.name) / "CHAT.md"
+        rules.write_bytes(b"x" * (instructions.SOFT_BYTES + 1))
+        self.write(binding_doc(1, instructions_path=str(rules)))
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.registry.reload()
+        binding = self.binding(1)
+        self.assertIsNone(binding.error)
+        self.assertEqual(binding.state, "enabled")
+        self.assertEqual(self.registry.file_errors, {})
+        health = self.request("GET", "/threads/%s/health" % self.remote(1))[1]
+        self.assertTrue(health["enabled"])
+        self.assertIsNone(health["instructionsError"])
+        self.assertEqual(health["instructionsWarning"], {"code": "instructions_oversize", "bytes": instructions.SOFT_BYTES + 1})
+        self.assertEqual(err.getvalue().count("ALERT orkestr-v2-wa-adapter instructions_oversize"), 1)
+        with contextlib.redirect_stderr(err):
+            self.registry.reload()
+        self.assertEqual(err.getvalue().count("ALERT orkestr-v2-wa-adapter instructions_oversize"), 1)
 
 
 class HealthTests(Harness):
@@ -124,6 +195,7 @@ class HealthTests(Harness):
         self.binding(1).worker.instructions_error = "instructions_unreadable"
         health = self.request("GET", "/threads/%s/health" % self.remote(1))[1]
         self.assertEqual(health["instructionsError"], "instructions_unreadable")
+        self.assertIsNone(health["instructionsWarning"])
 
 
 if __name__ == "__main__":

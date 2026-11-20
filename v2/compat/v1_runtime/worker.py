@@ -255,6 +255,8 @@ class Worker:
         # Optional per-binding chat rules file (see instructions.py); not pinned.
         self.instructions_path = None
         self.instructions_error = None
+        self.instructions_warning = None
+        self._oversize_alerted = set()
         # Events read once serve every input, Fast watch and web watch of
         # this binding; each still keeps its own cursor (see journal.py).
         self.journal = shared_journal.Journal()
@@ -486,6 +488,28 @@ class Worker:
             self.client.request("POST", "/timer-digests/%s/delivered" % row["id"], body={}, allowed=(200,))
         return bool(rows)
 
+    def note_instructions_size(self, size):
+        """Health warning for an oversize rules file, with one operator alert per file per day.
+        The binding keeps running and the rules line is still sent."""
+        self.instructions_warning = warning = instructions.warning(size)
+        if warning:
+            key = (self.instructions_path, time.strftime("%Y-%m-%d", time.gmtime()))
+            if key not in self._oversize_alerted:
+                self._oversize_alerted = {key}
+                print("ALERT orkestr-v2-wa-adapter instructions_oversize conversation=%s bytes=%d soft_limit=%d path=%s"
+                      % (getattr(self.client, "conversation", "?"), size, instructions.SOFT_BYTES,
+                         self.instructions_path), file=sys.stderr, flush=True)
+
+    def check_instructions(self):
+        """Re-check the rules file after a binding reload (size warning only; never raises)."""
+        if not self.instructions_path:
+            self.instructions_warning = None
+            return
+        try:
+            self.note_instructions_size(instructions.inspect(self.instructions_path)[1])
+        except ValueError:
+            pass
+
     def with_rules(self, data, text):
         """Prefix the binding's chat rules line, frozen with the input on first
         send so a retry resends exactly the same text. A missing or unreadable
@@ -494,12 +518,14 @@ class Worker:
             rules = ""
             if self.instructions_path:
                 try:
-                    rules = instructions.line(self.instructions_path)
+                    rules, size = instructions.line_and_size(self.instructions_path)
                     self.instructions_error = None
+                    self.note_instructions_size(size)
                 except ValueError as error:
                     self.instructions_error = str(error)
             else:
                 self.instructions_error = None
+                self.instructions_warning = None
             data["intake_rules"] = rules
             self.ledger.save(data)
         return data["intake_rules"] + "\n\n" + text if data["intake_rules"] else text

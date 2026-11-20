@@ -12,47 +12,66 @@ hex digits of the file's SHA-256, so an edited file is read again. The line is
 added when the intake is first sent and frozen with it (a retry resends the
 same text); it is never part of the ledger's identity digest. A missing or
 unreadable file sends the text without the line and is reported in health.
+
+Size never refuses a file. Only the path travels in the line (agents read the
+file themselves); Fast inlines at most 20 KiB in Rust and keeps the line for
+anything larger, so no downstream limit depends on the file size. Above
+SOFT_BYTES (32 KiB, the old hard limit) health reports `instructions_oversize`
+with the byte count and the operator gets one alert per file per day.
 """
 import hashlib
 import os
 import stat
 
-MAX_BYTES = 32 * 1024
+SOFT_BYTES = 32 * 1024
+CHUNK = 64 * 1024
 LINE = ("[Chat rules v%s: before answering, read %s (cat it) unless you already read this version "
         "in this session, and follow it.]")
 
 
 def check_path(value):
-    """Load-time validation: None, or an absolute path to a readable regular file <= 32 KiB."""
+    """Load-time validation: None, or an absolute path to a readable regular file (any size)."""
     if value is None:
         return None
     if (not isinstance(value, str) or not os.path.isabs(value) or len(value) > 1024 or
             any(ord(c) < 32 or c in "[]" for c in value)):
         raise ValueError("config_instructions_path")
-    read(value)
+    inspect(value)
     return value
 
 
-def read(path):
-    """The file's bytes; ValueError with a stable code when it cannot be used."""
+def inspect(path):
+    """(sha256 hex, size in bytes); ValueError with a stable code when the file cannot be used."""
+    digest = hashlib.sha256()
+    size = 0
     try:
         with open(path, "rb") as handle:
-            info = os.fstat(handle.fileno())
-            if not stat.S_ISREG(info.st_mode):
+            if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
                 raise ValueError("instructions_not_regular")
-            if info.st_size > MAX_BYTES:
-                raise ValueError("instructions_too_large")
-            content = handle.read(MAX_BYTES + 1)
+            while True:
+                chunk = handle.read(CHUNK)
+                if not chunk:
+                    break
+                size += len(chunk)
+                digest.update(chunk)
     except OSError:
         raise ValueError("instructions_unreadable") from None
-    if len(content) > MAX_BYTES:
-        raise ValueError("instructions_too_large")
-    return content
+    return digest.hexdigest(), size
 
 
 def line(path):
     """The rules line for the file's current version (raises ValueError)."""
-    return LINE % (hashlib.sha256(read(path)).hexdigest()[:12], path)
+    return line_and_size(path)[0]
+
+
+def line_and_size(path):
+    version, size = inspect(path)
+    return LINE % (version[:12], path), size
+
+
+def warning(size):
+    """Health warning for a file over the soft limit, else None."""
+    return {"code": "instructions_oversize", "bytes": size} if size > SOFT_BYTES else None
 
 
 def reserve(path):

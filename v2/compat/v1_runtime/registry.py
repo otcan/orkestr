@@ -225,6 +225,7 @@ class Registry:
         binding.worker.attachments = binding.config["attachments"]
         binding.worker.max_input_age_s = binding.config["max_input_age_seconds"]
         binding.worker.instructions_path = binding.config["instructions_path"]
+        binding.worker.check_instructions()
         binding.worker.internal_context_dir = self.service.get("internal_context_dir")
         binding.worker.release_interruption_dir = release_interruption.configured(self.service)
         if binding.thread is None and self.workers:
