@@ -9,12 +9,14 @@ use super::continuation_groups::{
 };
 use super::*;
 use orkestr_v2_application::IntakeStore;
-use orkestr_v2_contracts::{MessageId, Receipt, SourceContextQuery};
+use orkestr_v2_contracts::{
+    MessageId, Receipt, SourceContextProof, SourceContextQuery, SourceSuccessor,
+};
 
 /// The source-run lookup the broker makes before every handback.
-async fn eligible(f: &Case, source: &ProviderAdmission) -> bool {
+async fn lookup(f: &Case, run: &RunId) -> SourceContextProof {
     let message: String = sqlx::query_scalar("SELECT message_id FROM production_runs WHERE id=?")
-        .bind(source.run.run_id.to_string())
+        .bind(run.to_string())
         .fetch_one(&f.store.pool)
         .await
         .unwrap();
@@ -24,12 +26,17 @@ async fn eligible(f: &Case, source: &ProviderAdmission) -> bool {
             &f.owner,
             &f.conversation,
             &SourceContextQuery {
-                source_run_id: source.run.run_id.clone(),
+                source_run_id: run.clone(),
                 source_message_id: MessageId(Uuid::parse_str(&message).unwrap()),
             },
         )
         .await
         .unwrap()
+}
+
+async fn eligible(f: &Case, source: &ProviderAdmission) -> bool {
+    lookup(f, &source.run.run_id)
+        .await
         .eligible_for_continuation
 }
 
@@ -273,4 +280,80 @@ async fn a_retired_reset_or_handed_off_binding_ends_the_continuations() {
         drop(tx);
         close(f).await;
     }
+}
+
+/// A result whose source turn was superseded (an owner message or a timer
+/// started a new turn) is not dropped: the lookup names the Deep run that
+/// holds the conversation now, and a handback fenced to that run is admitted
+/// and runs as its next continuation. The source fence itself stays strict.
+#[tokio::test]
+async fn a_superseded_source_names_its_current_successor_which_takes_the_result() {
+    for timer in [false, true] {
+        let (f, source, _, query) = fixture().await;
+        accept(&f, &source, "accept-source").await;
+        let current = lookup(&f, &source.run.run_id).await;
+        assert!(current.eligible_for_continuation);
+        assert_eq!(current.successor, None);
+        let next = unfenced(&f, "synthetic-next-input", timer).await;
+        let (turn, _, _) = start(&f, "next-turn").await;
+        let proof = lookup(&f, &source.run.run_id).await;
+        assert!(!proof.eligible_for_continuation);
+        let expected = SourceSuccessor {
+            run_id: turn.provider.run.run_id.clone(),
+            message_id: next.message_id.clone(),
+        };
+        assert_eq!(proof.successor, Some(expected.clone()));
+        let own = lookup(&f, &expected.run_id).await;
+        assert!(own.eligible_for_continuation);
+        assert_eq!(own.successor, None);
+        refused(&f, &query, &result(1)).await;
+        let to_successor = SourceReceiptQuery {
+            continuation_source_run_id: expected.run_id.clone(),
+            ..query.clone()
+        };
+        let delivered = hand_back(&f, &to_successor, &result(2)).await;
+        accept(&f, &turn.provider, "accept-next-turn").await;
+        assert_eq!(
+            lookup(&f, &source.run.run_id).await.successor,
+            Some(expected.clone())
+        );
+        let (binding, claim) = claim(&f).await.unwrap();
+        assert_eq!(claim.message_id, delivered.message_id);
+        assert!(!f
+            .handle
+            .retire_superseded_source_claim(&claim)
+            .await
+            .unwrap());
+        let (continuation, _, _) =
+            start_claimed(&f, &binding, &claim, "successor-continuation").await;
+        assert_eq!(
+            inbox(&f, &delivered).await,
+            (
+                "consumed".into(),
+                Some(continuation.provider.run.run_id.to_string()),
+                None
+            )
+        );
+        close(f).await;
+    }
+}
+
+/// A later run that is not current itself (its binding retired, reset or
+/// handed off) is never named: the result stays undeliverable, as before.
+#[tokio::test]
+async fn a_successor_that_is_not_current_is_not_named() {
+    let (f, source, _, _) = fixture().await;
+    accept(&f, &source, "accept-source").await;
+    unfenced(&f, "synthetic-next-input", false).await;
+    let (turn, _, _) = start(&f, "next-turn").await;
+    assert!(lookup(&f, &source.run.run_id).await.successor.is_some());
+    sqlx::query("UPDATE session_bindings SET state='retired' WHERE id=?")
+        .bind(turn.provider.run.session_id.to_string())
+        .execute(&f.store.pool)
+        .await
+        .unwrap();
+    let proof = lookup(&f, &source.run.run_id).await;
+    assert!(!proof.eligible_for_continuation);
+    assert_eq!(proof.successor, None);
+    close(f).await;
 }

@@ -23,6 +23,11 @@ impl Store {
             .bind(query.source_message_id.to_string()).fetch_optional(&mut *tx).await.map_err(db)?.ok_or(StoreError::NotFound)?;
         let eligible =
             source_binding_is_current(&mut tx, owner, conversation, &query.source_run_id).await?;
+        let successor = if eligible {
+            None
+        } else {
+            current_successor(&mut tx, owner, conversation, &query.source_run_id).await?
+        };
         let proof = SourceContextProof {
             schema_version: 1,
             owner_id: owner.clone(),
@@ -34,10 +39,42 @@ impl Store {
             provider_generation: row.get("provider_generation"),
             binding_generation: row.get("binding_generation"),
             eligible_for_continuation: eligible,
+            successor,
         };
         tx.commit().await.map_err(db)?;
         Ok(proof)
     }
+}
+
+/// The latest Deep run of the conversation started after `source`, when that
+/// run is itself eligible for continuation under the rule below (its binding,
+/// native session, provider and provider generation are still current). A
+/// result of the superseded source is handed to this run as an input; Core's
+/// fence then applies to it exactly as to any other continuation. A later run
+/// that is not current (failed, released, retired or handed off) names none.
+async fn current_successor(
+    tx: &mut sqlx::SqliteConnection,
+    owner: &OwnerId,
+    conversation: &ConversationId,
+    source: &RunId,
+) -> Result<Option<orkestr_v2_contracts::SourceSuccessor>> {
+    let latest: Option<(String, String)> = sqlx::query_as("SELECT l.id,l.message_id FROM production_runs l JOIN production_runs r ON r.owner_id=l.owner_id AND r.conversation_id=l.conversation_id WHERE r.id=? AND r.owner_id=? AND r.conversation_id=? AND l.role='deep' AND l.id!=r.id AND l.scope_sequence>r.scope_sequence ORDER BY l.scope_sequence DESC LIMIT 1")
+        .bind(source.to_string()).bind(owner.to_string()).bind(conversation.to_string())
+        .fetch_optional(&mut *tx).await.map_err(db)?;
+    let Some((run, message)) = latest else {
+        return Ok(None);
+    };
+    let run = RunId(uuid::Uuid::parse_str(&run).map_err(|_| StoreError::Invalid)?);
+    let message = orkestr_v2_contracts::MessageId(
+        uuid::Uuid::parse_str(&message).map_err(|_| StoreError::Invalid)?,
+    );
+    if !source_binding_is_current(tx, owner, conversation, &run).await? {
+        return Ok(None);
+    }
+    Ok(Some(orkestr_v2_contracts::SourceSuccessor {
+        run_id: run,
+        message_id: message,
+    }))
 }
 
 /// Acceptance releases the exact occupied binding and advances its generation
