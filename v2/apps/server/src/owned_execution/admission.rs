@@ -96,6 +96,18 @@ impl ConfiguredExecution {
                     // authorizes a provider turn. Wait under the same window and
                     // supervisor checks instead of stranding an idle window.
                     Ok(None) | Err(RuntimeStoreError::Busy) => {}
+                    // Core fences a claim once the window's work deadline has
+                    // passed on its clock. The local deadline maps the same
+                    // instant and can trail it by a moment: at that edge this
+                    // is the window's ordinary end, not a refusal.
+                    Err(RuntimeStoreError::Fenced)
+                        if self.window.as_ref().is_some_and(|window| {
+                            work_deadline_reached(window.work_deadline(), Instant::now())
+                        }) =>
+                    {
+                        eprintln!("owned execution inbox closed at the window work deadline");
+                        return Ok(None);
+                    }
                     Err(error) => {
                         eprintln!("owned execution inbox claim refused: {error:?}");
                         return Err("execution inbox claim refused");
@@ -190,6 +202,36 @@ impl ConfiguredExecution {
 
 pub(super) fn heartbeat_due(previous: Instant, now: Instant) -> bool {
     now.saturating_duration_since(previous) >= Duration::from_secs(10)
+}
+
+/// How far the local work deadline may trail Core's view of the same instant.
+const WORK_DEADLINE_SKEW: Duration = Duration::from_secs(2);
+
+/// Whether the window's work deadline has been reached, allowing for the
+/// local clock trailing Core's by up to `WORK_DEADLINE_SKEW`.
+fn work_deadline_reached(deadline: Instant, now: Instant) -> bool {
+    now.checked_add(WORK_DEADLINE_SKEW)
+        .is_none_or(|edge| edge >= deadline)
+}
+
+#[cfg(test)]
+mod work_deadline_tests {
+    use super::*;
+
+    #[test]
+    fn a_claim_fenced_at_the_work_deadline_edge_ends_the_window() {
+        let now = Instant::now();
+        // Core already saw the deadline; locally it is a moment ahead.
+        assert!(work_deadline_reached(now + Duration::from_millis(500), now));
+        assert!(work_deadline_reached(now + WORK_DEADLINE_SKEW, now));
+        assert!(work_deadline_reached(now, now));
+        // Well before the deadline a fenced claim stays a refusal.
+        assert!(!work_deadline_reached(
+            now + WORK_DEADLINE_SKEW + Duration::from_millis(1),
+            now
+        ));
+        assert!(!work_deadline_reached(now + Duration::from_secs(300), now));
+    }
 }
 
 #[cfg(all(test, unix))]

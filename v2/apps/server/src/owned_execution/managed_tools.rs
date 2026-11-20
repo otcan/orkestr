@@ -6,6 +6,8 @@ use orkestr_v2_store_sqlite::{
     ManagedOperationParent, ManagedOperationSetup,
 };
 use std::time::Instant;
+#[path = "managed_close.rs"]
+mod close;
 #[path = "managed_pace.rs"]
 mod pace;
 #[path = "managed_workers.rs"]
@@ -297,15 +299,22 @@ impl ManagedTools {
     }
     pub(super) async fn cancel(&mut self) -> Result<(), &'static str> {
         if !self.run_closed {
-            self.context
-                .manager
-                .close_managed_run(
-                    &self.context.window,
-                    &self.parent,
-                    Instant::now() + Duration::from_secs(1),
-                )
-                .await
-                .map_err(|_| "managed run closure uncertain")?;
+            let (manager, window, parent) =
+                (&self.context.manager, &self.context.window, &self.parent);
+            close::retry_idempotent(
+                &close::CLOSE_ATTEMPTS,
+                |error: &ManagerError| {
+                    matches!(error, ManagerError::Deadline | ManagerError::Unavailable)
+                },
+                move |deadline| {
+                    manager.close_managed_run(window, parent, Instant::now() + deadline)
+                },
+            )
+            .await
+            .map_err(|error| {
+                eprintln!("owned execution managed run closure refused: {error:?}");
+                "managed run closure uncertain"
+            })?;
             self.run_closed = true;
         }
         let Some(operation) = self.operation.as_ref() else {
