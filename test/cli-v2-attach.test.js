@@ -71,7 +71,13 @@ async function fixture({ binding = {} } = {}) {
   }));
   return {
     dir,
-    env: { ORKESTR_V2_ADAPTER_CONFIG: path.join(dir, "service.json"), ORKESTR_V2_OWNER_CREDENTIALS: path.join(dir, "owner.json"), ORKESTR_DISABLE_CLI_AUTH: "1" },
+    env: {
+      ORKESTR_V2_ADAPTER_CONFIG: path.join(dir, "service.json"),
+      ORKESTR_V2_OWNER_CREDENTIALS: path.join(dir, "owner.json"),
+      ORKESTR_V2_NATIVE_ATTACH_CONFIG: path.join(dir, "native.json"),
+      ORKESTR_ATTACH_CLAUDE_CONFIG_DIRS: path.join(dir, "no-claude"),
+      ORKESTR_DISABLE_CLI_AUTH: "1",
+    },
   };
 }
 
@@ -87,28 +93,53 @@ function baseV2Routes(extra = {}) {
   };
 }
 
-test("attach --print on a V2-served chat names its V2 agent and never asks V1 to attach", async () => {
-  const { env } = await fixture();
+test("attach --print on a V2-served chat names its V2 agent and native session and never asks V1 to attach", async () => {
+  const { env, dir } = await fixture();
+  await fs.writeFile(path.join(dir, "native.json"), JSON.stringify({ core_db: "/fixture/core.sqlite3", plan: path.join(dir, "plan-{source12}.json") }));
+  await fs.writeFile(path.join(dir, "plan-0123456789ab.json"), JSON.stringify({
+    executor_uid: 0,
+    claude: { executable: "/fixture/claude", account: "/fixture/account", home: "/fixture/home", temporary: "/fixture/tmp", workspace: "/fixture/workspace" },
+  }));
   const seen = [];
   const calls = [];
   const stdout = capture();
   const code = await runCli(["attach", "Crawler Engine", "--print"], {
     env, stdout, stderr: capture(),
     fetchImpl: v1Fetch({ "GET /api/threads/Crawler%20Engine": { thread: delegatedThread() } }, seen),
-    v2RequestImpl: v2Server(baseV2Routes(), calls),
+    v2RequestImpl: v2Server(baseV2Routes({ "GET /api/v2/health": { json: { build: { source_commit: "0123456789abcdef" } } } }), calls),
+    readNativeSessionImpl: (db, conversation) => {
+      assert.equal(db, "/fixture/core.sqlite3");
+      assert.equal(conversation, conversationId);
+      return { sessionId: "aaaaaaaa-0000-4000-8000-000000000010", provider: "claude", nativeSessionId: "bbbbbbbb-0000-4000-8000-000000000020", generation: 17, state: "busy",
+        latestRun: { id: "cccccccc-0000-4000-8000-000000000030", state: "running", generation: 17 }, activeRuns: [{ id: "cccccccc-0000-4000-8000-000000000030", state: "running", role: "deep" }] };
+    },
+    processesNamingImpl: () => [{ pid: 4242, command: "claude" }],
   });
   assert.equal(code, 0);
-  assert.equal(stdout.text(),
-    `v2-chat conversation=${conversationId} thread=${threadId} provider=claude model=opus effort=high name="Crawler Engine" web=${origin}/#conversation/${conversationId}\n`);
+  const [chat, native] = stdout.text().trimEnd().split("\n");
+  assert.equal(chat, `v2-chat conversation=${conversationId} thread=${threadId} provider=claude model=opus effort=high name="Crawler Engine" web=${origin}/#conversation/${conversationId}`);
+  assert.equal(native, 'v2-native provider=claude session=bbbbbbbb-0000-4000-8000-000000000020 binding=aaaaaaaa-0000-4000-8000-000000000010/g17 state=busy latest_run=cccccccc-0000-4000-8000-000000000030(running) in_use="v2-run cccccccc-0000-4000-8000-000000000030 (running); pid 4242 (claude)" user=root cwd=/fixture/workspace command="/fixture/claude --resume bbbbbbbb-0000-4000-8000-000000000020"');
   assert.deepEqual(seen, ["GET /api/threads/Crawler%20Engine"]);
   assert.deepEqual(calls.map((call) => call.key), [
-    "POST /api/v2/browser/session", `GET ${conv}/settings`, `GET ${conv}/execution`, "DELETE /api/v2/browser/session",
+    "POST /api/v2/browser/session", `GET ${conv}/settings`, `GET ${conv}/execution`, "GET /api/v2/health", "DELETE /api/v2/browser/session",
   ]);
   assert.equal(calls[0].headers.origin, origin);
   assert.equal(calls[0].headers.host, "orkestr.example.test");
   assert.equal(calls[1].headers.cookie, "orkestr_v2=session-1");
   assert.equal(calls[1].headers["x-orkestr-csrf"], undefined);
-  assert.equal(calls[3].headers["x-orkestr-csrf"], "csrf-1");
+  assert.equal(calls[4].headers["x-orkestr-csrf"], "csrf-1");
+});
+
+test("attach without --chat on a V2 chat refuses to open the native session until V2 can hold it", async () => {
+  const { env } = await fixture();
+  const stderr = capture();
+  const code = await runCli(["attach", threadId], {
+    env, stdout: capture(), stderr, stdin: { isTTY: true },
+    fetchImpl: v1Fetch({ [`GET /api/threads/${threadId}`]: { thread: delegatedThread() } }),
+    v2RequestImpl: () => { throw new Error("V2 must not be called"); },
+  });
+  assert.equal(code, 1);
+  assert.match(stderr.text(), /^v2_native_attach_unavailable: .*orkestr attach [0-9a-f-]+ --chat/);
 });
 
 test("attach --json on a V2-served chat reports the target", async () => {
@@ -129,10 +160,11 @@ test("attach --json on a V2-served chat reports the target", async () => {
 });
 
 test("attach on a V1-only thread keeps the V1 terminal attach", async () => {
+  const { env } = await fixture();
   const seen = [];
   const stdout = capture();
   const code = await runCli(["attach", "Demo", "--print"], {
-    stdout, stderr: capture(),
+    env, stdout, stderr: capture(),
     fetchImpl: v1Fetch({
       "GET /api/threads/Demo": { thread: { id: "t-1", name: "Demo", binding: { connector: "whatsapp", chatId: "group" } } },
       "POST /api/threads/Demo/attach": { ok: true, runtime: { sessionName: "orkestr-demo" } },
@@ -173,10 +205,10 @@ test("attach never falls back to the V1 terminal when the thread read fails", as
   assert.deepEqual(seen, ["GET /api/threads/Demo"]);
 });
 
-test("attach to a V2 chat without a terminal sends nothing", async () => {
+test("attach --chat to a V2 chat without a terminal sends nothing", async () => {
   const { env } = await fixture();
   const stderr = capture();
-  const code = await runCli(["attach", threadId], {
+  const code = await runCli(["attach", threadId, "--chat"], {
     env, stdout: capture(), stderr, stdin: { isTTY: false },
     fetchImpl: v1Fetch({ [`GET /api/threads/${threadId}`]: { thread: delegatedThread() } }),
     v2RequestImpl: () => { throw new Error("V2 must not be called"); },
@@ -213,7 +245,7 @@ test("attach sends a typed line as an owner message and streams the answer back"
     },
   });
   stdin.write("hello agent\n");
-  const code = await runCli(["attach", threadId], {
+  const code = await runCli(["attach", threadId, "--chat"], {
     env, stdin, stdout, stderr: capture(),
     sleepImpl: () => new Promise((resolve) => setImmediate(resolve)),
     fetchImpl: v1Fetch({ [`GET /api/threads/${threadId}`]: { thread: delegatedThread() } }),

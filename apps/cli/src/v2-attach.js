@@ -14,6 +14,7 @@ import path from "node:path";
 import readline from "node:readline";
 import { remoteWhatsAppRuntimeBinding } from "../../../packages/core/src/thread-remote-runtime-binding.js";
 import { createV2OwnerSession, readOwnerLogin, readPrivateJson, v2AttachConfig, v2AttachError } from "./v2-owner-session.js";
+import { describeNativeTarget, formatNativeLine } from "./v2-native-target.js";
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const newestSequence = Number.MAX_SAFE_INTEGER;
@@ -249,7 +250,7 @@ export async function runV2Chat(target, session, agent, ctx, { readOnly = false,
     `Agent: ${label}${agent.reasoningEffort ? ` (effort ${agent.reasoningEffort})` : ""}, currently ${agent.phase}.`,
     readOnly
       ? "Read-only: watching run updates; nothing you type is sent. Ctrl-C leaves."
-      : "Each line you send is an owner message to this chat, run by its V2 agent (the WhatsApp group sees it too). /status shows the work phase; /exit or Ctrl-D leaves.",
+      : "Owner chat through V2 (not the native session): each line is an owner message, run by the chat's V2 agent; the WhatsApp group sees it too. /status shows the work phase; /exit or Ctrl-D leaves.",
     `Web: ${summary.web}`,
     "",
   ].join("\n"));
@@ -347,21 +348,36 @@ export async function runV2Chat(target, session, agent, ctx, { readOnly = false,
   return 0;
 }
 
-// Entry point from `orkestr attach`: describe (--print/--json) or open the chat.
-export async function runV2Attach(target, ctx, { printOnly = false, json = false, readOnly = false, intervalMs = 0, timeoutMs = 0, history = 1 } = {}) {
-  if (!printOnly && !json && !readOnly && !ctx.stdin?.isTTY) {
+function attachHint(target) {
+  return target.threadId || target.conversationId;
+}
+
+// Entry point from `orkestr attach`: describe (--print/--json), watch
+// (--read-only) or chat as the owner (--chat). Opening the native provider
+// session itself is refused until V2 can hold it (see v2-native-target.js).
+export async function runV2Attach(target, ctx, { printOnly = false, json = false, readOnly = false, chat = false, intervalMs = 0, timeoutMs = 0, history = 1 } = {}) {
+  if (!printOnly && !json && !readOnly && !chat) {
+    const native = describeNativeTarget(target, ctx);
+    const what = native.available ? `the ${native.provider} session ${native.nativeSessionId}` : "the native session";
+    throw v2AttachError("v2_native_attach_unavailable",
+      `opening ${what} needs the V2 native-attach hold, which is not deployed yet; for now: orkestr attach ${attachHint(target)} --chat (owner messages through V2) or --read-only`);
+  }
+  if (chat && !printOnly && !json && !ctx.stdin?.isTTY) {
     throw v2AttachError("v2_attach_tty_required", "sending as the owner needs an interactive terminal; use --read-only to watch or --print to inspect");
   }
   const login = readOwnerLogin(target.config, ctx.readFileImpl || fs.readFileSync);
   const session = createV2OwnerSession(target.config, login, { request: ctx.v2RequestImpl });
   try {
     const agent = await describeV2Agent(session, target);
-    if (json) {
-      ctx.stdout.write(`${JSON.stringify({ ok: true, ...v2TargetSummary(target, agent) }, null, 2)}\n`);
-      return 0;
-    }
-    if (printOnly) {
-      ctx.stdout.write(formatV2TargetLine(v2TargetSummary(target, agent)));
+    if (json || printOnly) {
+      const health = await session.call("GET", "/api/v2/health").catch(() => null);
+      const native = describeNativeTarget(target, ctx, health?.json?.build?.source_commit || "");
+      if (json) {
+        ctx.stdout.write(`${JSON.stringify({ ok: true, ...v2TargetSummary(target, agent), native }, null, 2)}\n`);
+      } else {
+        ctx.stdout.write(formatV2TargetLine(v2TargetSummary(target, agent)));
+        ctx.stdout.write(formatNativeLine(native));
+      }
       return 0;
     }
     return await runV2Chat(target, session, agent, ctx, { readOnly, intervalMs, timeoutMs, history });
