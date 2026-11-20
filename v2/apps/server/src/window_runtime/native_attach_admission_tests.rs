@@ -88,7 +88,11 @@ fn sql(f: &Fixture, statement: &str, args: serde_json::Value) -> serde_json::Val
         .env("PYTHONDONTWRITEBYTECODE", "1")
         .output()
         .unwrap();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     serde_json::from_slice(&out.stdout).unwrap()
 }
 
@@ -230,10 +234,7 @@ async fn a_deploy_drain_counts_a_held_conversation_with_only_queued_intents_as_q
     drain.set(true);
     controller.drain_step().await;
     let status = drain.status();
-    assert_eq!(
-        (status.unresolved_windows, status.queued_intents),
-        (0, 1)
-    );
+    assert_eq!((status.unresolved_windows, status.queued_intents), (0, 1));
     assert!(status.drained, "a held conversation never delays a deploy");
     // The drain cut, withdrew or dispatched nothing because of the hold.
     assert_eq!(

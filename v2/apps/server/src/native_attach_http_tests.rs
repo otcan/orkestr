@@ -4,7 +4,9 @@
 use super::*;
 use crate::held_inputs::tests::fixture::{headers, state, Temporary, AUTHORITY, COOKIE};
 use crate::native_attach::fixture::Holds;
-use orkestr_v2_contracts::{ClaudeNativeResetRequest, ConversationProvider, ProviderHandoffRequest};
+use orkestr_v2_contracts::{
+    ClaudeNativeResetRequest, ConversationProvider, ProviderHandoffRequest,
+};
 use orkestr_v2_store_sqlite::Store;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};

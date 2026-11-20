@@ -38,7 +38,11 @@ impl ConfiguredExecution {
             return;
         }
         let run = capability.provider().run.run_id.clone();
-        match self.store.first_deep_run_since(&run, ended.ended_at_ms).await {
+        match self
+            .store
+            .first_deep_run_since(&run, ended.ended_at_ms)
+            .await
+        {
             Ok(true) => {
                 if capability.prepend_internal_note(&crate::native_attach::note(&ended)) {
                     // Identifiers only, never input text.

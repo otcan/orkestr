@@ -131,11 +131,7 @@ pub(crate) fn read_root_record(
 }
 
 #[cfg(not(target_os = "linux"))]
-pub(crate) fn read_root_record(
-    _: &Path,
-    _: u32,
-    _: &str,
-) -> Result<Option<Vec<u8>>, &'static str> {
+pub(crate) fn read_root_record(_: &Path, _: u32, _: &str) -> Result<Option<Vec<u8>>, &'static str> {
     Err(REFUSED)
 }
 

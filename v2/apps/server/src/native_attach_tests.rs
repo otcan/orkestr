@@ -13,7 +13,11 @@ fn a_valid_renewed_record_holds_its_conversation_only() {
     let case = Holds::new();
     let conversation = ConversationId(Uuid::new_v4());
     assert!(!case.holds.held(&conversation, NOW), "no record, no hold");
-    case.write(&name(&conversation), &Holds::record(&conversation, NOW), 0o440);
+    case.write(
+        &name(&conversation),
+        &Holds::record(&conversation, NOW),
+        0o440,
+    );
     let hold = case.holds.active(&conversation, NOW).unwrap();
     assert_eq!(hold.session_id, Uuid::from_u128(0x5e55_1011));
     assert_eq!(hold.native_session_id, Uuid::from_u128(0xa71e));
@@ -28,7 +32,11 @@ fn a_valid_renewed_record_holds_its_conversation_only() {
 fn an_expired_or_unrenewed_record_no_longer_holds() {
     let case = Holds::new();
     let conversation = ConversationId(Uuid::new_v4());
-    case.write(&name(&conversation), &Holds::record(&conversation, NOW), 0o440);
+    case.write(
+        &name(&conversation),
+        &Holds::record(&conversation, NOW),
+        0o440,
+    );
     assert!(case.holds.held(&conversation, NOW + 119_999));
     assert!(!case.holds.held(&conversation, NOW + 120_000), "expired");
     // A long stated expiry still lapses five minutes after the last renewal.
@@ -139,7 +147,10 @@ fn records_outside_root_custody_hold_nothing() {
     case.write(&name(&conversation), &record, 0o440);
     assert!(case.holds.held(&conversation, NOW));
     std::fs::set_permissions(&case.dir, std::fs::Permissions::from_mode(0o770)).unwrap();
-    assert!(!case.holds.held(&conversation, NOW), "group-writable directory");
+    assert!(
+        !case.holds.held(&conversation, NOW),
+        "group-writable directory"
+    );
     std::fs::set_permissions(&case.dir, std::fs::Permissions::from_mode(0o750)).unwrap();
 }
 

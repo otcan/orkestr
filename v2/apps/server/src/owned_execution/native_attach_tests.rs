@@ -233,7 +233,10 @@ async fn only_the_first_deep_run_after_an_ended_attach_carries_the_note() {
         .await
         .unwrap()
         .unwrap();
-    assert!(!second.text().starts_with("[Orkestr:"), "only the first run");
+    assert!(
+        !second.text().starts_with("[Orkestr:"),
+        "only the first run"
+    );
     assert!(second.text().contains("Synthetic owner input second-after"));
     accept(&execution, &store, second.provider()).await;
     // An ended attach of another native session notes nothing.
