@@ -2080,7 +2080,7 @@ async function attach(argv, ctx) {
   const intervalMs = parseDurationMs(flagValue(argv, "--interval"), { numericUnit: "seconds" });
   const timeoutMs = parseDurationMs(flagValue(argv, "--timeout"), { numericUnit: "seconds" });
   const conversationId = flagValue(argv, "--conversation");
-  const v2Options = { printOnly, json, readOnly, chat: argv.includes("--owner-chat"), intervalMs, timeoutMs, history: attachHistory(argv) };
+  const v2Options = { printOnly, json, readOnly, chat: argv.includes("--owner-chat"), takeover, interrupt, intervalMs, timeoutMs, history: attachHistory(argv) };
   if (conversationId) return runV2Attach(resolveV2Target({ conversationId, env: ctx.env, readFile: ctx.readFileImpl }), ctx, v2Options);
   const targetArg = positional(argv)[0];
   const chosen = targetArg ? null : await chooseThread(ctx);
@@ -2371,7 +2371,8 @@ Common thread commands:
   orkestr attach [thread-name-or-id] [--print] [--read-only] [--takeover] [--interrupt] [--yes] [--interval seconds] [--timeout duration] [--json]
     thread: its list number (see orkestr list --numbered), id, name or a unique prefix
     a thread bound to a running Claude Code background session opens it (claude attach); --takeover detaches another terminal
-    a chat V2 serves: --print/--json show its V2 agent and native session; --chat talks to it as the owner; --read-only watches
+    a chat V2 serves opens its native session (claude/codex) while V2 holds the chat; --interrupt stops a running V2 turn first; --takeover closes another terminal
+    --print/--json show its V2 agent and native session; --chat talks to it as the owner through V2; --read-only watches
   orkestr attach --conversation <v2-conversation-id> [--print] [--read-only] [--chat] [--history n] [--json]
   orkestr send <thread-name-or-id> "<message>" [--reply-whatsapp|--no-reply-whatsapp] [--idempotency-key <key>] [--json]
   orkestr switch <thread-name-or-id> [codex|claude] [--model m] [--effort e] [--now] [--reason text] [--json]

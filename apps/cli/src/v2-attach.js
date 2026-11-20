@@ -15,6 +15,7 @@ import readline from "node:readline";
 import { remoteWhatsAppRuntimeBinding } from "../../../packages/core/src/thread-remote-runtime-binding.js";
 import { createV2OwnerSession, readOwnerLogin, readPrivateJson, v2AttachConfig, v2AttachError } from "./v2-owner-session.js";
 import { describeNativeTarget, formatNativeLine } from "./v2-native-target.js";
+import { NATIVE_FEATURE, runNativeAttach } from "./v2-native-attach.js";
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const newestSequence = Number.MAX_SAFE_INTEGER;
@@ -352,26 +353,34 @@ function attachHint(target) {
   return target.threadId || target.conversationId;
 }
 
-// Entry point from `orkestr attach`: describe (--print/--json), watch
-// (--read-only) or chat as the owner (--chat). Opening the native provider
-// session itself is refused until V2 can hold it (see v2-native-target.js).
-export async function runV2Attach(target, ctx, { printOnly = false, json = false, readOnly = false, chat = false, intervalMs = 0, timeoutMs = 0, history = 1 } = {}) {
-  if (!printOnly && !json && !readOnly && !chat) {
-    const native = describeNativeTarget(target, ctx);
-    const what = native.available ? `the ${native.provider} session ${native.nativeSessionId}` : "the native session";
-    throw v2AttachError("v2_native_attach_unavailable",
-      `opening ${what} needs the V2 native-attach hold, which is not deployed yet; for now: orkestr attach ${attachHint(target)} --chat (owner messages through V2) or --read-only`);
-  }
-  if (chat && !printOnly && !json && !ctx.stdin?.isTTY) {
-    throw v2AttachError("v2_attach_tty_required", "sending as the owner needs an interactive terminal; use --read-only to watch or --print to inspect");
+// Entry point from `orkestr attach`: open the native session (default),
+// describe it (--print/--json), watch (--read-only) or chat as the owner
+// through V2 (--chat).
+export async function runV2Attach(target, ctx, { printOnly = false, json = false, readOnly = false, chat = false, takeover = false, interrupt = false, intervalMs = 0, timeoutMs = 0, history = 1 } = {}) {
+  const nativeMode = !printOnly && !json && !readOnly && !chat;
+  if ((chat || nativeMode) && !ctx.stdin?.isTTY) {
+    throw v2AttachError("v2_attach_tty_required", nativeMode
+      ? "opening the native session needs an interactive terminal; use --print to inspect"
+      : "sending as the owner needs an interactive terminal; use --read-only to watch or --print to inspect");
   }
   const login = readOwnerLogin(target.config, ctx.readFileImpl || fs.readFileSync);
   const session = createV2OwnerSession(target.config, login, { request: ctx.v2RequestImpl });
   try {
     const agent = await describeV2Agent(session, target);
+    const health = (json || printOnly || nativeMode) ? await session.call("GET", "/api/v2/health").catch(() => null) : null;
+    const sourceCommit = health?.json?.build?.source_commit || "";
+    const holdSupported = Array.isArray(health?.json?.features) && health.json.features.includes(NATIVE_FEATURE);
+    if (nativeMode) {
+      if (!holdSupported) {
+        const native = describeNativeTarget(target, ctx, sourceCommit);
+        const what = native.available ? `the ${native.provider} session ${native.nativeSessionId}` : "the native session";
+        throw v2AttachError("v2_native_attach_unavailable",
+          `opening ${what} needs the V2 native-attach hold, which this V2 server does not offer yet; for now: orkestr attach ${attachHint(target)} --chat (owner messages through V2) or --read-only`);
+      }
+      return await runNativeAttach(target, session, agent, ctx, { takeover, interrupt, timeoutMs, sourceCommit });
+    }
     if (json || printOnly) {
-      const health = await session.call("GET", "/api/v2/health").catch(() => null);
-      const native = describeNativeTarget(target, ctx, health?.json?.build?.source_commit || "");
+      const native = { ...describeNativeTarget(target, ctx, sourceCommit), holdSupported };
       if (json) {
         ctx.stdout.write(`${JSON.stringify({ ok: true, ...v2TargetSummary(target, agent), native }, null, 2)}\n`);
       } else {

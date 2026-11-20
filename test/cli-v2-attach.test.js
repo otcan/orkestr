@@ -118,7 +118,7 @@ test("attach --print on a V2-served chat names its V2 agent and native session a
   assert.equal(code, 0);
   const [chat, native] = stdout.text().trimEnd().split("\n");
   assert.equal(chat, `v2-chat conversation=${conversationId} thread=${threadId} provider=claude model=opus effort=high name="Crawler Engine" web=${origin}/#conversation/${conversationId}`);
-  assert.equal(native, 'v2-native provider=claude session=bbbbbbbb-0000-4000-8000-000000000020 binding=aaaaaaaa-0000-4000-8000-000000000010/g17 state=busy latest_run=cccccccc-0000-4000-8000-000000000030(running) in_use="v2-run cccccccc-0000-4000-8000-000000000030 (running); pid 4242 (claude)" user=root cwd=/fixture/workspace command="/fixture/claude --resume bbbbbbbb-0000-4000-8000-000000000020"');
+  assert.equal(native, 'v2-native provider=claude session=bbbbbbbb-0000-4000-8000-000000000020 binding=aaaaaaaa-0000-4000-8000-000000000010/g17 state=busy latest_run=cccccccc-0000-4000-8000-000000000030(running) in_use="v2-run cccccccc-0000-4000-8000-000000000030 (running); pid 4242 (claude)" user=root cwd=/fixture/workspace command="/fixture/claude --resume bbbbbbbb-0000-4000-8000-000000000020 --dangerously-skip-permissions" native_attach=needs-v2-hold');
   assert.deepEqual(seen, ["GET /api/threads/Crawler%20Engine"]);
   assert.deepEqual(calls.map((call) => call.key), [
     "POST /api/v2/browser/session", `GET ${conv}/settings`, `GET ${conv}/execution`, "GET /api/v2/health", "DELETE /api/v2/browser/session",
@@ -130,16 +130,20 @@ test("attach --print on a V2-served chat names its V2 agent and native session a
   assert.equal(calls[4].headers["x-orkestr-csrf"], "csrf-1");
 });
 
-test("attach without --chat on a V2 chat refuses to open the native session until V2 can hold it", async () => {
+test("attach without --chat on a V2 chat refuses to open the native session while the V2 server cannot hold it", async () => {
   const { env } = await fixture();
   const stderr = capture();
+  const calls = [];
   const code = await runCli(["attach", threadId], {
     env, stdout: capture(), stderr, stdin: { isTTY: true },
     fetchImpl: v1Fetch({ [`GET /api/threads/${threadId}`]: { thread: delegatedThread() } }),
-    v2RequestImpl: () => { throw new Error("V2 must not be called"); },
+    v2RequestImpl: v2Server(baseV2Routes({ "GET /api/v2/health": { json: { features: ["message_author"] } } }), calls),
+    spawnImpl: () => { throw new Error("must not open anything"); },
   });
   assert.equal(code, 1);
-  assert.match(stderr.text(), /^v2_native_attach_unavailable: .*orkestr attach [0-9a-f-]+ --chat/);
+  assert.match(stderr.text(), /^v2_native_attach_unavailable: .*does not offer yet.*orkestr attach [0-9a-f-]+ --chat/);
+  assert.equal(calls.at(-1).key, "DELETE /api/v2/browser/session");
+  assert.ok(!calls.some((call) => call.key.includes("/messages") || call.key.endsWith("/window") && call.key.startsWith("POST")));
 });
 
 test("attach --json on a V2-served chat reports the target", async () => {

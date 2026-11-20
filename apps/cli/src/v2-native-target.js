@@ -7,13 +7,14 @@
 // binary, config dir). It also reports whether the session is in use now: a
 // running V2 run, or any local process naming the session id.
 //
-// Nothing here writes. Opening the session interactively needs a V2 hold so
-// V2 never resumes it at the same time; until Core offers one, `orkestr
-// attach` only describes the target (--print/--json).
+// Nothing here writes. Opening the session interactively (v2-native-attach.js)
+// needs the V2 server's native-attach hold, so V2 never resumes it at the
+// same time.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { readPrivateJson } from "./v2-owner-session.js";
+import { readHold } from "./v2-native-hold.js";
 
 export const defaultNativeAttachConfigPath = "/etc/orkestr/v2-native-attach.json";
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -23,14 +24,45 @@ function clean(value) {
   return String(value ?? "").trim();
 }
 
-// Host config: {"core_db": "<core.sqlite3>", "plan": "<selected plan path, {source12} = live V2 build>"}.
+// Host config: {"core_db": "<core.sqlite3>", "plan": "<selected plan path, {source12} = live V2 build>",
+// "hold_dir": "<dir the V2 server reads holds from>", "hold_group": "<group the server reads through>",
+// "namespace_unit": "<systemd unit whose mount namespace V2 runs providers in>", "audit_log": "<jsonl>"}.
 export function nativeAttachConfig(env = process.env, readFile = fs.readFileSync) {
   const file = clean(env.ORKESTR_V2_NATIVE_ATTACH_CONFIG) || defaultNativeAttachConfigPath;
   try {
     const value = readPrivateJson(file, "V2 native attach config", readFile);
-    return { file, coreDb: clean(value.core_db), plan: clean(value.plan) };
+    return {
+      file,
+      coreDb: clean(value.core_db),
+      plan: clean(value.plan),
+      holdDir: clean(value.hold_dir),
+      holdGroup: clean(value.hold_group),
+      namespaceUnit: clean(value.namespace_unit),
+      auditLog: clean(value.audit_log),
+    };
   } catch (error) {
     return { file, error: error.code || error.message };
+  }
+}
+
+export function groupId(name, readFile = fs.readFileSync) {
+  if (!name) return null;
+  try {
+    const line = readFile("/etc/group", "utf8").split("\n").find((entry) => entry.split(":")[0] === name);
+    const gid = line ? Number(line.split(":")[2]) : NaN;
+    return Number.isInteger(gid) ? gid : null;
+  } catch {
+    return null;
+  }
+}
+
+// The selected plan for the live V2 build, or null.
+export function readSelectedPlan(config, sourceCommit, readFile = fs.readFileSync) {
+  if (!config?.plan || !clean(sourceCommit)) return null;
+  try {
+    return readPrivateJson(config.plan.replace("{source12}", clean(sourceCommit).slice(0, 12)), "V2 selected plan", readFile);
+  } catch {
+    return null;
   }
 }
 
@@ -81,7 +113,7 @@ export function nativeLaunch(plan, conversationId, native, readFile = fs.readFil
       user,
       cwd: c.workspace,
       env: { HOME: c.home, TMPDIR: c.temporary, CLAUDE_CONFIG_DIR: c.account },
-      argv: [c.executable, "--resume", native.nativeSessionId],
+      argv: [c.executable, "--resume", native.nativeSessionId, "--dangerously-skip-permissions"],
     };
   }
   if (native.provider === "codex") {
@@ -91,7 +123,7 @@ export function nativeLaunch(plan, conversationId, native, readFile = fs.readFil
       user,
       cwd: workspace,
       env: { HOME: environment.HOME, CODEX_HOME: environment.CODEX_HOME },
-      argv: [plan.native, "resume", native.nativeSessionId],
+      argv: [plan.output ? `${String(plan.output).replace(/\/+$/, "")}/package/native` : plan.native, "--dangerously-bypass-approvals-and-sandbox", "resume", native.nativeSessionId],
     };
   }
   return null;
@@ -130,18 +162,24 @@ export function describeNativeTarget(target, ctx, sourceCommit = "") {
   }
   if (!native) return { available: false, reason: "V2 has no Deep session for this conversation yet" };
   let launch = null;
-  if (config.plan) {
-    const planPath = config.plan.replace("{source12}", clean(sourceCommit).slice(0, 12));
+  const plan = readSelectedPlan(config, sourceCommit, ctx.readFileImpl || fs.readFileSync);
+  if (plan) {
     try {
-      launch = nativeLaunch(readPrivateJson(planPath, "V2 selected plan", ctx.readFileImpl || fs.readFileSync), target.conversationId, native, ctx.readFileImpl || fs.readFileSync);
+      launch = nativeLaunch(plan, target.conversationId, native, ctx.readFileImpl || fs.readFileSync);
     } catch {}
   }
   const processes = (ctx.processesNamingImpl || processesNaming)(native.nativeSessionId, { fsImpl: ctx.fsImpl || fs });
+  let hold = null;
+  if (config.holdDir) {
+    const record = (ctx.readHoldImpl || readHold)(config.holdDir, target.conversationId, { fsImpl: ctx.fsImpl || fs });
+    if (record?.live) hold = { holderPid: record.holder_pid, acquiredAtMs: record.acquired_at_ms, expiresAtMs: record.expires_at_ms };
+  }
   const inUse = [
     ...native.activeRuns.map((run) => `v2-run ${run.id} (${run.state})`),
     ...processes.map((p) => `pid ${p.pid} (${p.command})`),
+    ...(hold ? [`terminal hold pid ${hold.holderPid}`] : []),
   ];
-  return { available: true, ...native, launch, inUse };
+  return { available: true, ...native, launch, inUse, hold };
 }
 
 export function formatNativeLine(native) {
@@ -155,6 +193,7 @@ export function formatNativeLine(native) {
     `in_use=${native.inUse.length ? JSON.stringify(native.inUse.join("; ")) : "none"}`,
     native.launch ? `user=${native.launch.user} cwd=${native.launch.cwd}` : "",
     native.launch ? `command=${JSON.stringify(native.launch.argv.join(" "))}` : "",
+    native.holdSupported === undefined ? "" : `native_attach=${native.holdSupported ? "available" : "needs-v2-hold"}`,
   ];
   return `${fields.filter(Boolean).join(" ")}\n`;
 }
