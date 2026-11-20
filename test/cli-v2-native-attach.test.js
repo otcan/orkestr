@@ -284,3 +284,37 @@ test("attach to a V2 chat needs root and a terminal", async () => {
   assert.equal(await runCli(["attach", threadId], noTty), 1);
   assert.match(noTty.stderr.text(), /v2_attach_tty_required: opening the native session/);
 });
+
+test("a briefly unwritable hold directory keeps the session until the hold would lapse", async () => {
+  const f = await fixture();
+  let clock = 1_000_000;
+  let failing = false;
+  const fsImpl = { ...fsSync, writeFileSync: (...args) => {
+    if (failing) throw Object.assign(new Error("EIO"), { code: "EIO" });
+    return fsSync.writeFileSync(...args);
+  } };
+  let killedAt = null;
+  const ctx = baseContext(f, {
+    renewMs: 5,
+    fsImpl,
+    nowImpl: () => clock,
+    v2RequestImpl: v2Server([]),
+    v2ActivityImpl: async () => ({ held: true, busy: false }),
+    spawnImpl: () => {
+      const c = child(() => {
+        killedAt = clock;
+      });
+      failing = true;
+      // Storage stays unwritable while the clock runs past the hold's TTL.
+      const tick = setInterval(() => {
+        clock += 10_000;
+      }, 2);
+      c.once("exit", () => clearInterval(tick));
+      return c;
+    },
+  });
+  assert.equal(await runCli(["attach", threadId], ctx), 0);
+  assert.ok(killedAt !== null, "closed before the hold lapsed");
+  assert.ok(killedAt - 1_000_000 > 60_000, `kept the session through transient failures (closed after ${killedAt - 1_000_000} ms)`);
+  assert.ok(killedAt - 1_000_000 <= TTL_MS + 20_000, "never past the hold's expiry");
+});
