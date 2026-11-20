@@ -428,6 +428,7 @@ impl ConfiguredExecution {
             fast_factory: None,
             deep_slots: None,
             parallel_factory: None,
+            native_attach: None,
         };
         self.companion = Some(companion);
         self.fast_factory = Some(Box::new(fast));
@@ -475,6 +476,7 @@ impl ConfiguredExecution {
             fast_factory: None,
             deep_slots: Some(slots.clone()),
             parallel_factory: None,
+            native_attach: None,
         };
         self.deep_slots = Some(slots);
         self.parallel_factory = Some(Box::new(parallel));

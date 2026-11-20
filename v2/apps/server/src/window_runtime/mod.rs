@@ -14,6 +14,7 @@ pub(crate) mod handles;
 pub(crate) mod initial;
 mod integers;
 pub(crate) mod manager_client;
+mod native_attach_gate;
 pub(crate) use controller::{
     Controller, HandoffError, ReconcileError, WindowOutcome, POLICY_HANDOFF_BLOCKED,
 };

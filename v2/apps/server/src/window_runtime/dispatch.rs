@@ -339,6 +339,11 @@ impl Controller {
                 continue;
             }
             let conversation = &row.conversation_id;
+            // Held by the owner's terminal: neither open nor join; the row
+            // keeps its place and `pending` stays set, so a later pass admits it.
+            if self.native_attach_held(conversation) {
+                continue;
+            }
             let status = self
                 .store
                 .execution_window_status_authenticated(browser, conversation)

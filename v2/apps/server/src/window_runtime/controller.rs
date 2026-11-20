@@ -258,6 +258,13 @@ impl Controller {
             self.queue.remember(browser);
             return self.enqueue(browser, conversation, input).await;
         }
+        if self.native_attach_held(conversation) {
+            // The owner works in this native session from a terminal: no
+            // open, join or provider switch. The dispatcher admits the
+            // durable intent in order once the hold is released or lapses.
+            self.queue.remember(browser);
+            return self.enqueue(browser, conversation, input).await;
+        }
         let Some(routed) = self
             .route_operator_policy(browser, owner, conversation, input)
             .await?

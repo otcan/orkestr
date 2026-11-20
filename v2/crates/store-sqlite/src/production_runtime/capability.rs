@@ -40,7 +40,24 @@ impl ConsumedProviderDispatch {
     pub fn launch(&self) -> Option<&orkestr_v2_contracts::TurnLaunch> {
         self.launch.as_ref()
     }
+    /// Put one line of internal context before this turn's provider input
+    /// only; the owner's stored message is unchanged. `false`, with the input
+    /// unchanged, for anything but one plain line, or when the turn would no
+    /// longer fit the providers' 32 KiB input bound.
+    pub fn prepend_internal_note(&mut self, note: &str) -> bool {
+        if note.is_empty()
+            || note.chars().any(char::is_control)
+            || note.len() + 2 + self.text.len() > PROVIDER_INPUT_MAX
+        {
+            return false;
+        }
+        self.text = format!("{note}\n\n{}", self.text);
+        true
+    }
 }
+
+/// Largest turn input both provider brokers accept (bytes).
+const PROVIDER_INPUT_MAX: usize = 32_768;
 pub enum ExecutionConsumption {
     Dispatch(Box<ConsumedProviderDispatch>),
     ReconciliationRequired,

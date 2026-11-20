@@ -171,7 +171,7 @@ def validate(raw):
     require(type(raw) is bytes and len(raw) <= MAX_BETA_CONFIG_BYTES, 'bounded beta config required')
     value = json.loads(raw.decode('utf-8'), object_pairs_hook=unique,
                        parse_constant=lambda _: (_ for _ in ()).throw(RuntimeError('invalid beta number')))
-    require(type(value) is dict and set(value) - {'roles', 'workspace_exec', 'additional_workspace_exec', 'max_active_windows', 'host_full_access', 'claude', 'window_max_minutes', 'conversation_window_max_minutes', 'conversation_workspaces', 'provider_routing', 'codex_default_model', 'identity_split', 'managed_host', 'deploy_maintenance_marker', 'release_interruption_dir'} == FIELDS, 'closed beta config fields required')
+    require(type(value) is dict and set(value) - {'roles', 'workspace_exec', 'additional_workspace_exec', 'max_active_windows', 'host_full_access', 'claude', 'window_max_minutes', 'conversation_window_max_minutes', 'conversation_workspaces', 'provider_routing', 'codex_default_model', 'identity_split', 'managed_host', 'deploy_maintenance_marker', 'release_interruption_dir', 'native_attach_dir'} == FIELDS, 'closed beta config fields required')
     require(type(value['schema_version']) is int and value['schema_version'] == 1, 'beta schema version')
     for name in ('owner_id', 'conversation_id'):
         text = value[name]
@@ -197,6 +197,11 @@ def validate(raw):
         require(absolute(directory) and not directory.endswith('/')
                 and all(part not in ('','.','..') for part in directory.split('/')[1:]),
                 'normalized release interruption directory required')
+    if 'native_attach_dir' in value:
+        directory=value['native_attach_dir']
+        require(absolute(directory) and not directory.endswith('/')
+                and all(part not in ('','.','..') for part in directory.split('/')[1:]),
+                'normalized native attach directory required')
     if 'identity_split' in value:
         identity=value['identity_split']
         require(type(identity) is dict and set(identity)=={'authority_uid','executor_uid','shared_gid'}

@@ -27,6 +27,7 @@ mod group;
 mod host_pressure;
 mod managed_observation;
 mod managed_tools;
+mod native_attach;
 pub use group::{ConfiguredExecutions, ExecutionTasks};
 mod claude_fast;
 mod liveness;
@@ -99,6 +100,10 @@ pub struct ConfiguredExecution {
     /// the slot pool.
     deep_slots: Option<std::sync::Arc<deep_slots::DeepSlots>>,
     parallel_factory: Option<Box<ConfiguredExecution>>,
+    /// Root-recorded native-attach holds (window Deep writer only): while the
+    /// owner works in the native session from a terminal, this factory claims
+    /// no input and starts no native process (`native_attach`).
+    native_attach: Option<std::sync::Arc<crate::native_attach::NativeAttachHolds>>,
 }
 pub struct ExecutionTask {
     shutdown: watch::Sender<bool>,
@@ -252,6 +257,7 @@ impl ConfiguredExecution {
             fast_factory: None,
             deep_slots: None,
             parallel_factory: None,
+            native_attach: None,
         })
     }
 

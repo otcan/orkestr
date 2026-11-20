@@ -250,6 +250,7 @@ pub(crate) async fn reset_native(
     if !request.is_valid() {
         return Err(invalid());
     }
+    native_attach_free(&state, &conversation)?;
     let controller = state.window_controller.clone().ok_or(Error(
         StatusCode::SERVICE_UNAVAILABLE,
         "window_unavailable",
@@ -310,6 +311,7 @@ pub(crate) async fn handoff_provider(
             "Restricted conversations cannot change native window providers",
         ));
     }
+    native_attach_free(&state, &conversation)?;
     let controller = state.window_controller.clone().ok_or(Error(
         StatusCode::SERVICE_UNAVAILABLE,
         "window_unavailable",
@@ -362,6 +364,25 @@ pub(crate) async fn handoff_receipt(
             "No handoff decision has that request key",
         ))?;
     Ok(Json(receipt).into_response())
+}
+
+/// Refuses while the owner works in this conversation's native session from
+/// a terminal (`orkestr attach`): neither a handoff nor a reset may replace
+/// or reset a native session that has another writer.
+fn native_attach_free(state: &AppState, conversation: &ConversationId) -> Result<(), Error> {
+    let now = crate::deploy_drain::now_ms();
+    if state
+        .native_attach
+        .as_ref()
+        .is_some_and(|holds| holds.held(conversation, now))
+    {
+        return Err(Error(
+            StatusCode::CONFLICT,
+            "native_attach_held",
+            "The owner works in this native session from a terminal; retry after release",
+        ));
+    }
+    Ok(())
 }
 
 fn conversation(id: &str) -> Result<ConversationId, Error> {

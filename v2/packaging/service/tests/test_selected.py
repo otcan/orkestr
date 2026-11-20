@@ -159,6 +159,23 @@ class Selected(unittest.TestCase):
             self.plan['release_interruption_dir']=directory
             with self.subTest(directory=directory),self.assertRaises(RuntimeError):selected.prepare(self.plan)
             self.assertFalse((self.root/'release').exists())
+    def test_native_attach_directory_is_emitted_only_as_beta_configuration(self):
+        # Core honours Root-recorded native-attach holds from this directory.
+        self.current_source()
+        directory=self.root/'native-attach';directory.mkdir(mode=0o750)
+        self.plan['native_attach_dir']=str(directory)
+        selected.prepare(self.plan)
+        package=self.root/'release/package'
+        self.assertEqual(json.loads((package/'beta.json').read_bytes())['native_attach_dir'],str(directory))
+        self.assertNotIn('native_attach_dir',json.loads((package/'service.json').read_bytes()))
+        self.assertEqual(list(directory.iterdir()),[],'packaging never writes holds')
+
+    def test_native_attach_alias_or_core_home_path_refuses_before_output(self):
+        for directory in ('relative',str(self.root/'home'/'holds'),'/srv/example/../holds','/srv/example//holds',
+                          '/srv/holds/',1):
+            self.plan['native_attach_dir']=directory
+            with self.subTest(directory=directory),self.assertRaises(RuntimeError):selected.prepare(self.plan)
+            self.assertFalse((self.root/'release').exists())
     def test_attachment_export_bad_shape_or_scope_refused_before_output(self):
         for value in (True, None, '/', 'relative', '/a//b', '/a/../b',
                       self.plan['home'], self.plan['workspace']+'/export',

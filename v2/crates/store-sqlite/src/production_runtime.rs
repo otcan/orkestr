@@ -69,6 +69,7 @@ mod parallel_deep_turns;
 pub use parallel_deep_turns::{PARALLEL_DEEP_DEFAULT_EFFORT, PARALLEL_DEFER};
 mod fence;
 mod held_inputs;
+mod native_attach_note;
 pub(crate) mod retired_inputs;
 mod stale_inputs;
 mod superseded_source;

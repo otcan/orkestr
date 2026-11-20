@@ -70,6 +70,8 @@ mod message_receipt_observer;
 mod message_receipt_test_support;
 mod message_revisions_http;
 mod message_times_http;
+mod native_attach;
+mod native_attach_http;
 pub mod observability;
 pub mod offline_python;
 pub mod owned_children;
@@ -163,6 +165,8 @@ pub struct AppState {
     deploy_drain: Arc<deploy_drain::DeployDrain>,
     /// Root-recorded release interruptions (ORK-792); unconfigured by default.
     release_interruptions: Option<Arc<release_interruption::ReleaseInterruptions>>,
+    /// Root-recorded native-attach holds (`orkestr attach`); unconfigured by default.
+    native_attach: Option<Arc<native_attach::NativeAttachHolds>>,
     password_rotation_ready: bool,
     provider_policy: Option<beta_config::provider_routing::ProviderRouting>,
     /// Stored-login reader (trusted startup file); unconfigured by default.
@@ -250,6 +254,16 @@ impl AppState {
             .as_deref()
             .map(|dir| release_interruption::ReleaseInterruptions::bind(dir, home).map(Arc::new))
             .transpose()?;
+        // Every window controller, dispatcher and Deep factory reads the same
+        // Root-recorded holds through the configuration it is built from.
+        self.native_attach = config
+            .native_attach_dir
+            .as_deref()
+            .map(|dir| native_attach::NativeAttachHolds::bind(dir, home).map(Arc::new))
+            .transpose()?;
+        let mut config = config.clone();
+        config.native_attach = self.native_attach.clone();
+        let config = &config;
         self.provider_policy = config.provider_routing.clone();
         let initial = window_runtime::initial::InitialAuthority::new(config)?;
         let handles = window_runtime::handles::Handles::new(
@@ -431,6 +445,7 @@ impl AppState {
             restricted: None,
             deploy_drain: Arc::default(),
             release_interruptions: None,
+            native_attach: None,
         })
     }
 }
@@ -674,7 +689,7 @@ pub fn router_with_google_catalog(
     catalog: google_registry_metadata::RegistryCatalog,
 ) -> Router {
     Router::new()
-        .route("/api/v2/health",get(|| async { Json(serde_json::json!({"status":"ok","product":"orkestr-v2","contract_version":0,"fixture_mode":false,"features":["message_author","message_revisions_v1","message_retries_v1","thread_asks","agent_timers","source_receipts_v1","root_intake_v1","fast_run_receipts_v1","provider_quotas_v1","provider_sign_in_v1","local_files_v1","local_file_writes_waiting_v1","vault_v1","held_input_lookup_v1","credentials_v1","sites_v1","history_before_v1","request_metrics_v1","workspace_files_v1","run_updates_v1"],"build":build_identity::identity(),"deployment":deployment_identity::identity()})) }))
+        .route("/api/v2/health",get(|State(state): State<AppState>| async move { Json(serde_json::json!({"status":"ok","product":"orkestr-v2","contract_version":0,"fixture_mode":false,"features":native_attach_http::features(&state,&["message_author","message_revisions_v1","message_retries_v1","thread_asks","agent_timers","source_receipts_v1","root_intake_v1","fast_run_receipts_v1","provider_quotas_v1","provider_sign_in_v1","local_files_v1","local_file_writes_waiting_v1","vault_v1","held_input_lookup_v1","credentials_v1","sites_v1","history_before_v1","request_metrics_v1","workspace_files_v1","run_updates_v1"]),"build":build_identity::identity(),"deployment":deployment_identity::identity()})) }))
         .route("/api/v2/setup",get(auth::setup_status).post(auth::setup))
         .route("/api/v2/session",post(auth::session))
         .route("/api/v2/machine/session",post(auth::session))
@@ -732,6 +747,7 @@ pub fn router_with_google_catalog(
         .merge(fast_role_settings_http::router())
         .merge(provider_sign_in_http::router())
         .merge(conversation_status_http::router())
+        .merge(native_attach_http::router())
         .merge(host_metrics::router())
         .merge(observability::owner_http::router())
         .merge(desktop_http::router())

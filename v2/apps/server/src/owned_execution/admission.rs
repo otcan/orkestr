@@ -20,6 +20,11 @@ impl ConfiguredExecution {
             if *shutdown.borrow() || self.window.as_ref().is_some_and(|window| window.work_due()) {
                 return Ok(false);
             }
+            // The owner works in this native session from a terminal: an
+            // idle window closes rather than wait to resume it.
+            if self.native_attach_held() {
+                return Ok(false);
+            }
             self.maintain(heartbeat).await?;
             let page = self
                 .store
@@ -77,7 +82,11 @@ impl ConfiguredExecution {
                 }
                 self.maintain(heartbeat).await?;
                 live()?;
-                if !self.provider_input_allowed(None).await? {
+                // The owner works in this native session from a terminal:
+                // claim nothing. The caller reaps this native tree and the
+                // window closes as after its last input; the next input
+                // queues until the hold is released and then resumes here.
+                if self.native_attach_held() || !self.provider_input_allowed(None).await? {
                     return Ok(None);
                 }
                 match self
@@ -166,7 +175,7 @@ impl ConfiguredExecution {
             self.current().await?;
             // Core authenticates inside consumption and every transport fence. This
             // preliminary current-session check is never the authority for a write.
-            let ExecutionConsumption::Dispatch(capability) = self
+            let ExecutionConsumption::Dispatch(mut capability) = self
                 .store
                 .consume_execution(&reservation)
                 .await
@@ -174,6 +183,7 @@ impl ConfiguredExecution {
             else {
                 return Err("execution delivery is uncertain; automatic replay refused");
             };
+            self.note_native_attach(&mut capability).await;
             return Ok(Some(capability));
         }
     }
