@@ -34,6 +34,7 @@ from .first_response import capture as capture_first_response, repeats_fast
 from .questions import QUESTION_PREFIX, QUESTION_LABEL, QUESTION_SCAN_LIMIT, export_question, repeats_question
 from .outbound_text import complete_progress, progress_hold_s
 from .activity import observe as observe_activity, waiting as waiting_heartbeat
+from . import native_attach
 from .input_activity import record as record_transport_activity
 from .intake import admit as admit_input, window as admit_window
 from .acceptance_retry import reconcile as reconcile_acceptance
@@ -233,6 +234,7 @@ class Worker:
         self.progress_updates = progress_updates
         # Core-template "still working" line for a long Deep turn (activity.py).
         self.deep_heartbeat = True
+        self.owner_label = None  # The binding's owner_label (registry), for notices.
         # Throttled "Update:" progress of a long Deep run (deep_updates.py).
         self.deep_updates = False
         self.fast_reply_policy = "legacy"
@@ -1492,7 +1494,7 @@ class Worker:
 
     def expire_stale(self):
         try:
-            self.ledger.expire_stale(self.max_input_age_s)
+            self.ledger.expire_stale(self.max_input_age_s, held=lambda: native_attach.held(self))
         except Exception:
             # Retried every pass; never blocks the binding.
             pass
@@ -1521,6 +1523,11 @@ class Worker:
         try:
             # A person's input queued behind a running turn keeps its heartbeat.
             waiting_heartbeat(self)
+        except Exception:
+            pass  # Retried next check; never blocks the binding.
+        try:
+            # The owner's terminal holds the session: one notice per hold.
+            native_attach.drive(self)
         except Exception:
             pass  # Retried next check; never blocks the binding.
         if single or not fast_pending:

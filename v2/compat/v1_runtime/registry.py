@@ -217,6 +217,7 @@ class Registry:
             polls.watch = getattr(self, "watch", None)
         binding.worker.progress_updates = binding.config["progress_updates"]
         binding.worker.deep_heartbeat = binding.config.get("deep_heartbeat", True) is not False
+        binding.worker.owner_label = binding.config.get("owner_label")
         binding.worker.deep_updates = deep_updates_enabled(binding.config)
         binding.worker.fast_reply_policy = binding.config["fast_reply_policy"]
         binding.ledger.owner_only = binding.config["fast_reply_policy"] == "owner_only"
