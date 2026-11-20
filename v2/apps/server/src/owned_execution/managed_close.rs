@@ -6,7 +6,7 @@
 //!
 //! A request that timed out may still be executed by the manager later, so
 //! repeating it would only add load to a queue that is already saturated.
-//! Each request therefore gets one attempt with the whole budget. Only
+//! Each request therefore gets one attempt within the shared budget. Only
 //! `Unavailable` (the socket refused or dropped the connection) is retried,
 //! after a short backoff, inside the same budget.
 use std::{
@@ -14,7 +14,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// One budget for the request, its retries included.
+/// One budget for a run's closure and its cancellation cleanup together,
+/// retries included (worst case 7 s, not 7 s each).
 pub(super) const CONTROL_BUDGET: Duration = Duration::from_secs(7);
 /// Waits before each retry of an `Unavailable` request.
 pub(super) const UNAVAILABLE_BACKOFF: [Duration; 3] = [

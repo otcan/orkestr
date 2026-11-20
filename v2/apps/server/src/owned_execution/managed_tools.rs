@@ -299,11 +299,14 @@ impl ManagedTools {
     }
     pub(super) async fn cancel(&mut self) -> Result<(), &'static str> {
         let unavailable = |error: &ManagerError| matches!(error, ManagerError::Unavailable);
+        // One budget for the closure and the cleanup together: a run's
+        // cancellation must leave the drain and the lease margin their time.
+        let until = Instant::now() + close::CONTROL_BUDGET;
         if !self.run_closed {
             let (manager, window, parent) =
                 (&self.context.manager, &self.context.window, &self.parent);
             close::bounded(
-                Instant::now() + close::CONTROL_BUDGET,
+                until,
                 &close::UNAVAILABLE_BACKOFF,
                 unavailable,
                 move |deadline| manager.close_managed_run(window, parent, deadline),
@@ -319,9 +322,6 @@ impl ManagedTools {
             return Ok(());
         };
         let (manager, window) = (&self.context.manager, &self.context.window);
-        // One budget for the whole cleanup: the cancel request and the polls
-        // that wait for the operation to read terminal.
-        let until = Instant::now() + close::CONTROL_BUDGET;
         let mut cancel = true;
         loop {
             let receipt = close::bounded(

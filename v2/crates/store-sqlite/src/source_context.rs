@@ -51,8 +51,9 @@ impl Store {
 /// the canonical writer (`deep_slot=0`, never a read-only parallel slot). It is
 /// named only when it is itself eligible for continuation under the rule below
 /// (binding, native session, provider and provider generation still current),
-/// and never for a source the owner stopped (a Stop he requested: its
-/// cancellation carries his request revision). A result of the superseded
+/// and never for a source the owner himself stopped (`stop_origin='owner'`,
+/// recorded with the cancellation; a release, operator or internal Stop keeps
+/// the successor). A result of the superseded
 /// source is handed to this run as an input; Core's fence then applies to it
 /// exactly as to any other continuation. A reset, replaced or handed-off
 /// session, or a later run that is not current, names none.
@@ -62,7 +63,7 @@ async fn current_successor(
     conversation: &ConversationId,
     source: &RunId,
 ) -> Result<Option<orkestr_v2_contracts::SourceSuccessor>> {
-    let latest: Option<(String, String)> = sqlx::query_as("SELECT l.id,l.message_id FROM production_runs l JOIN production_runs r ON r.owner_id=l.owner_id AND r.conversation_id=l.conversation_id AND r.session_id=l.session_id AND r.native_session_id=l.native_session_id AND r.provider_kind=l.provider_kind WHERE r.id=? AND r.owner_id=? AND r.conversation_id=? AND r.role='deep' AND r.deep_slot=0 AND l.role='deep' AND l.deep_slot=0 AND l.id!=r.id AND l.scope_sequence>r.scope_sequence AND NOT EXISTS(SELECT 1 FROM production_cancellations c WHERE c.run_id=r.id AND c.request_revision IS NOT NULL) ORDER BY l.scope_sequence DESC LIMIT 1")
+    let latest: Option<(String, String)> = sqlx::query_as("SELECT l.id,l.message_id FROM production_runs l JOIN production_runs r ON r.owner_id=l.owner_id AND r.conversation_id=l.conversation_id AND r.session_id=l.session_id AND r.native_session_id=l.native_session_id AND r.provider_kind=l.provider_kind WHERE r.id=? AND r.owner_id=? AND r.conversation_id=? AND r.role='deep' AND r.deep_slot=0 AND l.role='deep' AND l.deep_slot=0 AND l.id!=r.id AND l.scope_sequence>r.scope_sequence AND NOT EXISTS(SELECT 1 FROM production_cancellations c WHERE c.run_id=r.id AND c.stop_origin='owner') ORDER BY l.scope_sequence DESC LIMIT 1")
         .bind(source.to_string()).bind(owner.to_string()).bind(conversation.to_string())
         .fetch_optional(&mut *tx).await.map_err(db)?;
     let Some((run, message)) = latest else {

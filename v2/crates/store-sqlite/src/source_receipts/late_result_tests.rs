@@ -10,7 +10,8 @@ use super::continuation_groups::{
 use super::*;
 use orkestr_v2_application::{runtime::RunAdmissionResult, IntakeStore};
 use orkestr_v2_contracts::{
-    MessageId, Receipt, SourceContextProof, SourceContextQuery, SourceSuccessor,
+    ExecutionControlRequest, MessageId, Receipt, SourceContextProof, SourceContextQuery,
+    SourceSuccessor,
 };
 
 /// The source-run lookup the broker makes before every handback.
@@ -447,22 +448,74 @@ async fn a_reset_or_handed_off_session_names_no_successor() {
     }
 }
 
-/// Review M4: a source the owner stopped has no successor; one cut by an
-/// internal Stop (a release, a deadline) still has one.
+/// Stop `source` through the guarded Stop the HTTP route uses (the owner's
+/// credential, his expected revisions and `key`), then observe it stopped.
+async fn guarded_stop(f: &Case, source: &ProviderAdmission, key: &str) {
+    f.handle
+        .append_provider_event(&f.owner, source, &input(source, 1, ProviderEvent::Started))
+        .await
+        .unwrap();
+    let status = f
+        .store
+        .execution_status(&f.owner, &f.conversation)
+        .await
+        .unwrap()
+        .unwrap();
+    let (_, cancel) = f
+        .handle
+        .stop_execution_control_authenticated(
+            &f.token,
+            &f.conversation,
+            &ExecutionControlRequest {
+                run_id: source.run.run_id.clone(),
+                expected_revision: status.revision,
+                expected_control_revision: status.control_revision,
+                request_key: key.into(),
+            },
+        )
+        .await
+        .unwrap();
+    let mut control = source.clone();
+    control.run = cancel.new_fenced_admission;
+    f.handle
+        .append_provider_event(
+            &f.owner,
+            &control,
+            &input(&control, 2, ProviderEvent::Stopped),
+        )
+        .await
+        .unwrap();
+}
+
+/// Review R1: only the owner's own Stop ends a source's successors. The
+/// release train, an operator and Core itself stop through the same cut, and
+/// the result of such a run still goes to the turn after it. Every Stop but
+/// the internal one goes through the guarded path the HTTP route takes.
 #[tokio::test]
-async fn an_owner_stopped_source_names_no_successor() {
-    for owner_stop in [false, true] {
+async fn only_an_owner_stop_suppresses_the_successor() {
+    for (key, origin) in [
+        (
+            Some("release-043be0906976-6f9619ff-8b86-4011-b42d-00c04fc964ff"),
+            "release",
+        ),
+        (Some("forced-release-synthetic"), "release"),
+        (Some("lead-stop-synthetic"), "operator"),
+        (Some("synthetic-unknown-stop"), "other"),
+        (None, "internal"),
+        (Some("6f9619ff-8b86-4011-b42d-00c04fc964ff"), "owner"),
+    ] {
         let (f, source, _, _) = fixture().await;
-        stopped_for_release(&f, &source).await;
-        if owner_stop {
-            // What the owner's Stop records: his request revision on the cancellation.
-            execute(
-                &f,
-                "UPDATE production_cancellations SET request_revision=0 WHERE run_id=?",
-                &source,
-            )
-            .await;
+        match key {
+            Some(key) => guarded_stop(&f, &source, key).await,
+            None => stopped_for_release(&f, &source).await,
         }
+        let recorded: String =
+            sqlx::query_scalar("SELECT stop_origin FROM production_cancellations WHERE run_id=?")
+                .bind(source.run.run_id.to_string())
+                .fetch_one(&f.store.pool)
+                .await
+                .unwrap();
+        assert_eq!(recorded, origin);
         unfenced(&f, "synthetic-next-input", false).await;
         let (turn, _, _) = start(&f, "next-turn").await;
         assert!(
@@ -472,15 +525,12 @@ async fn an_owner_stopped_source_names_no_successor() {
         );
         let proof = lookup(&f, &source.run.run_id).await;
         assert!(!proof.eligible_for_continuation);
-        assert_eq!(
-            proof.successor.map(|s| s.run_id),
-            if owner_stop {
-                None
-            } else {
-                Some(turn.provider.run.run_id.clone())
-            },
-            "owner_stop={owner_stop}"
-        );
+        let expected = if origin == "owner" {
+            None
+        } else {
+            Some(turn.provider.run.run_id.clone())
+        };
+        assert_eq!(proof.successor.map(|s| s.run_id), expected, "{origin}");
         close(f).await;
     }
 }

@@ -23,6 +23,34 @@ pub(super) fn receipt(run: &SqliteRow, cancel: &SqliteRow) -> Result<CancelRecei
     })
 }
 
+/// Who asked for a Stop, written with its cancellation (`stop_origin`,
+/// migration 0102). A superseded Deep run's host result goes to the run that
+/// succeeded it unless the owner himself stopped the run (source_context.rs).
+/// The release train and operators stop through the same guarded route as the
+/// owner, so the guard alone (`request_revision`) cannot tell them apart. The
+/// request keys each caller uses tell, and anything unknown is not the owner:
+///
+/// - `internal`: an unguarded Stop (deadline, budget, shutdown, worker);
+/// - `release`: the release train, `release-<head>-<run>` (also `release-db…`)
+///   or `forced-release…`;
+/// - `operator`: an operator Stop, `lead-…` or `lead:…`;
+/// - `owner`: the owner's web UI Stop button, whose key is its
+///   `crypto.randomUUID()` (apps/ui transport::key); WhatsApp has no V2 Stop;
+/// - `other`: any other guarded key.
+pub(crate) fn stop_origin(guarded: bool, key: &str) -> &'static str {
+    if !guarded {
+        "internal"
+    } else if key.starts_with("release-") || key.starts_with("forced-release") {
+        "release"
+    } else if key.starts_with("lead-") || key.starts_with("lead:") {
+        "operator"
+    } else if Uuid::parse_str(key).is_ok_and(|id| id.hyphenated().to_string() == key) {
+        "owner"
+    } else {
+        "other"
+    }
+}
+
 impl Store {
     pub(crate) async fn production_cancel(
         &self,
@@ -230,8 +258,9 @@ impl Store {
                 .fetch_one(&mut *tx)
                 .await
                 .map_err(db)?;
-        sqlx::query("UPDATE production_cancellations SET request_revision=?,receipt_revision=?,request_control_revision=? WHERE run_id=?")
-            .bind(guard.map(|(_, revision, _)| revision)).bind(revision).bind(guard.and_then(|(_, _, control)| control)).bind(run.to_string()).execute(&mut *tx).await.map_err(db)?;
+        sqlx::query("UPDATE production_cancellations SET request_revision=?,receipt_revision=?,request_control_revision=?,stop_origin=? WHERE run_id=?")
+            .bind(guard.map(|(_, revision, _)| revision)).bind(revision).bind(guard.and_then(|(_, _, control)| control))
+            .bind(stop_origin(guard.is_some(), key)).bind(run.to_string()).execute(&mut *tx).await.map_err(db)?;
         let result = receipt(&row, &cancel)?;
         #[cfg(feature = "fixture-test-controls")]
         self.production_checkpoint("cancel-before-commit").await?;
@@ -239,5 +268,34 @@ impl Store {
         #[cfg(feature = "fixture-test-controls")]
         self.production_checkpoint("cancel-after-commit").await?;
         Ok((result, revision))
+    }
+}
+
+#[cfg(test)]
+mod stop_origin_tests {
+    use super::stop_origin;
+
+    #[test]
+    fn only_the_web_ui_key_is_the_owner_and_unknown_is_not() {
+        for (guarded, key, origin) in [
+            (false, "6f9619ff-8b86-4011-b42d-00c04fc964ff", "internal"),
+            (false, "execution-run-budget-expired", "internal"),
+            (
+                true,
+                "release-043be0906976-6f9619ff-8b86-4011-b42d-00c04fc964ff",
+                "release",
+            ),
+            (true, "release-db-synthetic", "release"),
+            (true, "forced-release-synthetic", "release"),
+            (true, "lead-stop-academic", "operator"),
+            (true, "lead:force-deploy-stop:5", "operator"),
+            (true, "6f9619ff-8b86-4011-b42d-00c04fc964ff", "owner"),
+            (true, "6F9619FF-8B86-4011-B42D-00C04FC964FF", "other"),
+            (true, "6f9619ff8b864011b42d00c04fc964ff", "other"),
+            (true, "stop:1", "other"),
+            (true, "", "other"),
+        ] {
+            assert_eq!(stop_origin(guarded, key), origin, "{key}");
+        }
     }
 }

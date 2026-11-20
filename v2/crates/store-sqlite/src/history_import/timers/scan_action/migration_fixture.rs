@@ -5,6 +5,15 @@ use crate::Store;
 mod credentials;
 
 pub(crate) async fn downgrade_empty(store: &Store) {
+    // Migration 102 down: the Stop origin is derived evidence; dropping it loses
+    // no cancellation (an older schema simply has no successor rule).
+    sqlx::raw_sql(
+        "ALTER TABLE production_cancellations DROP COLUMN stop_origin;
+         DELETE FROM _sqlx_migrations WHERE version=102;",
+    )
+    .execute(&store.pool)
+    .await
+    .unwrap();
     // Migration 101 down: only with no recorded instruction update.
     let updates: i64 = sqlx::query_scalar("SELECT count(*) FROM agent_timer_instruction_updates")
         .fetch_one(&store.pool)
