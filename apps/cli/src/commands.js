@@ -23,6 +23,7 @@ import {
 } from "../../../packages/connectors/src/google-workspace-review-environment.js";
 import { closeThreadRegistryCache } from "../../../packages/storage/src/thread-registry.js";
 import { rawAttachWatchText } from "../../../packages/core/src/raw-terminal-watch.js";
+import { resolveV2Target, runV2Attach, v2DelegationOf } from "./v2-attach.js";
 import { defaultApiBase, requestJson } from "./api-client.js";
 import { whatsappPictureAuditCommand } from "./whatsapp-picture-audit-command.js";
 import { createCommand } from "./create-command.js";
@@ -2059,8 +2060,16 @@ async function attach(argv, ctx) {
   const yes = argv.includes("--yes");
   const intervalMs = parseDurationMs(flagValue(argv, "--interval"), { numericUnit: "seconds" });
   const timeoutMs = parseDurationMs(flagValue(argv, "--timeout"), { numericUnit: "seconds" });
+  const conversationId = flagValue(argv, "--conversation");
+  const v2Options = { printOnly, json, readOnly, intervalMs, timeoutMs, history: attachHistory(argv) };
+  if (conversationId) return runV2Attach(resolveV2Target({ conversationId, env: ctx.env, readFile: ctx.readFileImpl }), ctx, v2Options);
   const targetArg = positional(argv)[0];
-  const target = targetArg || threadName(await chooseThread(ctx));
+  const chosen = targetArg ? null : await chooseThread(ctx);
+  const target = targetArg || threadName(chosen);
+  // A chat V2 serves is never attached to its old V1 terminal: input there
+  // starts no V2 run and carries no owner proof. Talk to its V2 agent instead.
+  const v2Target = await v2AttachTarget(chosen?.id || target, ctx);
+  if (v2Target) return runV2Attach(v2Target, ctx, v2Options);
   const body = {};
   if (readOnly) body.readOnly = true;
   if (takeover) body.takeover = true;
@@ -2085,6 +2094,29 @@ async function attach(argv, ctx) {
     return watchAttachUntilAttachable(target, body, ctx, { printOnly, interactive: Boolean(ctx.stdin?.isTTY) });
   }
   return runAttachPayload(payload, target, ctx, { printOnly });
+}
+
+// The V2 target of a delegated thread, or null for a thread V1 runs itself.
+// Only a missing thread falls through (the V1 attach answers it); any other
+// failure stops here rather than risk opening a V2 chat's old V1 terminal.
+async function v2AttachTarget(target, ctx) {
+  let payload;
+  try {
+    payload = await requestJson(`/api/threads/${encodeURIComponent(target)}`, ctx);
+  } catch (error) {
+    if (error?.status === 404) return null;
+    throw error;
+  }
+  const thread = payload?.thread || payload;
+  if (!v2DelegationOf(thread, ctx.env)) return null;
+  return resolveV2Target({ thread, env: ctx.env, readFile: ctx.readFileImpl });
+}
+
+function attachHistory(argv) {
+  const value = flagValue(argv, "--history");
+  if (!value) return 1;
+  const count = Number.parseInt(value, 10);
+  return Number.isInteger(count) && count >= 0 ? Math.min(count, 100) : 1;
 }
 
 async function watchAttachUntilAttachable(target, body, ctx, { printOnly = false, interactive = false } = {}) {
@@ -2314,6 +2346,8 @@ Common thread commands:
   orkestr connect google --review --thread <reviewer-thread-id> [--json]
   orkestr connect google --review-environment --thread <reviewer-thread-id> [--json]
   orkestr attach [thread-name-or-id] [--print] [--read-only] [--takeover] [--interrupt] [--yes] [--interval seconds] [--timeout duration] [--json]
+    (a chat V2 serves opens a terminal chat with its V2 agent as the owner; --read-only watches, --history n shows n earlier updates)
+  orkestr attach --conversation <v2-conversation-id> [--print] [--read-only] [--history n] [--json]
   orkestr send <thread-name-or-id> "<message>" [--reply-whatsapp|--no-reply-whatsapp] [--idempotency-key <key>] [--json]
   orkestr switch <thread-name-or-id> [codex|claude] [--model m] [--effort e] [--now] [--reason text] [--json]
   orkestr switch --self codex|claude --reason text [--model m] [--json]
@@ -2528,6 +2562,8 @@ function positional(argv) {
     "--profile",
     "--purpose",
     "--context",
+    "--conversation",
+    "--history",
     "--phone",
     "--phone-number",
     "--repo",
