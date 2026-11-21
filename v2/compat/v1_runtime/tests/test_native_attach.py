@@ -5,6 +5,7 @@ import unittest
 
 from v2.compat.v1_runtime import native_attach
 from v2.compat.v1_runtime.ledger import Ledger
+from v2.compat.v1_runtime.rust_client import ClientError
 
 
 class Client:
@@ -22,7 +23,9 @@ class FakeWorker:
         assert (method, route) == ("GET", "/native-attach")
         self.reads += 1
         if self.hold == "missing":
-            raise RuntimeError("404 not_found")  # An older Core without the route.
+            raise ClientError("not_found", 404)  # An older or unconfigured Core.
+        if self.hold == "down":
+            raise ClientError("unavailable", 503)
         return self.hold or {"conversation_id": "conversation", "held": False}
 
 
@@ -73,6 +76,16 @@ class NativeAttachTests(unittest.TestCase):
         self.assertTrue(native_attach.drive(other, now=300))
         self.assertTrue(self.notices()[0]["text"].endswith("as soon as they are done."))
         self.assertIn("Can is working in this chat's terminal", self.notices()[0]["text"])
+
+    def test_a_failed_read_is_unknown_never_ages_inputs_and_posts_nothing(self):
+        worker = FakeWorker(self.ledger, "down")
+        self.enqueue("m1")
+        self.assertIs(native_attach.read_hold(worker, now=100), native_attach.UNKNOWN)
+        self.assertTrue(native_attach.held(worker, now=100), "unknown counts as held for ageing")
+        self.assertFalse(native_attach.drive(worker, now=100))
+        self.assertEqual(self.notices(), [])
+        worker.hold = "missing"
+        self.assertFalse(native_attach.held(worker, now=100 + native_attach.CHECK_S), "404 is not held")
 
     def test_the_hold_read_is_cached(self):
         worker = FakeWorker(self.ledger, HOLD)
