@@ -260,7 +260,7 @@ test("a lost hold closes the terminal session so V2 stays the only writer", asyn
   let killedWith = null;
   const ctx = baseContext(f, {
     renewMs: 5,
-    serverHoldViewImpl: async () => "held",
+    serverHoldViewImpl: async () => ({ state: "held", nativeIdle: true }),
     v2RequestImpl: v2Server([]),
     v2ActivityImpl: async () => ({ held: true, busy: false }),
     spawnImpl: () => {
@@ -298,7 +298,7 @@ test("a briefly unwritable hold directory keeps the session until the hold would
   let killedAt = null;
   const ctx = baseContext(f, {
     renewMs: 5,
-    serverHoldViewImpl: async () => "held",
+    serverHoldViewImpl: async () => ({ state: "held", nativeIdle: true }),
     fsImpl,
     nowImpl: () => clock,
     v2RequestImpl: v2Server([]),
@@ -350,7 +350,7 @@ test("the drain waits for the server's native_idle, not only for the run to end"
 test("the session closes (SIGTERM, then SIGKILL) as soon as the server stops reporting the hold", async () => {
   const f = await fixture();
   const signals = [];
-  let view = "held";
+  let view = { state: "held", nativeIdle: true };
   const ctx = baseContext(f, {
     renewMs: 5,
     killGraceMs: 20,
@@ -365,7 +365,7 @@ test("the session closes (SIGTERM, then SIGKILL) as soon as the server stops rep
         signals.push(signal);
         if (signal === "SIGKILL") setImmediate(() => { clearInterval(alive); emitter.emit("exit", null, signal); });
       };
-      setTimeout(() => { view = "not_held"; }, 30);
+      setTimeout(() => { view = { state: "not_held" }; }, 30);
       return emitter;
     },
   });
@@ -379,12 +379,14 @@ test("the server view: health feature and GET native-attach decide; unreachable 
   const target = { conversationId };
   const session = (health, hold) => ({ call: async (method, path) => (path === "/api/v2/health" ? health : hold) });
   const feature = { status: 200, json: { features: ["native_attach_hold_v1"] } };
-  assert.equal(await serverHoldView(session(feature, { status: 200, json: { held: true } }), target), "held");
-  assert.equal(await serverHoldView(session(feature, { status: 200, json: { held: false } }), target), "not_held");
-  assert.equal(await serverHoldView(session(feature, { status: 404, json: { code: "native_attach_unconfigured" } }), target), "not_held");
-  assert.equal(await serverHoldView(session({ status: 200, json: { features: [] } }, { status: 200, json: { held: true } }), target), "not_held");
-  assert.equal(await serverHoldView(session({ status: 503 }, { status: 503 }), target), "unknown");
-  assert.equal(await serverHoldView({ call: async () => { throw new Error("ECONNREFUSED"); } }, target), "unknown");
+  assert.deepEqual(await serverHoldView(session(feature, { status: 200, json: { held: true, native_idle: true, max_age_deadline_ms: 99 } }), target),
+    { state: "held", nativeIdle: true, maxAgeDeadlineMs: 99 });
+  assert.equal((await serverHoldView(session(feature, { status: 200, json: { held: true, native_idle: null } }), target)).nativeIdle, null);
+  assert.equal((await serverHoldView(session(feature, { status: 200, json: { held: false } }), target)).state, "not_held");
+  assert.equal((await serverHoldView(session(feature, { status: 404, json: { code: "native_attach_unconfigured" } }), target)).state, "not_held");
+  assert.equal((await serverHoldView(session({ status: 200, json: { features: [] } }, { status: 200, json: { held: true } }), target)).state, "not_held");
+  assert.equal((await serverHoldView(session({ status: 503 }, { status: 503 }), target)).state, "unknown");
+  assert.equal((await serverHoldView({ call: async () => { throw new Error("ECONNREFUSED"); } }, target)).state, "unknown");
 });
 
 test("takeover only signals a real attach CLI; a recycled pid's hold is stale", async () => {
@@ -420,4 +422,78 @@ test("--interrupt sends the owner Stop only after the server reports the hold", 
   assert.equal(await runCli(["attach", threadId, "--interrupt"], ctx), 0, ctx.stderr.text());
   assert.deepEqual(order, ["not-yet-held", "held", "stop", "held"]);
   assert.match(ctx.stderr.text(), /queued messages stay queued/);
+});
+
+async function attachedWith(f, overrides) {
+  const events = { signals: [] };
+  const ctx = baseContext(f, {
+    renewMs: 5,
+    killGraceMs: 10,
+    v2RequestImpl: v2Server([]),
+    v2ActivityImpl: async () => ({ held: true, busy: false }),
+    spawnImpl: () => {
+      const c = child((signal) => events.signals.push(signal));
+      overrides.onSpawn?.(c);
+      return c;
+    },
+    ...overrides.ctx,
+  });
+  events.code = await runCli(["attach", threadId], ctx);
+  events.stderr = ctx.stderr.text();
+  return events;
+}
+
+test("V2 reporting its own native process while attached closes the session at once", async () => {
+  const f = await fixture();
+  let idle = true;
+  const events = await attachedWith(f, {
+    ctx: { serverHoldViewImpl: async () => ({ state: "held", nativeIdle: idle }) },
+    onSpawn: () => setTimeout(() => { idle = false; }, 20),
+  });
+  assert.deepEqual(events.signals.slice(0, 1), ["SIGTERM"]);
+  assert.match(events.stderr, /V2 reports its own window or native process for this chat/);
+});
+
+test("an unknown native_idle (transient read error) does not close the session", async () => {
+  const f = await fixture();
+  let finish;
+  const events = await attachedWith(f, {
+    ctx: { serverHoldViewImpl: async () => ({ state: "held", nativeIdle: null }) },
+    onSpawn: (c) => { finish = setTimeout(() => c.emit("exit", 0, null), 60); },
+  });
+  clearTimeout(finish);
+  assert.deepEqual(events.signals, []);
+  assert.equal(events.code, 0);
+});
+
+test("the 8 h hold limit: a warning 10 min before, the session closed 1 min before", async () => {
+  const f = await fixture();
+  let clock = 5_000_000;
+  const start = clock;
+  const events = await attachedWith(f, {
+    ctx: { nowImpl: () => clock, serverHoldViewImpl: async () => ({ state: "held", nativeIdle: true, maxAgeDeadlineMs: start + 8 * 3600_000 }) },
+    onSpawn: () => {
+      setTimeout(() => { clock = start + 8 * 3600_000 - 5 * 60_000; }, 15);
+      setTimeout(() => { clock = start + 8 * 3600_000 - 30_000; }, 60);
+    },
+  });
+  assert.match(events.stderr, /reaches the 8 h hold limit at .*closed 1 minute before/);
+  assert.match(events.stderr, /The 8 h hold limit is reached/);
+  assert.equal(events.signals[0], "SIGTERM");
+});
+
+test("an unreachable server is tolerated for 5 min while the hold still renews, 60 s when it does not", async () => {
+  const f = await fixture();
+  let clock = 9_000_000;
+  const start = clock;
+  const down = await attachedWith(f, {
+    ctx: { nowImpl: () => clock, serverHoldViewImpl: async () => ({ state: "unknown" }) },
+    onSpawn: () => {
+      const tick = setInterval(() => { clock += 10_000; }, 2);
+      setTimeout(() => clearInterval(tick), 400);
+    },
+  });
+  // Closed only after the 5 min grace, not at 60 s.
+  assert.match(down.stderr, /could not confirm the hold for 300 s/);
+  assert.ok(clock - start > 300_000);
 });
