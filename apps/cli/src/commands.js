@@ -23,6 +23,9 @@ import {
 } from "../../../packages/connectors/src/google-workspace-review-environment.js";
 import { closeThreadRegistryCache } from "../../../packages/storage/src/thread-registry.js";
 import { rawAttachWatchText } from "../../../packages/core/src/raw-terminal-watch.js";
+import { resolveV2Target, runV2Attach, v2DelegationOf } from "./v2-attach.js";
+import { resolveThreadTargetArgs } from "./thread-target.js";
+import { findClaudeJobForThread, runClaudeJobAttach } from "./claude-job-attach.js";
 import { defaultApiBase, requestJson } from "./api-client.js";
 import { whatsappPictureAuditCommand } from "./whatsapp-picture-audit-command.js";
 import { createCommand } from "./create-command.js";
@@ -53,7 +56,7 @@ import { formatDeployReport } from "../../../scripts/deploy-detached-summary.mjs
 export async function runCli(argv = process.argv.slice(2), context = {}) {
   const global = parseGlobalFlags(argv);
   const command = global.argv[0] || "serve";
-  const args = global.argv.slice(1);
+  let args = global.argv.slice(1);
   const ctx = {
     env: process.env,
     fetchImpl: globalThis.fetch,
@@ -68,60 +71,76 @@ export async function runCli(argv = process.argv.slice(2), context = {}) {
 
   try {
     if (global.help || command === "help") return await writeHelp(ctx);
-    if (command === "serve" || command.startsWith("--")) return await serve(command.startsWith("--") ? global.argv : args, ctx);
-    if (command === "list") return await list(args, ctx);
-    if (command === "status") return await statusCommand(args, ctx);
-    if (command === "version") return await versionCommand(args, ctx);
-    if (command === "init") return await initCommand(args, ctx);
-    if (command === "run") return await runJobCommand(args, ctx);
-    if (command === "instance" && ["config", "status"].includes(args[0])) return await instanceConfigCommand(args, ctx);
-    if (command === "instances" || command === "instance") return await releaseInstancesCommand(args, ctx);
-    if (command === "whereiam" || command === "whereami") return await whereiamCommand(args, ctx);
-    if (command === "settings") return await settingsCommand(args, ctx);
-    if (command === "secret" || command === "secrets") return await secretCommand(args, ctx);
-    if (command === "vault") return await vaultCommand(args, { readPassphrase: () => readHiddenSecretFromTty(ctx, "Passphrase: "), ...ctx });
-    if (command === "doctor") return await doctorCommand(args, ctx);
-    if (command === "sanitizer" || command === "sanitize") return await sanitizerCommand(args, ctx);
-    if (command === "api-session" || command === "api") return await apiSessionCommand(args, ctx);
-    if (command === "whatsapp" || command === "wa") return await whatsappCommand(args, ctx);
-    if (command === "timers" || command === "timer") return await timersCommand(args, ctx);
-    if (command === "setup" || command === "setups") return await setupCommand(args, ctx);
-    if (command === "jobs" || command === "job") return await jobsCommand(args, ctx);
-    if (command === "mailboxes" || command === "mailbox") return await mailboxesCommand(args, ctx);
-    if (command === "connect") return await connectCommand(args, ctx);
-    if (command === "security") return await securityCommand(args, ctx);
-    if (command === "desktop" || command === "desktops") return await desktopCommand(args, ctx);
-    if (command === "jira") return await jiraCommand(args, ctx);
-    if (command === "tenant-slice" || command === "tenant-slices" || command === "vm-slice" || command === "vm-slices") return await tenantSliceCommand(args, ctx);
-    if (command === "codex") return await codexCommand(args, ctx);
-    if (command === "service" || command === "services") return await serviceCommand(args, ctx);
-    if (command === "start" || command === "stop" || command === "restart") return await serviceCommand([command, ...args], ctx);
-    if (command === "update") return await updateCommand(args, ctx);
-    if (command === "rollback") return await updateRollbackCommand(args, ctx);
-    if (command === "release-train") return await releaseTrainCommand(args, ctx, { updateScriptPath, systemdRunEnvArgs, requestJson, ...ctx.releaseTrainDeps });
-    if (command === "logs") return await serviceCommand(["logs", ...args], ctx);
-    if (command === "thread") return await threadCommand(args, ctx);
-    if (command === "threads" && args[0] === "retry-failed") return await retryFailedThreadsCommand(args.slice(1), ctx);
-    if (command === "create") return await createCommand(args, ctx);
-    if (command === "worker") return await workerCommand(args, ctx);
-    if (command === "task-agent" || command === "task_agent") return await taskAgentCommand(args, ctx);
-    if (command === "attach") return await attach(args, ctx);
-    if (command === "send") return await send(args, ctx);
-    if (command === "watch" || command === "watches") return await watchCommand(args, ctx);
-    if (command === "switch") return await executorSwitchCommand(args, ctx);
-    if (command === "interrupt") return await interruptCommand(args, ctx);
-    if (command === "wake") return await postThreadAction("wake", args, ctx);
-    if (command === "sleep") return await postThreadAction("sleep", args, ctx);
-    if (command === "reset") return await postThreadAction("reset", args, ctx);
-    if (command === "hard-reset" || command === "hard_reset") return await postThreadAction("hard-reset", args, ctx);
-    if (command === "safe-reset" || command === "safe_reset") return await postThreadAction("safe-reset", args, ctx);
-    ctx.stderr.write(`Unknown command: ${command}\n\n`);
-    writeUsage(ctx.stderr);
-    return 2;
+    // List numbers resolve up front; a name or id prefix only when the exact
+    // argument is not found (no thread list read for an exact target).
+    // `attach --chat` is a switch here; elsewhere `--chat` takes a chat id.
+    if (command === "attach") args = args.map((value) => (value === "--chat" ? "--owner-chat" : value));
+    args = await resolveThreadTargetArgs(command, args, ctx, positionalIndexes, { prefixes: false });
+    try {
+      return await dispatchCommand(command, args, ctx, global);
+    } catch (error) {
+      if (error?.status !== 404 || error?.message !== "thread_not_found") throw error;
+      const resolved = await resolveThreadTargetArgs(command, args, ctx, positionalIndexes, { prefixes: true });
+      if (resolved.every((value, index) => value === args[index])) throw error;
+      return await dispatchCommand(command, resolved, ctx, global);
+    }
   } catch (error) {
     ctx.stderr.write(`${error?.message || String(error)}\n`);
     return error?.status === 404 ? 4 : 1;
   }
+}
+
+async function dispatchCommand(command, args, ctx, global) {
+  if (command === "serve" || command.startsWith("--")) return await serve(command.startsWith("--") ? global.argv : args, ctx);
+  if (command === "list") return await list(args, ctx);
+  if (command === "status") return await statusCommand(args, ctx);
+  if (command === "version") return await versionCommand(args, ctx);
+  if (command === "init") return await initCommand(args, ctx);
+  if (command === "run") return await runJobCommand(args, ctx);
+  if (command === "instance" && ["config", "status"].includes(args[0])) return await instanceConfigCommand(args, ctx);
+  if (command === "instances" || command === "instance") return await releaseInstancesCommand(args, ctx);
+  if (command === "whereiam" || command === "whereami") return await whereiamCommand(args, ctx);
+  if (command === "settings") return await settingsCommand(args, ctx);
+  if (command === "secret" || command === "secrets") return await secretCommand(args, ctx);
+  if (command === "vault") return await vaultCommand(args, { readPassphrase: () => readHiddenSecretFromTty(ctx, "Passphrase: "), ...ctx });
+  if (command === "doctor") return await doctorCommand(args, ctx);
+  if (command === "sanitizer" || command === "sanitize") return await sanitizerCommand(args, ctx);
+  if (command === "api-session" || command === "api") return await apiSessionCommand(args, ctx);
+  if (command === "whatsapp" || command === "wa") return await whatsappCommand(args, ctx);
+  if (command === "timers" || command === "timer") return await timersCommand(args, ctx);
+  if (command === "setup" || command === "setups") return await setupCommand(args, ctx);
+  if (command === "jobs" || command === "job") return await jobsCommand(args, ctx);
+  if (command === "mailboxes" || command === "mailbox") return await mailboxesCommand(args, ctx);
+  if (command === "connect") return await connectCommand(args, ctx);
+  if (command === "security") return await securityCommand(args, ctx);
+  if (command === "desktop" || command === "desktops") return await desktopCommand(args, ctx);
+  if (command === "jira") return await jiraCommand(args, ctx);
+  if (command === "tenant-slice" || command === "tenant-slices" || command === "vm-slice" || command === "vm-slices") return await tenantSliceCommand(args, ctx);
+  if (command === "codex") return await codexCommand(args, ctx);
+  if (command === "service" || command === "services") return await serviceCommand(args, ctx);
+  if (command === "start" || command === "stop" || command === "restart") return await serviceCommand([command, ...args], ctx);
+  if (command === "update") return await updateCommand(args, ctx);
+  if (command === "rollback") return await updateRollbackCommand(args, ctx);
+  if (command === "release-train") return await releaseTrainCommand(args, ctx, { updateScriptPath, systemdRunEnvArgs, requestJson, ...ctx.releaseTrainDeps });
+  if (command === "logs") return await serviceCommand(["logs", ...args], ctx);
+  if (command === "thread") return await threadCommand(args, ctx);
+  if (command === "threads" && args[0] === "retry-failed") return await retryFailedThreadsCommand(args.slice(1), ctx);
+  if (command === "create") return await createCommand(args, ctx);
+  if (command === "worker") return await workerCommand(args, ctx);
+  if (command === "task-agent" || command === "task_agent") return await taskAgentCommand(args, ctx);
+  if (command === "attach") return await attach(args, ctx);
+  if (command === "send") return await send(args, ctx);
+  if (command === "watch" || command === "watches") return await watchCommand(args, ctx);
+  if (command === "switch") return await executorSwitchCommand(args, ctx);
+  if (command === "interrupt") return await interruptCommand(args, ctx);
+  if (command === "wake") return await postThreadAction("wake", args, ctx);
+  if (command === "sleep") return await postThreadAction("sleep", args, ctx);
+  if (command === "reset") return await postThreadAction("reset", args, ctx);
+  if (command === "hard-reset" || command === "hard_reset") return await postThreadAction("hard-reset", args, ctx);
+  if (command === "safe-reset" || command === "safe_reset") return await postThreadAction("safe-reset", args, ctx);
+  ctx.stderr.write(`Unknown command: ${command}\n\n`);
+  writeUsage(ctx.stderr);
+  return 2;
 }
 
 function parseGlobalFlags(argv) {
@@ -179,7 +198,8 @@ async function list(argv, ctx) {
   const payload = await requestJson("/api/threads/summary", ctx);
   const threads = payload?.threads || [];
   if (argv.includes("--json")) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
-  else ctx.stdout.write(`${formatThreadTable(threads)}\n`);
+  // --numbered shows the numbers the attach picker and every thread argument accept.
+  else ctx.stdout.write(`${formatThreadTable(threads, { numbered: argv.includes("--numbered") || argv.includes("-n") })}\n`);
   return 0;
 }
 
@@ -2059,8 +2079,22 @@ async function attach(argv, ctx) {
   const yes = argv.includes("--yes");
   const intervalMs = parseDurationMs(flagValue(argv, "--interval"), { numericUnit: "seconds" });
   const timeoutMs = parseDurationMs(flagValue(argv, "--timeout"), { numericUnit: "seconds" });
+  const conversationId = flagValue(argv, "--conversation");
+  const v2Options = { printOnly, json, readOnly, chat: argv.includes("--owner-chat"), takeover, interrupt, intervalMs, timeoutMs, history: attachHistory(argv) };
+  if (conversationId) return runV2Attach(resolveV2Target({ conversationId, env: ctx.env, readFile: ctx.readFileImpl }), ctx, v2Options);
   const targetArg = positional(argv)[0];
-  const target = targetArg || threadName(await chooseThread(ctx));
+  const chosen = targetArg ? null : await chooseThread(ctx);
+  const target = targetArg || threadName(chosen);
+  const thread = await attachThread(chosen?.id || target, ctx);
+  // A thread whose thinking layer is a running Claude Code background
+  // session opens that session (`claude attach`), never a second process.
+  const job = thread ? await findClaudeJobForThread(thread, ctx) : null;
+  if (job) return runClaudeJobAttach(job, thread, ctx, { printOnly, json, takeover, spawnInherited });
+  // A chat V2 serves is never attached to its old V1 terminal: input there
+  // starts no V2 run and carries no owner proof.
+  if (thread && v2DelegationOf(thread, ctx.env)) {
+    return runV2Attach(resolveV2Target({ thread, env: ctx.env, readFile: ctx.readFileImpl }), ctx, v2Options);
+  }
   const body = {};
   if (readOnly) body.readOnly = true;
   if (takeover) body.takeover = true;
@@ -2085,6 +2119,26 @@ async function attach(argv, ctx) {
     return watchAttachUntilAttachable(target, body, ctx, { printOnly, interactive: Boolean(ctx.stdin?.isTTY) });
   }
   return runAttachPayload(payload, target, ctx, { printOnly });
+}
+
+// The thread record, or null when V1 has no such thread (the V1 attach then
+// answers it). Any other failure stops here rather than risk opening a V2
+// chat's old V1 terminal.
+async function attachThread(target, ctx) {
+  try {
+    const payload = await requestJson(`/api/threads/${encodeURIComponent(target)}`, ctx);
+    return payload?.thread || payload || null;
+  } catch (error) {
+    if (error?.status === 404) return null;
+    throw error;
+  }
+}
+
+function attachHistory(argv) {
+  const value = flagValue(argv, "--history");
+  if (!value) return 1;
+  const count = Number.parseInt(value, 10);
+  return Number.isInteger(count) && count >= 0 ? Math.min(count, 100) : 1;
 }
 
 async function watchAttachUntilAttachable(target, body, ctx, { printOnly = false, interactive = false } = {}) {
@@ -2303,7 +2357,8 @@ ${agentJobUsage}
   orkestr doctor whatsapp --archive-stale-outbox [--older-than 7d] [--limit 2000] [--apply] [--json]
 
 Common thread commands:
-  orkestr list [--json] [--api http://127.0.0.1:19812]
+  orkestr list [--numbered] [--json] [--api http://127.0.0.1:19812]
+    (a thread argument may be its list number, id, name, or a unique id/name prefix)
   orkestr create <name> [--wa-participant jid]... [--no-wa] [--json]
   orkestr whereiam [--cwd path] [--api-session-id id] [--bind] [--json]
   orkestr sanitizer check --action action --text text [--url url] [--cwd path] [--json]
@@ -2314,6 +2369,11 @@ Common thread commands:
   orkestr connect google --review --thread <reviewer-thread-id> [--json]
   orkestr connect google --review-environment --thread <reviewer-thread-id> [--json]
   orkestr attach [thread-name-or-id] [--print] [--read-only] [--takeover] [--interrupt] [--yes] [--interval seconds] [--timeout duration] [--json]
+    thread: its list number (see orkestr list --numbered), id, name or a unique prefix
+    a thread bound to a running Claude Code background session opens it (claude attach); --takeover detaches another terminal
+    a chat V2 serves opens its native session (claude/codex) while V2 holds the chat; --interrupt stops a running V2 turn first; --takeover closes another terminal
+    --print/--json show its V2 agent and native session; --chat talks to it as the owner through V2; --read-only watches
+  orkestr attach --conversation <v2-conversation-id> [--print] [--read-only] [--chat] [--history n] [--json]
   orkestr send <thread-name-or-id> "<message>" [--reply-whatsapp|--no-reply-whatsapp] [--idempotency-key <key>] [--json]
   orkestr switch <thread-name-or-id> [codex|claude] [--model m] [--effort e] [--now] [--reason text] [--json]
   orkestr switch --self codex|claude --reason text [--model m] [--json]
@@ -2495,6 +2555,11 @@ function formatWhereAmI(payload = {}) {
 }
 
 function positional(argv) {
+  return positionalIndexes(argv).map((index) => argv[index]);
+}
+
+// argv indexes of the positional values (flag values skipped).
+function positionalIndexes(argv) {
   const values = [];
   const flagsWithValues = new Set([
     "--report-kind", "--report-key",
@@ -2528,6 +2593,8 @@ function positional(argv) {
     "--profile",
     "--purpose",
     "--context",
+    "--conversation",
+    "--history",
     "--phone",
     "--phone-number",
     "--repo",
@@ -2657,7 +2724,7 @@ function positional(argv) {
       index += 1;
       continue;
     }
-    values.push(value);
+    values.push(index);
   }
   return values;
 }
