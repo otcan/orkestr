@@ -318,3 +318,27 @@ test("a briefly unwritable hold directory keeps the session until the hold would
   assert.ok(killedAt - 1_000_000 > 60_000, `kept the session through transient failures (closed after ${killedAt - 1_000_000} ms)`);
   assert.ok(killedAt - 1_000_000 <= TTL_MS + 20_000, "never past the hold's expiry");
 });
+
+test("the drain waits for the server's native_idle, not only for the run to end", async () => {
+  const f = await fixture();
+  const reads = [
+    { held: true, native_idle: false },
+    { held: true, native_idle: true },
+  ];
+  let spawnedAfter = null;
+  const ctx = baseContext(f, {
+    v2RequestImpl: v2Server([], {
+      [`GET ${conv}/native-attach`]: () => ({ json: { conversation_id: conversationId, ...(reads.shift() || { held: true, native_idle: true }) } }),
+      [`GET ${conv}/window`]: { json: { window_id: "w", conversation_id: conversationId, state: "closed" } },
+    }),
+    spawnImpl: () => {
+      spawnedAfter = reads.length;
+      const c = child();
+      setImmediate(() => c.emit("exit", 0, null));
+      return c;
+    },
+  });
+  assert.equal(await runCli(["attach", threadId], ctx), 0, ctx.stderr.text());
+  assert.equal(spawnedAfter, 0, "opened only after native_idle");
+  assert.match(ctx.stderr.text(), /still working on this chat/);
+});
