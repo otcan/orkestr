@@ -126,8 +126,11 @@ test("the Claude launch enters V2's mount namespace as the executor and resumes 
   assert.equal(launch.command, "nsenter");
   assert.deepEqual(launch.args.slice(0, 12), ["--target", "4242", "--mount", "--wd=/fixture/claude-workspace", "--", "setpriv", "--reuid=986", "--regid=980", "--init-groups", "--no-new-privs", "--", "env"]);
   assert.equal(launch.args[12], "-i");
-  assert.deepEqual(launch.args.slice(-4), ["/fixture/claude", "--resume", nativeId, "--dangerously-skip-permissions"]);
-  for (const pair of ["CLAUDE_CONFIG_DIR=/fixture/account", "HOME=/fixture/home", "TMPDIR=/fixture/tmp", "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1", "ANTHROPIC_MODEL=opus", "CLAUDE_CODE_EFFORT_LEVEL=high", "TERM=xterm"]) {
+  assert.deepEqual(launch.args.slice(-6, -2), ["/fixture/claude", "--resume", nativeId, "--dangerously-skip-permissions"]);
+  assert.equal(launch.args.at(-2), "--settings");
+  assert.deepEqual(JSON.parse(launch.args.at(-1)), { theme: "dark", skipDangerousModePermissionPrompt: true, env: { DISABLE_AUTOUPDATER: "1", DISABLE_UPDATES: "1" } });
+  for (const pair of ["CLAUDE_CONFIG_DIR=/fixture/account", "HOME=/fixture/home", "TMPDIR=/fixture/tmp", "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1", "ANTHROPIC_MODEL=opus", "CLAUDE_CODE_EFFORT_LEVEL=high", "TERM=xterm",
+    "DISABLE_AUTOUPDATER=1", "DISABLE_UPDATES=1"]) {
     assert.ok(launch.args.includes(pair), pair);
   }
 });
