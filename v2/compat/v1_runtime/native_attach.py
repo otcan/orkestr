@@ -12,13 +12,15 @@ things follow here:
   in this ledger do not age (ledger.expire_stale `held`); their clock restarts
   when the hold ends.
 
-A Core without the route (404) or any read failure counts as "not held".
+A Core without the route or unconfigured (404) counts as "not held"; any other
+failed read is "unknown": inputs do not age out on it, and no notice is posted.
 """
 import json
 import time
 
 from . import notices
 from .activity import heartbeat_applies, post_status
+from .rust_client import ClientError
 
 CHECK_S = 15
 META_KEY = "native_attach_notice"
@@ -26,24 +28,32 @@ WAITING_PHASES = ("queued", "admitted", "waiting_for_window", "waiting_for_windo
 WAITING_ROWS = 64
 
 
+UNKNOWN = "unknown"
+
+
 def read_hold(worker, now=None):
-    """Core's hold for this conversation, cached for CHECK_S. None when not held."""
+    """Core's hold for this conversation, cached for CHECK_S: the hold (a dict)
+    when held, None when Core says it is not held or has no such route (404:
+    an older or unconfigured Core), UNKNOWN when the read failed otherwise."""
     now = time.time() if now is None else now
     cached = getattr(worker, "_native_attach_hold", None)
     if cached is not None and 0 <= now - cached[0] < CHECK_S:
         return cached[1]
-    hold = None
     try:
         value = worker.call("GET", "/native-attach", allowed=(200,))
-        if isinstance(value, dict) and value.get("held") is True:
-            hold = value
+        hold = value if isinstance(value, dict) and value.get("held") is True else None
+    except ClientError as error:
+        # 404: an older or unconfigured Core (not held). Anything else from
+        # the transport (unreachable, 5xx, a revoked session): unknown.
+        hold = None if error.status == 404 else UNKNOWN
     except Exception:
-        hold = None  # An older Core (no route) or a failed read: not held.
+        hold = None  # Not a transport answer: never block expiry on a bug.
     worker._native_attach_hold = (now, hold)
     return hold
 
 
 def held(worker, now=None):
+    """For ageing: held, or unknown (a failed read never lets inputs age out)."""
     return read_hold(worker, now) is not None
 
 
@@ -60,8 +70,8 @@ def drive(worker, now=None):
     if not waiting:
         return False
     hold = read_hold(worker, now)
-    if hold is None:
-        return False
+    if not isinstance(hold, dict):
+        return False  # Not held, or unknown: a notice must be true.
     key = "%s:%s" % (hold.get("native_session_id"), hold.get("acquired_at_ms"))
     with ledger.connect() as db:
         db.execute("BEGIN IMMEDIATE")
