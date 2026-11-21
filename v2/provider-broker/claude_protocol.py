@@ -28,8 +28,35 @@ COMPACTION_SUMMARY_FIELDS = {"type", "message", "session_id", "parent_tool_use_i
 COMPACTION_LIMIT = 16
 
 
+def compaction_summary_shape(frame):
+    """Whether a user frame has exactly the summary's shape; never raises.
+
+    Any other frame (a queued notification, a replay, a tool result) is not
+    the summary: it keeps the boundary armed and takes the ordinary path.
+    """
+    if not (set(frame) <= COMPACTION_SUMMARY_FIELDS and frame.get("type") == "user"
+            and frame.get("isSynthetic") is True and frame.get("isReplay", False) is False
+            and frame.get("parent_tool_use_id") is None):
+        return False
+    value = frame.get("uuid")
+    try:
+        if not isinstance(value, str) or str(uuid.UUID(value)) != value:
+            return False
+    except ValueError:
+        return False
+    message = frame.get("message")
+    if not (isinstance(message, dict) and set(message) == {"role", "content"}
+            and message["role"] == "user"):
+        return False
+    content = message["content"]
+    return (isinstance(content, str) and content != "") or (
+        isinstance(content, list) and 0 < len(content) <= 128 and all(
+            isinstance(block, dict) and block.get("type") == "text"
+            and isinstance(block.get("text"), str) for block in content))
+
+
 def compaction_summary(channel, frame):
-    """Validate the one summary a compact_boundary notice armed; never forwarded.
+    """Consume the one summary a compact_boundary notice armed; never forwarded.
 
     A resumed session at its context limit compacts at the start of a turn,
     before the turn's first answer, so the summary cannot wait for the join.
@@ -37,18 +64,8 @@ def compaction_summary(channel, frame):
     """
     require(channel.initialized and channel.active is not None and not channel.terminal
             and channel.input_uuid is not None and channel.compaction_summaries < COMPACTION_LIMIT)
-    require(set(frame) <= COMPACTION_SUMMARY_FIELDS and frame.get("isSynthetic") is True
-            and frame.get("isReplay", False) is False and frame.get("parent_tool_use_id") is None)
-    value = canonical(frame.get("uuid"))
+    value = canonical(frame["uuid"])
     require(value not in (channel.native, channel.input_uuid, channel.terminal_uuid))
-    message = frame.get("message")
-    require(isinstance(message, dict) and set(message) == {"role", "content"}
-            and message["role"] == "user")
-    content = message["content"]
-    require((isinstance(content, str) and content != "") or (
-        isinstance(content, list) and 0 < len(content) <= 128 and all(
-            isinstance(block, dict) and block.get("type") == "text"
-            and isinstance(block.get("text"), str) for block in content)))
     channel.compaction_summaries += 1
 
 
@@ -203,7 +220,7 @@ class ClaudeChannel:
         if refused is not None:
             return refused
         if (kind == "user" and self.compaction_pending and self.control is None
-                and frame.get("isSynthetic") is True and "tool_use_result" not in frame):
+                and compaction_summary_shape(frame)):
             self.compaction_pending = False
             compaction_summary(self, frame)
             return None

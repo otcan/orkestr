@@ -65,6 +65,53 @@ class TurnStartCompactionTests(unittest.TestCase):
         self.assertEqual(channel.provider(frames[2])["params"]["frame"]["message"]["content"],
                          [{"type": "text", "text": "done"}])
 
+    def test_contained_mid_turn_compaction_is_discarded(self):
+        channel, native, frames = tool_turn(False)
+        first = dict(frames[2], user_message_uuid=INPUT)
+        self.assertIsNotNone(channel.provider(first))
+        self.assertTrue(channel.joined)
+        self.assertIsNone(channel.provider(boundary(native)))
+        self.assertIsNone(channel.provider(summary(native)))
+        later = dict(frames[2], uuid=str(uuid.uuid4()))
+        self.assertIsNotNone(channel.provider(later))
+
+
+class ArmedBoundaryFallThroughTests(unittest.TestCase):
+    """An armed boundary consumes only a frame with the summary's exact shape."""
+
+    def joined_turn(self):
+        channel, native, frames = tool_turn(True)
+        channel.provider(frames[0])
+        self.assertTrue(channel.joined)
+        self.assertIsNone(channel.provider(boundary(native)))
+        return channel, native, frames
+
+    def test_other_synthetic_frames_after_join_take_the_old_path_and_keep_it_armed(self):
+        for change in (dict(inbound_origin={"kind": "queued"}), dict(isReplay=True),
+                       dict(message={"role": "user", "content": [{"type": "image"}]})):
+            channel, native, frames = self.joined_turn()
+            self.assertIsNone(channel.provider(summary(native, **change)), msg=str(change))
+            self.assertTrue(channel.compaction_pending)
+            self.assertEqual(channel.compaction_summaries, 0)
+            self.assertIsNone(channel.provider(summary(native)))
+            self.assertFalse(channel.compaction_pending)
+            self.assertEqual(channel.compaction_summaries, 1)
+            self.assertIsNotNone(channel.provider(frames[2]))
+
+    def test_boundary_without_summary_leaves_tool_results_on_the_old_path(self):
+        channel, native, frames = self.joined_turn()
+        self.assertIsNone(channel.provider(frames[1]))
+        self.assertTrue(channel.compaction_pending)
+        self.assertEqual(channel.provider(frames[2])["params"]["frame"]["message"]["content"],
+                         [{"type": "text", "text": "done"}])
+
+    def test_other_synthetic_frame_before_join_is_still_refused(self):
+        channel, native, _ = tool_turn(True)
+        channel.provider(boundary(native))
+        with self.assertRaises(Refused):
+            channel.provider(summary(native, inbound_origin={"kind": "queued"}))
+        self.assertTrue(channel.compaction_pending)
+
 
 class CompactionRefusalTests(unittest.TestCase):
     def test_summary_without_a_boundary_before_join_is_refused(self):
