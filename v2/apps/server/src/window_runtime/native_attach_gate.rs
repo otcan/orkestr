@@ -22,7 +22,9 @@ use super::{
     conversation::ConversationController,
 };
 use orkestr_v2_application::runtime::RuntimeStoreError;
-use orkestr_v2_contracts::{ConversationId, ExecutionWindowQueued, ExecutionWindowRequest, OwnerId};
+use orkestr_v2_contracts::{
+    ConversationId, ExecutionWindowQueued, ExecutionWindowRequest, OwnerId,
+};
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
