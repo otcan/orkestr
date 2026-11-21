@@ -78,7 +78,7 @@ async fn the_owner_reads_a_hold_only_where_holds_are_configured() {
         value,
         json!({"conversation_id": id, "held": false, "provider": null,
             "native_session_id": null, "session_id": null, "acquired_at_ms": null,
-            "expires_at_ms": null, "native_idle": true})
+            "expires_at_ms": null, "max_age_deadline_ms": null, "native_idle": true})
     );
     holds.hold(&conversation);
     let (code, value) = read(&state, &id, owner()).await;
@@ -95,6 +95,10 @@ async fn the_owner_reads_a_hold_only_where_holds_are_configured() {
     );
     let acquired = value["acquired_at_ms"].as_i64().unwrap();
     assert!(value["expires_at_ms"].as_i64().unwrap() > acquired);
+    assert_eq!(
+        value["max_age_deadline_ms"].as_i64(),
+        Some(acquired + crate::native_attach::MAX_HOLD_AGE_MS)
+    );
     // No window was ever opened: nothing of V2 runs this native session.
     assert_eq!(value["native_idle"], json!(true));
     // Owner session required; the identifier must be a conversation.

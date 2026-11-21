@@ -13,6 +13,8 @@
 //! and parallel Deep slot factories carry no holds: each has its own session
 //! binding and native session, never this one.
 use super::*;
+use orkestr_v2_application::runtime::{CancelReceipt, RuntimeStoreError};
+use orkestr_v2_contracts::RunId;
 use orkestr_v2_store_sqlite::ConsumedProviderDispatch;
 
 impl ConfiguredExecution {
@@ -21,6 +23,20 @@ impl ConfiguredExecution {
         self.native_attach.as_ref().is_some_and(|holds| {
             holds.held(&self.config.conversation_id, crate::deploy_drain::now_ms())
         })
+    }
+
+    /// The writer's own cancellation of `run` (window deadline, shutdown or
+    /// budget). While held it cuts no Stop boundary and holds no input: the
+    /// hold already queues them, and they run after release.
+    pub(super) async fn request_cancel_for(
+        &self,
+        run: &RunId,
+        key: &str,
+    ) -> Result<CancelReceipt, RuntimeStoreError> {
+        let hold_inputs = !self.native_attach_held();
+        self.store
+            .request_cancel_holding(&self.owner, run, key, hold_inputs)
+            .await
     }
 
     /// The first Deep run after the owner's last terminal attach of this

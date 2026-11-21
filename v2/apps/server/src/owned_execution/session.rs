@@ -301,8 +301,7 @@ impl ConfiguredExecution {
                 steering.retire();
                 // Fence durably before local child cleanup; no success is inferred.
                 let receipt = self
-                    .store
-                    .request_cancel(&self.owner, &run, key)
+                    .request_cancel_for(&run, key)
                     .await
                     .map_err(|_| "execution shutdown requires reconciliation")?;
                 run_control.disable();

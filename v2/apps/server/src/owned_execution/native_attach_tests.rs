@@ -265,3 +265,43 @@ async fn only_the_first_deep_run_after_an_ended_attach_carries_the_note() {
     drop(execution);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_writers_own_cancellation_holds_no_input_while_held() {
+    for held in [true, false] {
+        let holds = Holds::new();
+        let (execution, store, root) = execution(&holds).await;
+        let conversation = execution.config.conversation_id.clone();
+        let (_sender, mut shutdown) = watch::channel(false);
+        let mut heartbeat = Instant::now();
+        owner_input(&store, &execution, "running").await;
+        let turn = execution
+            .next(&mut shutdown, &mut heartbeat)
+            .await
+            .unwrap()
+            .unwrap();
+        let follow_up = owner_input(&store, &execution, "behind-the-turn").await;
+        if held {
+            holds.hold(&conversation);
+        }
+        // A window deadline (or shutdown, or budget) cancels the running turn.
+        let run = turn.provider().run.run_id.clone();
+        execution
+            .request_cancel_for(&run, "execution-window-work-deadline")
+            .await
+            .unwrap();
+        let page = execution
+            .store
+            .held_owner_inputs_authenticated(TOKEN, &conversation, 0, 10)
+            .await
+            .unwrap();
+        let follow_up_held = page
+            .held
+            .iter()
+            .any(|input| input.message_id == follow_up.message_id);
+        assert_eq!(follow_up_held, !held, "held={held}");
+        execution.store.close().await;
+        drop(execution);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}

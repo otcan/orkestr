@@ -9,7 +9,7 @@ use axum::{
     Json, Router,
 };
 use orkestr_v2_application::runtime::RuntimeStoreError;
-use orkestr_v2_contracts::{ConversationId, ExecutionWindowState};
+use orkestr_v2_contracts::{ConversationId, ExecutionWindowState, ExecutionWindowStatus};
 use uuid::Uuid;
 
 pub(crate) fn router() -> Router<AppState> {
@@ -44,12 +44,17 @@ struct NativeAttachStatus {
     native_session_id: Option<Uuid>,
     session_id: Option<Uuid>,
     acquired_at_ms: Option<i64>,
-    /// When the hold lapses unless renewed.
+    /// When the hold lapses unless renewed (never after the age deadline).
     expires_at_ms: Option<i64>,
-    /// Core shows no unfinished execution window: V2 holds no native process
-    /// of this conversation (its last window closed after its native tree
-    /// was reaped). A terminal attaches only once this is true while held.
-    native_idle: bool,
+    /// When the hold stops holding however renewed (`acquired_at_ms + 8 h`).
+    max_age_deadline_ms: Option<i64>,
+    /// `true`: Core shows no unfinished execution window, so V2 holds no
+    /// native process of this conversation, and none can still be created
+    /// from a check made before the hold (read under the window controller's
+    /// `opening`). `false`: Core shows an unfinished window. `null`: unknown
+    /// (Core unavailable, or an open still in flight). A terminal attaches
+    /// only on `true` while held.
+    native_idle: Option<bool>,
 }
 
 async fn status(
@@ -73,20 +78,22 @@ async fn status(
         "native_attach_unconfigured",
         "Native attach holds are not configured on this server",
     ))?;
-    // The CLI polls this while attached and closes its terminal unless
-    // `held`: a valid live hold answers 200 `held: true` even when the window
-    // read below is unavailable, which then only reports `native_idle: false`.
+    // The CLI polls this while attached: a valid live hold answers 200
+    // `held: true` even when the window read below is unavailable, which then
+    // reports `native_idle: null` (unknown), never `false`.
     let hold = holds.active(&conversation, crate::deploy_drain::now_ms());
-    let native_idle = match state
-        .store
-        .execution_window_status_authenticated(&credential, &conversation)
-        .await
-    {
-        Ok(window) => window.is_none_or(|window| window.state == ExecutionWindowState::Closed),
-        Err(RuntimeStoreError::Unavailable | RuntimeStoreError::Busy) => false,
-        // Never answer for an unknown or another owner's conversation.
-        Err(error) => return Err(crate::window_http::store_error(error)),
+    let native_idle = match &state.window_controller {
+        Some(controller) => controller.native_idle(&credential, &conversation).await,
+        None => {
+            let window = state
+                .store
+                .execution_window_status_authenticated(&credential, &conversation)
+                .await;
+            window_idle(window)
+        }
     };
+    // Never answer for an unknown or another owner's conversation.
+    let native_idle = native_idle.map_err(crate::window_http::store_error)?;
     Ok(Json(NativeAttachStatus {
         conversation_id: conversation,
         held: hold.is_some(),
@@ -95,9 +102,25 @@ async fn status(
         session_id: hold.as_ref().map(|hold| hold.session_id),
         acquired_at_ms: hold.as_ref().map(|hold| hold.acquired_at_ms),
         expires_at_ms: hold.as_ref().map(|hold| hold.expires_at_ms),
+        max_age_deadline_ms: hold.as_ref().map(|hold| hold.max_age_deadline_ms),
         native_idle,
     })
     .into_response())
+}
+
+/// `Some(true)` without an unfinished window, `Some(false)` with one, `None`
+/// when Core is unavailable. A foreign or unknown conversation is an error.
+pub(crate) fn window_idle(
+    status: Result<Option<ExecutionWindowStatus>, RuntimeStoreError>,
+) -> Result<Option<bool>, RuntimeStoreError> {
+    match status {
+        Ok(window) => {
+            let closed = window.is_none_or(|window| window.state == ExecutionWindowState::Closed);
+            Ok(Some(closed))
+        }
+        Err(RuntimeStoreError::Unavailable | RuntimeStoreError::Busy) => Ok(None),
+        Err(error) => Err(error),
+    }
 }
 
 #[cfg(all(test, target_os = "linux"))]

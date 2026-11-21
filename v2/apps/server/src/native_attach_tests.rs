@@ -24,6 +24,7 @@ fn a_valid_renewed_record_holds_its_conversation_only() {
     assert_eq!(hold.provider, Provider::Codex);
     assert_eq!(hold.acquired_at_ms, NOW - 1_000);
     assert_eq!(hold.expires_at_ms, NOW + 120_000);
+    assert_eq!(hold.max_age_deadline_ms, NOW - 1_000 + MAX_HOLD_AGE_MS);
     // The file names the conversation; another conversation is not held.
     assert!(!case.holds.held(&ConversationId(Uuid::new_v4()), NOW));
 }
@@ -59,6 +60,10 @@ fn a_hold_acquired_more_than_eight_hours_ago_is_ignored_however_renewed() {
     record["acquired_at_ms"] = serde_json::json!(NOW - MAX_HOLD_AGE_MS + 1);
     case.write(&name(&conversation), &record, 0o440);
     assert!(case.holds.held(&conversation, NOW), "under the bound");
+    // The hold's lapse never passes its age deadline, however renewed.
+    let hold = case.holds.active(&conversation, NOW).unwrap();
+    assert_eq!(hold.max_age_deadline_ms, NOW + 1);
+    assert_eq!(hold.expires_at_ms, NOW + 1);
     record["acquired_at_ms"] = serde_json::json!(NOW - MAX_HOLD_AGE_MS);
     case.write(&name(&conversation), &record, 0o440);
     assert!(!case.holds.held(&conversation, NOW), "too old");

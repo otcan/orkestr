@@ -82,8 +82,12 @@ pub(crate) struct Hold {
     pub native_session_id: Uuid,
     pub provider: Provider,
     pub acquired_at_ms: i64,
-    /// When the hold lapses unless renewed: min(expiry, renewal + grace).
+    /// When the hold lapses unless renewed: min(expiry, renewal + grace,
+    /// `max_age_deadline_ms`).
     pub expires_at_ms: i64,
+    /// When the hold stops holding however renewed:
+    /// `acquired_at_ms + MAX_HOLD_AGE_MS`.
+    pub max_age_deadline_ms: i64,
 }
 
 /// The last attach of a conversation that ended.
@@ -151,7 +155,8 @@ impl NativeAttachHolds {
             self.ignored(conversation, "hold_invalid", now_ms);
             return None;
         }
-        if now_ms.saturating_sub(record.acquired_at_ms) >= MAX_HOLD_AGE_MS {
+        let deadline = record.acquired_at_ms.saturating_add(MAX_HOLD_AGE_MS);
+        if now_ms >= deadline {
             if due(&self.aged_at_ms, now_ms) {
                 eprintln!(
                     "WARN orkestr-v2-server native_attach_hold_too_old conversation={conversation} max_age_ms={MAX_HOLD_AGE_MS}"
@@ -161,7 +166,8 @@ impl NativeAttachHolds {
         }
         let lapses = record
             .expires_at_ms
-            .min(record.renewed_at_ms.saturating_add(RENEWAL_GRACE_MS));
+            .min(record.renewed_at_ms.saturating_add(RENEWAL_GRACE_MS))
+            .min(deadline);
         // An expired hold is a terminal that stopped renewing: not an error.
         (now_ms < lapses).then_some(Hold {
             session_id: record.session_id,
@@ -169,6 +175,7 @@ impl NativeAttachHolds {
             provider: record.provider,
             acquired_at_ms: record.acquired_at_ms,
             expires_at_ms: lapses,
+            max_age_deadline_ms: deadline,
         })
     }
 

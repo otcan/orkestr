@@ -406,7 +406,7 @@ impl Controller {
                     continue;
                 }
             };
-            let Ok(entry) = self.entry(conversation) else {
+            let Some(entry) = self.entry_unless_held(conversation) else {
                 continue;
             };
             let owner = self.config.owner_id.clone();

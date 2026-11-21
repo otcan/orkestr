@@ -35,6 +35,23 @@ impl Store {
             .await?
             .0)
     }
+    /// `request_cancel` (a window deadline, shutdown or budget cancellation),
+    /// where the server decides whether a canonical Deep run's cancellation
+    /// holds the queued inputs. It passes `false` only while the owner's
+    /// terminal holds the native session (native-attach hold), which already
+    /// queues them. Core reads no hold itself.
+    pub async fn request_cancel_holding(
+        &self,
+        owner: &OwnerId,
+        run: &RunId,
+        key: &str,
+        hold_inputs: bool,
+    ) -> Result<CancelReceipt> {
+        Ok(self
+            .production_cancel_guarded(owner, run, key, None, None, hold_inputs)
+            .await?
+            .0)
+    }
     /// `hold_inputs`: a canonical Deep Stop cuts the queue at a Stop boundary
     /// and holds every input before it. `false` only for the owner's Stop
     /// while a native-attach hold already queues those inputs (`orkestr

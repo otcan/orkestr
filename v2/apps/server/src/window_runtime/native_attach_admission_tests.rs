@@ -361,3 +361,57 @@ async fn a_held_timer_intent_and_adapter_input_wait_unwithdrawn_then_dispatch_in
     assert_eq!(f.windows(&chat).await, 1);
     controller.queue.close().await;
 }
+
+#[tokio::test]
+async fn native_idle_is_never_true_while_a_pre_hold_open_can_still_create_its_window() {
+    let f = fixture().await;
+    let holds = Holds::new();
+    let chat = f.conversation("in-flight").await;
+    let controller = held(&f, &holds, 8);
+    let idle = || controller.native_idle(BROWSER, &chat);
+    assert_eq!(idle().await.unwrap(), Some(true));
+    // An admission or dispatch that passed its hold check before the hold
+    // existed holds `opening` until its window row exists. The hold appears.
+    let opening = controller.opening.lock().await;
+    holds.hold(&chat);
+    assert_eq!(idle().await.unwrap(), None, "unknown while it is in flight");
+    // That open creates its window, then releases `opening`.
+    let live = f.occupy(&chat, "in-flight").await;
+    drop(opening);
+    assert_eq!(idle().await.unwrap(), Some(false));
+    // Only once that window ran its turn and closed does an attach see idle.
+    sql(
+        &f,
+        "UPDATE execution_windows SET state='closed' WHERE id=?",
+        serde_json::json!([live.window_id.to_string()]),
+    );
+    assert_eq!(idle().await.unwrap(), Some(true));
+    controller.queue.close().await;
+}
+
+#[tokio::test]
+async fn an_open_or_dispatch_that_checked_before_the_hold_rechecks_before_its_window() {
+    let f = fixture().await;
+    let holds = Holds::new();
+    let chat = f.conversation("recheck").await;
+    let controller = held(&f, &holds, 8);
+    let request = f.request(&chat, "recheck").await;
+    let entry = controller.entry(&chat).unwrap();
+    // Admission and dispatch passed their first check; the hold appears
+    // before either creates the window, inside the same `opening` section.
+    let opening = controller.opening.lock().await;
+    holds.hold(&chat);
+    let outcome = controller
+        .open_unless_held(&entry, BROWSER, &f.owner, &chat, &request)
+        .await
+        .unwrap();
+    assert!(matches!(outcome, WindowOutcome::Queued(_)), "only queues");
+    assert!(controller.entry_unless_held(&chat).is_none(), "row kept");
+    drop(opening);
+    assert_eq!(f.windows(&chat).await, 0);
+    assert_eq!(
+        queue_state(&f, &chat, &request).await,
+        QueuedWindowState::Queued
+    );
+    controller.queue.close().await;
+}
