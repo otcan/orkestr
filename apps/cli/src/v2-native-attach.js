@@ -48,13 +48,16 @@ async function v2Activity(session, target) {
   const [execution, window, hold] = await Promise.all([readJson(session, `${base}/execution`), readJson(session, `${base}/window`), readJson(session, `${base}/native-attach`)]);
   const phase = execution.status === 200 ? clean(execution.json?.phase) || "idle" : "idle";
   const windowState = window.status === 200 ? clean(window.json?.state) : "none";
+  const held = hold.status === 200 && hold.json?.held === true;
   return {
     phase,
     runId: execution.json?.run_id || null,
     execution: execution.json || {},
     windowState,
-    held: hold.status === 200 && hold.json?.held === true,
-    busy: activePhases.has(phase) || !["none", "closed"].includes(windowState),
+    held,
+    // The server's word is authoritative: `native_idle` means no unfinished
+    // window, so V2 holds no native process for the chat any more.
+    busy: !(held && hold.json?.native_idle === true) || activePhases.has(phase),
   };
 }
 
