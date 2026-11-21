@@ -21,6 +21,37 @@ def provider_error(value):
     return value if value in PROVIDER_ERRORS else "unknown"
 
 
+# The installed CLI's own compaction summary: a synthetic user frame that
+# replaces native history. These are its only fields.
+COMPACTION_SUMMARY_FIELDS = {"type", "message", "session_id", "parent_tool_use_id", "uuid",
+                             "timestamp", "isReplay", "isSynthetic"}
+COMPACTION_LIMIT = 16
+
+
+def compaction_summary(channel, frame):
+    """Validate the one summary a compact_boundary notice armed; never forwarded.
+
+    A resumed session at its context limit compacts at the start of a turn,
+    before the turn's first answer, so the summary cannot wait for the join.
+    Joining still needs this turn's explicit user_message_uuid afterwards.
+    """
+    require(channel.initialized and channel.active is not None and not channel.terminal
+            and channel.input_uuid is not None and channel.compaction_summaries < COMPACTION_LIMIT)
+    require(set(frame) <= COMPACTION_SUMMARY_FIELDS and frame.get("isSynthetic") is True
+            and frame.get("isReplay", False) is False and frame.get("parent_tool_use_id") is None)
+    value = canonical(frame.get("uuid"))
+    require(value not in (channel.native, channel.input_uuid, channel.terminal_uuid))
+    message = frame.get("message")
+    require(isinstance(message, dict) and set(message) == {"role", "content"}
+            and message["role"] == "user")
+    content = message["content"]
+    require((isinstance(content, str) and content != "") or (
+        isinstance(content, list) and 0 < len(content) <= 128 and all(
+            isinstance(block, dict) and block.get("type") == "text"
+            and isinstance(block.get("text"), str) for block in content)))
+    channel.compaction_summaries += 1
+
+
 class ClaudeChannel:
     def __init__(self, session, catalog_warning=None, quota_observer=None):
         require(catalog_warning is None or callable(catalog_warning))
@@ -56,6 +87,9 @@ class ClaudeChannel:
         self.keepalives = 0
         self.system_notices = 0
         self.progress_notices = 0
+        # A compact_boundary notice arms exactly one compaction summary frame.
+        self.compaction_pending = False
+        self.compaction_summaries = 0
 
     def client(self, request):
         require(not self.poisoned)
@@ -168,6 +202,11 @@ class ClaudeChannel:
         refused = refusal(self, frame)
         if refused is not None:
             return refused
+        if (kind == "user" and self.compaction_pending and self.control is None
+                and frame.get("isSynthetic") is True and "tool_use_result" not in frame):
+            self.compaction_pending = False
+            compaction_summary(self, frame)
+            return None
         if self.tools and self.control is None and (kind in TOOL_NOTICES or (
                 kind == "assistant" and frame.get("parent_tool_use_id") is not None)):
             # Tool results, tool progress and subagent turns of THIS joined
@@ -202,6 +241,8 @@ class ClaudeChannel:
                     and self.system_notices < 256
                     and size <= limit)
             self.system_notices += 1
+            if frame["subtype"] == "compact_boundary":
+                self.compaction_pending = True  # Its summary may precede this turn's join.
             if limit > 16384 and size > 16384 and not self.catalog_warned:
                 self.catalog_warned = True
                 if self.catalog_warning is not None:
