@@ -5,6 +5,7 @@ import io
 import os
 from pathlib import Path
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -187,11 +188,39 @@ class CostTests(unittest.TestCase):
 
     def test_hash_is_cached_until_the_file_changes(self):
         self.path.write_text("one\n")
-        first = instructions.inspect(str(self.path))
+        with self.settled():
+            first = instructions.inspect(str(self.path))
         with mock.patch("os.fdopen", side_effect=AssertionError("read")):
             self.assertEqual(instructions.inspect(str(self.path)), first)
         self.path.write_text("two!\n")
         self.assertNotEqual(instructions.inspect(str(self.path))[0], first[0])
+
+    def settled(self):
+        """The clock moves on, so the file is older than the racily-clean window."""
+        return mock.patch("time.time_ns", return_value=time.time_ns() + 10 ** 10)
+
+    def test_a_fresh_file_is_not_cached_but_an_old_one_is(self):
+        self.path.write_text("one\n")
+        instructions.inspect(str(self.path))
+        self.assertNotIn(str(self.path), instructions._cache)
+        self.path.write_text("two\n")  # Same size, same tick: must be seen.
+        self.assertEqual(instructions.inspect(str(self.path))[0], hashlib.sha256(b"two\n").hexdigest())
+        with self.settled():
+            instructions.inspect(str(self.path))
+        self.assertIn(str(self.path), instructions._cache)
+
+    def test_hash_read_stops_at_the_size_seen_at_fstat(self):
+        self.path.write_bytes(b"a" * 1000)
+        real = os.fstat
+
+        def grow(fd):
+            info = real(fd)
+            with open(self.path, "ab") as handle:
+                handle.write(b"b" * 5000)
+            return info
+        with mock.patch("os.fstat", side_effect=grow):
+            version, size = instructions.inspect(str(self.path))
+        self.assertEqual((version, size), (hashlib.sha256(b"a" * 1000).hexdigest(), 1000))
 
     def test_over_the_hard_bound_is_not_read_and_the_version_follows_the_stat(self):
         with open(self.path, "wb") as handle:

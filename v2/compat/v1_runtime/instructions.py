@@ -23,10 +23,12 @@ with the byte count and the operator gets one alert per file per day.
 import hashlib
 import os
 import stat
+import time
 
 SOFT_BYTES = 32 * 1024
 HARD_BYTES = 16 * 1024 * 1024  # Above this the file is never read: its version is its stat tuple.
 CHUNK = 64 * 1024
+RACY_S = 2
 LINE = ("[Chat rules v%s: before answering, read %s (cat it) unless you already read this version "
         "in this session, and follow it.]")
 
@@ -87,17 +89,25 @@ def inspect(path):
             digest.update(repr(key).encode())
         else:
             try:
+                # Never read past the size seen at fstat: a growing file cannot keep this loop going.
+                left = min(info.st_size, HARD_BYTES)
                 with os.fdopen(os.dup(fd), "rb") as handle:
-                    while True:
-                        chunk = handle.read(CHUNK)
+                    while left > 0:
+                        chunk = handle.read(min(CHUNK, left))
                         if not chunk:
                             break
+                        left -= len(chunk)
                         digest.update(chunk)
             except OSError:
                 raise ValueError("instructions_unreadable") from None
-        if len(_cache) >= 256:
-            _cache.clear()
-        _cache[path] = (key, digest.hexdigest())
+        # Racily clean: a same-size edit within one coarse timestamp tick looks unchanged,
+        # so a digest of a file touched in the last RACY_S seconds is never cached.
+        if time.time_ns() - max(info.st_mtime_ns, info.st_ctime_ns) >= RACY_S * 10 ** 9:
+            if len(_cache) >= 256:
+                _cache.clear()
+            _cache[path] = (key, digest.hexdigest())
+        else:
+            _cache.pop(path, None)
         return digest.hexdigest(), info.st_size
     finally:
         os.close(fd)
