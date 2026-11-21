@@ -52,6 +52,40 @@ fn an_expired_or_unrenewed_record_no_longer_holds() {
 }
 
 #[test]
+fn a_hold_acquired_more_than_eight_hours_ago_is_ignored_however_renewed() {
+    let case = Holds::new();
+    let conversation = ConversationId(Uuid::new_v4());
+    let mut record = Holds::record(&conversation, NOW);
+    record["acquired_at_ms"] = serde_json::json!(NOW - MAX_HOLD_AGE_MS + 1);
+    case.write(&name(&conversation), &record, 0o440);
+    assert!(case.holds.held(&conversation, NOW), "under the bound");
+    record["acquired_at_ms"] = serde_json::json!(NOW - MAX_HOLD_AGE_MS);
+    case.write(&name(&conversation), &record, 0o440);
+    assert!(!case.holds.held(&conversation, NOW), "too old");
+    assert!(!case.holds.held(&conversation, NOW + 1), "still too old");
+}
+
+#[test]
+fn a_queue_backlog_of_a_held_conversation_alerts_at_most_once_a_minute() {
+    let case = Holds::new();
+    let conversation = ConversationId(Uuid::new_v4());
+    let holds = &case.holds;
+    assert!(holds
+        .backlog_alert(&conversation, HELD_QUEUE_ALERT, NOW)
+        .is_none());
+    let line = holds
+        .backlog_alert(&conversation, HELD_QUEUE_ALERT + 1, NOW)
+        .unwrap();
+    let prefix = "ALERT orkestr-v2-server native_attach_queue_backlog ";
+    assert!(line.starts_with(prefix));
+    assert!(line.contains(&format!("queued={}", HELD_QUEUE_ALERT + 1)));
+    let within = holds.backlog_alert(&conversation, 40, NOW + 59_999);
+    assert!(within.is_none(), "one line a minute");
+    let later = holds.backlog_alert(&conversation, 40, NOW + 60_000);
+    assert!(later.is_some());
+}
+
+#[test]
 fn invalid_or_foreign_records_hold_nothing() {
     let case = Holds::new();
     let conversation = ConversationId(Uuid::new_v4());
@@ -122,6 +156,8 @@ fn records_outside_root_custody_hold_nothing() {
         dir: case.dir.clone(),
         owner_uid: uid.wrapping_add(1),
         warned_at_ms: AtomicI64::new(i64::MIN),
+        aged_at_ms: AtomicI64::new(i64::MIN),
+        backlog_at_ms: AtomicI64::new(i64::MIN),
     };
     assert!(!foreign.held(&conversation, NOW), "wrong owner");
     // A second hard link to the record.

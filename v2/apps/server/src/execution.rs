@@ -338,9 +338,12 @@ async fn stop_run(
             "Stop unavailable",
         ));
     }
+    // While the owner's terminal holds this native session its inputs are
+    // queued already: the Stop holds none of them (`orkestr attach --interrupt`).
+    let boundary = fast || !state.native_attach_held(&conversation);
     let (receipt, issued_control) = scope
         .store
-        .stop_execution_control_authenticated(&credential, &conversation, input)
+        .stop_execution_control_authenticated_holding(&credential, &conversation, input, boundary)
         .await
         .map_err(stop_error)?;
     if !receipt.is_valid()

@@ -8,11 +8,21 @@ use axum::{
     routing::get,
     Json, Router,
 };
+use orkestr_v2_application::runtime::RuntimeStoreError;
 use orkestr_v2_contracts::{ConversationId, ExecutionWindowState};
 use uuid::Uuid;
 
 pub(crate) fn router() -> Router<AppState> {
     Router::new().route("/api/v2/conversations/{id}/native-attach", get(status))
+}
+
+impl AppState {
+    /// The owner's terminal holds this conversation's native session now.
+    pub(crate) fn native_attach_held(&self, conversation: &ConversationId) -> bool {
+        self.native_attach
+            .as_ref()
+            .is_some_and(|holds| holds.held(conversation, crate::deploy_drain::now_ms()))
+    }
 }
 
 /// The health features, with `native_attach_hold_v1` when this server
@@ -63,14 +73,20 @@ async fn status(
         "native_attach_unconfigured",
         "Native attach holds are not configured on this server",
     ))?;
-    // Authenticates this conversation for the owner before reading its hold.
-    let window = state
+    // The CLI polls this while attached and closes its terminal unless
+    // `held`: a valid live hold answers 200 `held: true` even when the window
+    // read below is unavailable, which then only reports `native_idle: false`.
+    let hold = holds.active(&conversation, crate::deploy_drain::now_ms());
+    let native_idle = match state
         .store
         .execution_window_status_authenticated(&credential, &conversation)
         .await
-        .map_err(crate::window_http::store_error)?;
-    let native_idle = window.is_none_or(|window| window.state == ExecutionWindowState::Closed);
-    let hold = holds.active(&conversation, crate::deploy_drain::now_ms());
+    {
+        Ok(window) => window.is_none_or(|window| window.state == ExecutionWindowState::Closed),
+        Err(RuntimeStoreError::Unavailable | RuntimeStoreError::Busy) => false,
+        // Never answer for an unknown or another owner's conversation.
+        Err(error) => return Err(crate::window_http::store_error(error)),
+    };
     Ok(Json(NativeAttachStatus {
         conversation_id: conversation,
         held: hold.is_some(),

@@ -245,3 +245,116 @@ async fn a_deploy_drain_counts_a_held_conversation_with_only_queued_intents_as_q
     drain.set(false);
     controller.queue.close().await;
 }
+
+/// A due timer occurrence of `conversation`, admitted by the durable timer
+/// controller with its Deep window intent (a `timer:` queue row).
+async fn timer_intent(f: &Fixture, conversation: &ConversationId) {
+    use orkestr_v2_store_sqlite::history_import::timers::{
+        authority::DurableTimerEnable, TimerEnableRequest, TimerImportRequest, TimerSchedule,
+    };
+    const MACHINE: &str = "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef";
+    const CREATOR: &str = "browser:synthetic-timer-creator";
+    f.store.save_session(MACHINE, &f.owner).await.unwrap();
+    f.store.save_session(CREATOR, &f.owner).await.unwrap();
+    let bound = f
+        .store
+        .authorize_supervisor(
+            MACHINE,
+            ProductionSupervisorConfig {
+                provider: ProviderKind::Codex,
+                namespace: "synthetic-timer-provider".into(),
+                supervisor_key: "timer-controller".into(),
+                takeover: ProductionTakeover::First,
+            },
+        )
+        .await
+        .unwrap();
+    let namespace = Uuid::new_v4();
+    f.store
+        .import_dormant_timer(
+            CREATOR,
+            &f.owner,
+            &TimerImportRequest {
+                namespace,
+                source_namespace: "synthetic-source".into(),
+                source_timer_id: "synthetic-weekly".into(),
+                source_enabled: true,
+                schedule: TimerSchedule::Interval {
+                    every_ms: 7 * 86_400_000,
+                },
+            },
+        )
+        .await
+        .unwrap();
+    f.store
+        .enable_durable_timer(
+            CREATOR,
+            &f.owner,
+            &DurableTimerEnable {
+                timer: TimerEnableRequest {
+                    namespace,
+                    expected_revision: 1,
+                    request_key: "synthetic-enable".into(),
+                    conversation_id: conversation.clone(),
+                },
+                instruction: "Synthetic timer instruction".into(),
+            },
+        )
+        .await
+        .unwrap();
+    sql(
+        f,
+        "UPDATE dormant_timers SET next_due_ms=next_due_ms-30*86400000 WHERE namespace=?",
+        serde_json::json!([namespace.to_string()]),
+    );
+    let mut timers = crate::timer_http::durable::DurableTimerController::new(bound)
+        .with_window_dispatch(Arc::new(|| {}));
+    assert_eq!(timers.tick().await.unwrap().admitted, 1);
+}
+
+/// Item order and state of a conversation's queue rows, oldest first.
+fn rows(f: &Fixture, conversation: &ConversationId) -> Vec<(String, String)> {
+    let value = sql(
+        f,
+        "SELECT request_key,state FROM execution_window_queue WHERE conversation_id=? ORDER BY rowid",
+        serde_json::json!([conversation.to_string()]),
+    );
+    serde_json::from_value(value).unwrap()
+}
+
+#[tokio::test]
+async fn a_held_timer_intent_and_adapter_input_wait_unwithdrawn_then_dispatch_in_order() {
+    let f = fixture().await;
+    let holds = Holds::new();
+    let chat = f.conversation("timer-held").await;
+    holds.hold(&chat);
+    let controller = held(&f, &holds, 8);
+    // A timer comes due and an adapter input arrives while the owner's
+    // terminal holds the chat: both are durable intents, neither runs.
+    timer_intent(&f, &chat).await;
+    let adapter = f.request(&chat, "adapter-while-held").await;
+    assert!(matches!(
+        controller.process(BROWSER, &f.owner, &chat, &adapter).await,
+        Ok(WindowOutcome::Queued(_))
+    ));
+    let queued = rows(&f, &chat);
+    assert_eq!(queued.len(), 2);
+    assert!(queued[0].0.starts_with("timer:"), "{queued:?}");
+    assert_eq!(queued[1].0, adapter.request_key);
+    for _ in 0..3 {
+        controller.queue.wake();
+        controller.dispatch_once().await;
+    }
+    assert_eq!(f.windows(&chat).await, 0);
+    assert!(queued.iter().all(|(_, state)| state == "queued"));
+    assert_eq!(rows(&f, &chat), queued, "never withdrawn while held");
+    // Released: the timer's intent opens the window first; the adapter input
+    // keeps its place behind it. Nothing is withdrawn.
+    holds.release(&chat);
+    controller.queue.wake();
+    controller.dispatch_once().await;
+    let states: Vec<_> = rows(&f, &chat).into_iter().map(|(_, state)| state).collect();
+    assert_eq!(states, vec!["dispatched", "queued"]);
+    assert_eq!(f.windows(&chat).await, 1);
+    controller.queue.close().await;
+}

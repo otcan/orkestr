@@ -174,7 +174,7 @@ impl ConfiguredExecution {
                 // Inputs received during an active turn remain ordered in Core;
                 // neither queued text nor browser JSON can mint a new capability.
                 let Some(capability) = self
-                    .next_with_liveness(shutdown, heartbeat, || {
+                    .next_after_turn(shutdown, heartbeat, || {
                         pump.check_broker_liveness().map_err(|error| {
                             eprintln!(
                                 "owned execution accepted broker liveness refused: {error:?}"

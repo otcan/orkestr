@@ -1,6 +1,7 @@
 //! Native-attach holds through the actual Deep input loop against an
-//! isolated Store; no provider runs. While held the writer claims nothing and
-//! an idle wait ends; after release the same input runs on the same session
+//! isolated Store; no provider runs. A window admitted before the hold runs
+//! its own turn; afterwards the writer claims nothing and an idle wait ends
+//! while held, and after release the next input runs on the same session
 //! binding and native session. Only the first run after an ended attach
 //! carries the internal note.
 use super::*;
@@ -146,7 +147,7 @@ async fn owner_input(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_held_writer_claims_nothing_and_the_same_session_runs_the_input_after_release() {
+async fn a_window_admitted_before_the_hold_runs_its_turn_then_takes_nothing_until_release() {
     let holds = Holds::new();
     let (execution, store, root) = execution(&holds).await;
     let conversation = execution.config.conversation_id.clone();
@@ -158,34 +159,46 @@ async fn a_held_writer_claims_nothing_and_the_same_session_runs_the_input_after_
         .await
         .unwrap()
         .deep;
+    let admitted = owner_input(&store, &execution, "admitted-before-hold").await;
+    // The hold appears after the window was admitted, before its bootstrap.
+    // Bootstrap and the first claim are not gated: the turn the window was
+    // admitted for runs, so the window can close canonically after it.
     holds.hold(&conversation);
-    let input = owner_input(&store, &execution, "while-held").await;
-    // Neither the input loop nor an idle wait starts anything while held.
-    assert!(execution
+    let first = execution
         .next(&mut shutdown, &mut heartbeat)
+        .await
+        .unwrap()
+        .expect("the window's own input runs");
+    assert_eq!(first.message_id(), &admitted.message_id);
+    let first_run = first.provider().run.run_id.clone();
+    accept(&execution, &store, first.provider()).await;
+    // After that turn the writer takes nothing while held: its input loop
+    // ends there (Codex: next_after_turn; Claude: wait_eligible_after_turn)
+    // and the caller reaps the native tree and closes the window.
+    let waiting = owner_input(&store, &execution, "while-held").await;
+    assert!(execution
+        .next_after_turn(&mut shutdown, &mut heartbeat, || Ok(()))
         .await
         .unwrap()
         .is_none());
     assert!(!execution
-        .wait_eligible(&mut shutdown, &mut heartbeat)
+        .wait_eligible_after_turn(&mut shutdown, &mut heartbeat)
         .await
         .unwrap());
-    assert!(
-        store
-            .execution_status(&execution.owner, &conversation)
-            .await
-            .unwrap()
-            .is_none_or(|status| status.run_id.is_none()),
-        "no run was admitted while held"
-    );
-    // Released: the queued input runs on the same binding and native session.
+    let status = store
+        .execution_status(&execution.owner, &conversation)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(status.run_id, Some(first_run), "no run while held");
+    // Released: the waiting input runs on the same binding and native session.
     holds.release(&conversation);
     let turn = execution
-        .next(&mut shutdown, &mut heartbeat)
+        .next_after_turn(&mut shutdown, &mut heartbeat, || Ok(()))
         .await
         .unwrap()
         .expect("the held input runs after release");
-    assert_eq!(turn.message_id(), &input.message_id);
+    assert_eq!(turn.message_id(), &waiting.message_id);
     let binding = &turn.provider().binding;
     assert_eq!(binding.session_id, before.session_id);
     assert_eq!(binding.native_session_id, Some(native().to_string()));

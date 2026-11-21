@@ -55,7 +55,11 @@ impl ConfiguredExecution {
             }
             // Old queued input remains ordinary durable FIFO input. Held input
             // is never made eligible by acceptance, reap, or a process restart.
-            if !self.wait_eligible(&mut shutdown, &mut heartbeat).await? {
+            // A native-attach hold also ends this wait (canonical close below).
+            if !self
+                .wait_eligible_after_turn(&mut shutdown, &mut heartbeat)
+                .await?
+            {
                 self.retire_terminal(&run, proof).await?;
                 return Ok(());
             }

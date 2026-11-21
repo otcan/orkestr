@@ -370,12 +370,7 @@ pub(crate) async fn handoff_receipt(
 /// a terminal (`orkestr attach`): neither a handoff nor a reset may replace
 /// or reset a native session that has another writer.
 fn native_attach_free(state: &AppState, conversation: &ConversationId) -> Result<(), Error> {
-    let now = crate::deploy_drain::now_ms();
-    if state
-        .native_attach
-        .as_ref()
-        .is_some_and(|holds| holds.held(conversation, now))
-    {
+    if state.native_attach_held(conversation) {
         return Err(Error(
             StatusCode::CONFLICT,
             "native_attach_held",

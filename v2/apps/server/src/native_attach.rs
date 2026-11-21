@@ -31,8 +31,15 @@ const ENDED_FORMAT: &str = "orkestr-native-attach-ended-v1";
 pub(crate) const RENEWAL_GRACE_MS: i64 = 5 * 60 * 1000;
 /// How far a writer's clock may lead this process's clock.
 const CLOCK_SKEW_MS: i64 = 60 * 1000;
-/// At most one ignored-record line per this interval.
+/// At most one line of each kind (ignored record, too old, backlog) per this
+/// interval.
 const WARNING_INTERVAL_MS: i64 = 60 * 1000;
+/// A hold acquired longer ago than this is ignored, however often renewed: a
+/// forgotten or stuck terminal never holds a conversation indefinitely.
+pub(crate) const MAX_HOLD_AGE_MS: i64 = 8 * 60 * 60 * 1000;
+/// More queued window intents than this for one held conversation raise an
+/// operator alert: they count toward the owner-wide queue cap (256).
+pub(crate) const HELD_QUEUE_ALERT: usize = 32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -91,6 +98,8 @@ pub(crate) struct NativeAttachHolds {
     dir: PathBuf,
     owner_uid: u32,
     warned_at_ms: AtomicI64,
+    aged_at_ms: AtomicI64,
+    backlog_at_ms: AtomicI64,
 }
 
 impl NativeAttachHolds {
@@ -111,6 +120,8 @@ impl NativeAttachHolds {
             dir: dir.to_owned(),
             owner_uid,
             warned_at_ms: AtomicI64::new(i64::MIN),
+            aged_at_ms: AtomicI64::new(i64::MIN),
+            backlog_at_ms: AtomicI64::new(i64::MIN),
         })
     }
 
@@ -138,6 +149,14 @@ impl NativeAttachHolds {
             && record.renewed_at_ms <= now_ms.saturating_add(CLOCK_SKEW_MS);
         if !valid {
             self.ignored(conversation, "hold_invalid", now_ms);
+            return None;
+        }
+        if now_ms.saturating_sub(record.acquired_at_ms) >= MAX_HOLD_AGE_MS {
+            if due(&self.aged_at_ms, now_ms) {
+                eprintln!(
+                    "WARN orkestr-v2-server native_attach_hold_too_old conversation={conversation} max_age_ms={MAX_HOLD_AGE_MS}"
+                );
+            }
             return None;
         }
         let lapses = record
@@ -193,19 +212,36 @@ impl NativeAttachHolds {
 
     /// Identifiers and a closed cause only, at most once per interval.
     fn ignored(&self, conversation: &ConversationId, cause: &str, now_ms: i64) {
-        let last = self.warned_at_ms.load(Ordering::Acquire);
-        if now_ms.saturating_sub(last) < WARNING_INTERVAL_MS
-            || self
-                .warned_at_ms
-                .compare_exchange(last, now_ms, Ordering::AcqRel, Ordering::Acquire)
-                .is_err()
-        {
-            return;
+        if due(&self.warned_at_ms, now_ms) {
+            eprintln!(
+                "WARN orkestr-v2-server native_attach_record_ignored conversation={conversation} cause={cause}"
+            );
         }
-        eprintln!(
-            "WARN orkestr-v2-server native_attach_record_ignored conversation={conversation} cause={cause}"
-        );
     }
+
+    /// The operator alert for a held conversation with more than
+    /// `HELD_QUEUE_ALERT` queued window intents, at most once per interval.
+    pub(crate) fn backlog_alert(
+        &self,
+        conversation: &ConversationId,
+        queued: usize,
+        now_ms: i64,
+    ) -> Option<String> {
+        (queued > HELD_QUEUE_ALERT && due(&self.backlog_at_ms, now_ms)).then(|| {
+            format!(
+                "ALERT orkestr-v2-server native_attach_queue_backlog conversation={conversation} queued={queued} alert_above={HELD_QUEUE_ALERT}"
+            )
+        })
+    }
+}
+
+/// Whether a rate-limited line is due now (and claim it).
+fn due(last_at_ms: &AtomicI64, now_ms: i64) -> bool {
+    let last = last_at_ms.load(Ordering::Acquire);
+    now_ms.saturating_sub(last) >= WARNING_INTERVAL_MS
+        && last_at_ms
+            .compare_exchange(last, now_ms, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
 }
 
 /// The internal note for the first Deep run after `ended`; provider input

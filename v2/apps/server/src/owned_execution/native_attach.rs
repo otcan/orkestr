@@ -1,10 +1,16 @@
 //! Native-attach holds in a window's Deep writer (`crate::native_attach`).
 //!
 //! While the owner works in this conversation's native session from a
-//! terminal the writer claims no input and starts no native process: its
-//! input loop ends as after the last input, so the native tree is reaped and
-//! the window closes normally (no error, no reconciliation). Fast, Worker and
-//! parallel Deep slot factories carry no holds: each has its own session
+//! terminal the writer takes no further input. The hold is checked only where
+//! the writer's input loop ends with a canonical window close: after a
+//! completed Codex turn (`next_after_turn`) and after an accepted Claude turn
+//! (`wait_eligible_after_turn`). The native tree is reaped there and the
+//! window closes as after its last input: no error, no reconciliation, no
+//! withdrawn queue row. Bootstrap and a window's first claim are never gated,
+//! because a window that ran no turn has no canonical close; a window admitted
+//! just before the hold runs the turn it was admitted for and then closes, and
+//! `GET /native-attach` reports `native_idle` only after that. Fast, Worker
+//! and parallel Deep slot factories carry no holds: each has its own session
 //! binding and native session, never this one.
 use super::*;
 use orkestr_v2_store_sqlite::ConsumedProviderDispatch;
