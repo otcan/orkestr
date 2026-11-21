@@ -137,6 +137,34 @@ class Selected(unittest.TestCase):
         self.assertNotIn('deploy_maintenance_marker',json.loads((package/'service.json').read_bytes()))
         self.assertFalse(Path(marker).exists(),'packaging never clears or creates the admission hold')
 
+    def test_fast_companion_switch_reaches_the_sealed_package_only_when_true(self):
+        # docs/v2/single-agent-windows.md: the plan is the supported route to
+        # the owner's composition choice; absent or false stays one agent.
+        source=self.current_source();r=self.root
+        for index in range(5):
+            state=r/f'role-state-{index}';state.mkdir(mode=0o700);os.chown(state,995,986)
+        roles=[{'workspace':str(r/'workspace'),'state_root':str(r/f'role-state-{index}')} for index in range(5)]
+        self.plan['roles']={'fast':roles[0],'workers':roles[1:]}
+        for value,expected in ((None,None),(False,None),(True,True)):
+            with self.subTest(value=value):
+                if value is None:self.plan.pop('legacy_companions',None)
+                else:self.plan['legacy_companions']=value
+                shutil.rmtree(r/'release',ignore_errors=True)
+                for name in ('ledger','ep'):shutil.rmtree(r/name,ignore_errors=True)
+                selected.prepare(self.plan)
+                package=r/'release/package'
+                beta=json.loads((package/'beta.json').read_bytes())
+                self.assertEqual(beta.get('legacy_companions'),expected)
+                self.assertIn('fast',beta['roles'])
+                self.assertNotIn('legacy_companions',json.loads((package/'service.json').read_bytes()))
+                with authority(REPO,source) as (_,manager,_):
+                    loaded=manager.Package(package,sha(package/'manifest.json'))
+                    self.assertEqual(loaded.beta.get('legacy_companions',False),bool(value))
+        self.plan['legacy_companions']='true'
+        shutil.rmtree(r/'release',ignore_errors=True)
+        with self.assertRaisesRegex(RuntimeError,'legacy companions must be boolean'):selected.prepare(self.plan)
+        self.assertFalse((r/'release').exists())
+
     def test_maintenance_alias_or_core_home_path_refuses_before_output(self):
         for marker in ('relative',str(self.root/'home'/'hold'),'/srv/example/../hold','/srv/example//hold'):
             self.plan['deploy_maintenance_marker']=marker

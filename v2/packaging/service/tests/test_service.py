@@ -276,6 +276,41 @@ class ServiceTests(unittest.TestCase):
             with self.subTest(value=value),self.assertRaisesRegex(RuntimeError,'window capacity'):
                 validate(json.dumps(dict(base,max_active_windows=value)).encode())
 
+    def test_fast_companion_switch_is_an_optional_boolean_beta_field(self):
+        # docs/v2/single-agent-windows.md: absent means one agent per conversation.
+        from beta_config import validate
+        base={'schema_version':1,'owner_id':'11111111-1111-4111-8111-111111111111',
+              'conversation_id':'33333333-3333-4333-8333-333333333333',
+              'manager_socket':'/run/example/control.sock','launcher':'/opt/example/launcher',
+              'launcher_sha256':'a'*64,'workspace':'/srv/native-readonly',
+              'namespace':'synthetic','supervisor_key':'synthetic.deep'}
+        self.assertNotIn('legacy_companions',validate(json.dumps(base).encode()))
+        for value in (True,False):
+            self.assertIs(validate(json.dumps(dict(base,legacy_companions=value)).encode())['legacy_companions'],value)
+        for value in (1,0,'true',None,[],{}):
+            with self.subTest(value=value),self.assertRaisesRegex(RuntimeError,'legacy companions must be boolean'):
+                validate(json.dumps(dict(base,legacy_companions=value)).encode())
+
+    def test_selected_plan_fast_companion_switch_needs_a_fast_role(self):
+        from selected import OPTIONAL, optional
+        self.assertIn('legacy_companions', OPTIONAL)
+        optional({'legacy_companions': False})
+        optional({'roles': {}, 'legacy_companions': True})
+        for value in (1, 'true', None):
+            with self.subTest(value=value), self.assertRaisesRegex(RuntimeError, 'must be boolean'):
+                optional({'roles': {}, 'legacy_companions': value})
+        # Enabling companions without any Fast role would silently start nothing.
+        with self.assertRaisesRegex(RuntimeError, 'require a Fast role'):
+            optional({'legacy_companions': True})
+        access = {'providers': True, 'environment': {'HOME': '/home/service', 'PATH': '/usr/bin:/bin'}}
+        host = {'code_mode_host': '/opt/codex/bin/codex-code-mode-host', 'code_mode_host_sha256': 'c' * 64}
+        claude = {'executable': '/opt/claude/bin/claude', 'account': '/srv/claude/account',
+                  'workspace': '/srv/claude/workspace', 'home': '/srv/claude/home',
+                  'temporary': '/srv/claude/tmp'}
+        optional({'legacy_companions': True, 'claude': dict(claude, fast=True), 'host_full_access': access, **host})
+        with self.assertRaisesRegex(RuntimeError, 'require a Fast role'):
+            optional({'legacy_companions': True, 'claude': dict(claude, fast=False), 'host_full_access': access, **host})
+
     def test_provisioned_home_preserves_existing_state(self):
         home=self.root/'home';home.mkdir(mode=0o700)
         original=b'synthetic existing database bytes, not an empty database'

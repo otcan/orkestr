@@ -171,7 +171,7 @@ def validate(raw):
     require(type(raw) is bytes and len(raw) <= MAX_BETA_CONFIG_BYTES, 'bounded beta config required')
     value = json.loads(raw.decode('utf-8'), object_pairs_hook=unique,
                        parse_constant=lambda _: (_ for _ in ()).throw(RuntimeError('invalid beta number')))
-    require(type(value) is dict and set(value) - {'roles', 'workspace_exec', 'additional_workspace_exec', 'max_active_windows', 'host_full_access', 'claude', 'window_max_minutes', 'conversation_window_max_minutes', 'conversation_workspaces', 'provider_routing', 'codex_default_model', 'identity_split', 'managed_host', 'deploy_maintenance_marker', 'release_interruption_dir', 'native_attach_dir'} == FIELDS, 'closed beta config fields required')
+    require(type(value) is dict and set(value) - {'roles', 'legacy_companions', 'workspace_exec', 'additional_workspace_exec', 'max_active_windows', 'host_full_access', 'claude', 'window_max_minutes', 'conversation_window_max_minutes', 'conversation_workspaces', 'provider_routing', 'codex_default_model', 'identity_split', 'managed_host', 'deploy_maintenance_marker', 'release_interruption_dir', 'native_attach_dir'} == FIELDS, 'closed beta config fields required')
     require(type(value['schema_version']) is int and value['schema_version'] == 1, 'beta schema version')
     for name in ('owner_id', 'conversation_id'):
         text = value[name]
@@ -222,6 +222,8 @@ def validate(raw):
                     'beta role launcher digest required')
             launchers.add(role['launcher'])
         require(len(launchers)==5 and value['launcher'] not in launchers,'distinct beta role launchers required')
+    # Owner-selected Fast companion composition; absent means one agent.
+    require(type(value.get('legacy_companions', False)) is bool, 'legacy companions must be boolean')
     if 'max_active_windows' in value:
         capacity = value['max_active_windows']
         require(type(capacity) is int and 1 <= capacity <= 12, 'bounded beta window capacity required')

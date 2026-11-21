@@ -11,12 +11,23 @@ Keeping `roles.fast` or `claude.fast` in an older package does not enable a new
 companion. The default also advertises Fast as unconfigured while preserving
 Worker discovery. No schema or conversation-history conversion is needed.
 
-`legacy_companions: true` in the root-controlled `beta.json` is a deprecated,
-operator-only transition switch for historical composition qualification. It is
-never inferred from a client request, enabled by new provisioning, selected in
-the UI or used as an automatic fallback. Historical dual-role process fixtures
-set it explicitly; new single-agent acceptance omits the field for both
-providers. The adapter has its own matching operator configuration.
+`legacy_companions: true` in the root-controlled `beta.json` is an
+operator-only composition switch. It restores the read-only Fast companion
+(and the parallel reply pool) beside each conversation agent, so a short
+owner question gets a quick answer while a long agent turn is still running.
+It is never inferred from a client request, enabled by new provisioning,
+selected in the UI or used as an automatic fallback: turning it on is an
+owner decision. Historical dual-role process fixtures set it explicitly; new
+single-agent acceptance omits the field for both providers.
+
+The selected service plan carries the switch: `legacy_companions` (boolean,
+optional) is copied into the packaged `beta.json` only when it is `true`, so
+absent and `false` produce the same single-agent package. A plan that sets it
+without a Fast role (`roles`, or `claude.fast` for Claude) is refused, because
+it would start nothing. The adapter has its own matching operator
+configuration (`legacy_companions` at the top level of its service JSON).
+Switch both in the same release: the adapter alone cannot start Fast, and
+the server alone runs Fast replies that a single-agent adapter never exports.
 
 Changing the default does not authorize accepting an old proposal, forgetting
 an unresolved child or replaying an input. Existing windows must pass their

@@ -88,7 +88,7 @@ def pair_bytes(plan):
     return pair
 
 
-OPTIONAL = {'resource_namespace', 'agent_timer_grants', 'qualification_record', 'deploy_maintenance_marker', 'release_interruption_dir', 'native_attach_dir', 'managed_host', 'operator_recovery', 'desk_login', 'managed_operations', 'managed_limits', 'managed_workers', 'managed_worker_execution_budget_ms', 'attachment_export_dir', 'password_rotation_ready', 'authority_uid', 'authority_gid', 'executor_uid', 'executor_gid', 'provider_home', 'roles', 'preserve_state', 'workspace_exec', 'additional_workspace_exec', 'max_active_windows', 'host_full_access',
+OPTIONAL = {'resource_namespace', 'agent_timer_grants', 'qualification_record', 'deploy_maintenance_marker', 'release_interruption_dir', 'native_attach_dir', 'managed_host', 'operator_recovery', 'desk_login', 'managed_operations', 'managed_limits', 'managed_workers', 'managed_worker_execution_budget_ms', 'attachment_export_dir', 'password_rotation_ready', 'authority_uid', 'authority_gid', 'executor_uid', 'executor_gid', 'provider_home', 'roles', 'preserve_state', 'workspace_exec', 'additional_workspace_exec', 'max_active_windows', 'legacy_companions', 'host_full_access',
             'window_max_minutes', 'conversation_window_max_minutes', 'conversation_workspaces', 'provider_routing',
             'codex_default_model', 'code_mode_host', 'code_mode_host_sha256', 'claude', 'claude_quota_projection', 'codex_quota_projection', 'live_map', 'desktop_broker', 'provider_quota', 'timer_config', 'whatsapp_chats', 'v1_chat_icons_dir', 'metrics_port'}
 CLAUDE_PATHS = ('executable', 'account', 'workspace', 'home', 'temporary')
@@ -173,6 +173,15 @@ def optional(plan):
         home = Path(plan['home'])
         require(Path(directory)!=home and home not in Path(directory).parents,
                 'native attach directory must be outside Core home')
+    if 'legacy_companions' in plan:
+        # Owner-selected composition (docs/v2/single-agent-windows.md): true
+        # starts the read-only Fast companion beside each conversation agent.
+        # Without a Fast role it would silently start nothing, so refuse.
+        companions=plan['legacy_companions']
+        require(type(companions) is bool,'legacy companions must be boolean')
+        require(not companions or 'roles' in plan
+                or (type(plan.get('claude')) is dict and plan['claude'].get('fast') is True),
+                'legacy companions require a Fast role')
     if 'attachment_export_dir' in plan:
         value=plan['attachment_export_dir']
         require(type(value) is str and value.startswith('/') and 1<len(value)<=4096
@@ -447,6 +456,10 @@ def prepare(plan):
                 beta['additional_workspace_exec']=plan['additional_workspace_exec']
             if 'max_active_windows' in plan:
                 beta['max_active_windows']=plan['max_active_windows']
+            # Absent and false are the same single-agent default; only an
+            # explicit true reaches the package (and its config diff).
+            if plan.get('legacy_companions') is True:
+                beta['legacy_companions']=True
             for key in ('deploy_maintenance_marker', 'release_interruption_dir', 'native_attach_dir', 'window_max_minutes', 'conversation_window_max_minutes', 'conversation_workspaces', 'provider_routing', 'codex_default_model'):
                 if key in plan:
                     beta[key]=plan[key]
