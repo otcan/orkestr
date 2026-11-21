@@ -179,7 +179,9 @@ impl Store {
             sqlx::query_scalar::<_,i64>("SELECT (SELECT count(*) FROM reasoning_inbox WHERE conversation_id=? AND state='queued') + (SELECT count(*) FROM execution_window_queue WHERE owner_id=? AND conversation_id=? AND state='queued')")
                 .bind(conversation.to_string()).bind(owner.to_string()).bind(conversation.to_string()).fetch_one(&mut *tx).await.map_err(db)?
         };
-        let unsafe_bindings: i64 = sqlx::query_scalar("SELECT count(*) FROM session_bindings WHERE owner_id=? AND conversation_id=? AND state IN ('busy','lost','blocked')")
+        // As for a native reset: a binding without a native session has no
+        // process or transcript to protect.
+        let unsafe_bindings: i64 = sqlx::query_scalar("SELECT count(*) FROM session_bindings WHERE owner_id=? AND conversation_id=? AND state IN ('busy','lost','blocked') AND native_session_id IS NOT NULL")
             .bind(owner.to_string()).bind(conversation.to_string()).fetch_one(&mut *tx).await.map_err(db)?;
         let children: i64 = sqlx::query_scalar("SELECT count(*) FROM worker_provider_delegations d WHERE d.owner_id=? AND d.conversation_id=? AND ((d.admitted_run_id IS NULL AND d.state='delegated') OR (d.admitted_run_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM production_terminal_evidence t WHERE t.run_id=d.admitted_run_id)))")
             .bind(owner.to_string()).bind(conversation.to_string()).fetch_one(&mut *tx).await.map_err(db)?;
