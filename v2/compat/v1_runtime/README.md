@@ -170,7 +170,7 @@ Each binding is `<bindings_dir>/<remote_thread_id>.json`:
 | `max_input_age_seconds` | Optional, 60–604800 (default 1800): how long an input may wait without a Rust window before it is refused as `input_expired` |
 | `participants` | Optional (default `[]`): other people in the group, see [Group participants](#group-participants) |
 | `owner_label` | Optional (default `"Owner"`): the owner's label once the binding has participants |
-| `instructions_path` | Optional (default `null`): absolute path to a regular file (at most 32 KiB) with chat rules, see [Chat rules](#chat-rules) |
+| `instructions_path` | Optional (default `null`): absolute path to a regular file (any size; a warning above 32 KiB) with chat rules, see [Chat rules](#chat-rules) |
 
 `conversation_id`, `remote_thread_id`, `public_thread_id` and `chat_id` must be
 unique across bindings. A newcomer that collides with a serving binding is
@@ -811,8 +811,7 @@ things, all through the same loopback client and all optional on the server side
 
 V2 Fast and Deep sessions run in one shared role workspace, so a migrated chat
 has no per-conversation `AGENTS.md`. A binding may name `instructions_path`
-instead. The file must exist, be a regular file readable by the adapter and be
-at most 32 KiB when the binding is loaded. Like `participants` it is not pinned
+instead. The file must exist and be a regular file readable by the adapter. Like `participants` it is not pinned
 in the ledger: edit the file (or the field) and send SIGHUP.
 
 Every intake the adapter sends to Rust for that binding (owner, member and
@@ -835,8 +834,12 @@ The rules file is never part of the ledger's identity
 digest, so a V1 retry after the file changed is still the same input. If the
 file is missing or unreadable at send time the input is sent without the line
 and `GET /threads/<id>/health` reports `instructionsError`
-(`instructions_unreadable`, `instructions_not_regular`,
-`instructions_too_large`) until a later send succeeds. The V2 chat view hides
+(`instructions_unreadable`, `instructions_not_regular`) until a later send
+succeeds. Size never refuses the file: above 32 KiB the binding stays valid, the
+line is still sent, health reports `instructionsWarning`
+(`{"code": "instructions_oversize", "bytes": N}`) and the operator gets one
+`ALERT orkestr-v2-wa-adapter instructions_oversize` line per file per day
+(Fast inlines at most 20 KiB; larger files are read by the agent itself). The V2 chat view hides
 this leading paragraph from the owner's bubble; the model still receives it.
 
 ## Conversation posts

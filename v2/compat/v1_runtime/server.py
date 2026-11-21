@@ -114,6 +114,7 @@ class Handler(BaseHTTPRequestHandler):
                                          enabled=binding.state == "enabled", members=members,
                                          deepUpdates=bool(getattr(binding.worker, "deep_updates", False)),
                                          instructionsError=getattr(binding.worker, "instructions_error", None),
+                                         instructionsWarning=getattr(binding.worker, "instructions_warning", None),
                                          worker=binding.worker_status(),
                                          **binding.ledger.health()))
         if binding.state in ("revoked", "refused"):
