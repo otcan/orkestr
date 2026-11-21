@@ -489,3 +489,5 @@ mod continuation_retry;
 mod native_reset_tests;
 #[path = "provider_handoff_tests.rs"]
 mod provider_handoff_tests;
+#[path = "unconfigured_binding_fence_tests.rs"]
+mod unconfigured_binding_fence_tests;

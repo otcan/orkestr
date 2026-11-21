@@ -67,7 +67,9 @@ impl Store {
         let queued: i64 = sqlx::query_scalar("SELECT count(*) FROM execution_window_queue WHERE owner_id=? AND conversation_id=? AND state='queued'")
             .bind(owner.to_string()).bind(conversation.to_string())
             .fetch_one(&mut *tx).await.map_err(db)?;
-        let unsafe_bindings: i64 = sqlx::query_scalar("SELECT count(*) FROM session_bindings WHERE owner_id=? AND conversation_id=? AND role IN ('fast','deep') AND state!='retired' AND (state='busy' OR provider_kind!='claude')")
+        // A binding without a native session (a role never configured, such
+        // as a Claude chat's unconfigured Fast) has no process or transcript.
+        let unsafe_bindings: i64 = sqlx::query_scalar("SELECT count(*) FROM session_bindings WHERE owner_id=? AND conversation_id=? AND role IN ('fast','deep') AND state!='retired' AND native_session_id IS NOT NULL AND (state='busy' OR provider_kind!='claude')")
             .bind(owner.to_string()).bind(conversation.to_string())
             .fetch_one(&mut *tx).await.map_err(db)?;
         let already: i64 =
