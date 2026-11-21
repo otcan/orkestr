@@ -11,10 +11,12 @@ use orkestr_v2_contracts::{
 /// Replace the conversation's Fast binding with one that never got a native
 /// session, in `state`.
 async fn unconfigured_fast(store: &Store, w: &Window, state: &str) {
-    sqlx::query("UPDATE session_bindings SET state='retired' WHERE role='fast' AND state!='retired'")
-        .execute(&store.pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "UPDATE session_bindings SET state='retired' WHERE role='fast' AND state!='retired'",
+    )
+    .execute(&store.pool)
+    .await
+    .unwrap();
     sqlx::query("INSERT INTO session_bindings(id,owner_id,conversation_id,role,state) VALUES(?,?,?,'fast',?)")
         .bind(Uuid::new_v4().to_string())
         .bind(w.f.owner.to_string())
@@ -27,12 +29,14 @@ async fn unconfigured_fast(store: &Store, w: &Window, state: &str) {
 
 /// Put the conversation's Fast binding that has a native session in `state`.
 async fn native_fast(store: &Store, state: &str) {
-    let changed = sqlx::query("UPDATE session_bindings SET state=? WHERE role='fast' AND native_session_id IS NOT NULL")
-        .bind(state)
-        .execute(&store.pool)
-        .await
-        .unwrap()
-        .rows_affected();
+    let changed = sqlx::query(
+        "UPDATE session_bindings SET state=? WHERE role='fast' AND native_session_id IS NOT NULL",
+    )
+    .bind(state)
+    .execute(&store.pool)
+    .await
+    .unwrap()
+    .rows_affected();
     assert_eq!(changed, 1, "the fixture has one native Fast binding");
 }
 
