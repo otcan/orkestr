@@ -167,6 +167,62 @@ class OversizeTests(RulesTests):
         self.assertIsNone(self.worker.instructions_warning)
 
 
+class CostTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.path = Path(self.temp.name) / "CHAT.md"
+        instructions._cache.clear()
+
+    def test_stat_and_load_never_read_the_file(self):
+        self.path.write_bytes(b"x" * (instructions.SOFT_BYTES * 4))
+        with mock.patch("os.fdopen", side_effect=AssertionError("read")), \
+                mock.patch("hashlib.sha256", side_effect=AssertionError("hash")):
+            self.assertEqual(instructions.stat_size(str(self.path)), instructions.SOFT_BYTES * 4)
+            self.assertEqual(instructions.check_path(str(self.path)), str(self.path))
+            worker = Worker(Peer(), Ledger(Path(self.temp.name) / "l.sqlite3", SCOPE))
+            worker.instructions_path = str(self.path)
+            worker.check_instructions()
+        self.assertEqual(worker.instructions_warning["bytes"], instructions.SOFT_BYTES * 4)
+
+    def test_hash_is_cached_until_the_file_changes(self):
+        self.path.write_text("one\n")
+        first = instructions.inspect(str(self.path))
+        with mock.patch("os.fdopen", side_effect=AssertionError("read")):
+            self.assertEqual(instructions.inspect(str(self.path)), first)
+        self.path.write_text("two!\n")
+        self.assertNotEqual(instructions.inspect(str(self.path))[0], first[0])
+
+    def test_over_the_hard_bound_is_not_read_and_the_version_follows_the_stat(self):
+        with open(self.path, "wb") as handle:
+            handle.truncate(instructions.HARD_BYTES + 1)
+        with mock.patch("os.fdopen", side_effect=AssertionError("read")):
+            version, size = instructions.inspect(str(self.path))
+            self.assertEqual(size, instructions.HARD_BYTES + 1)
+            self.assertTrue(instructions.line(str(self.path)).startswith("[Chat rules v" + version[:12]))
+        with open(self.path, "ab") as handle:
+            handle.write(b"x")
+        self.assertNotEqual(instructions.inspect(str(self.path))[0], version)
+
+    def test_fifo_is_refused_without_blocking(self):
+        fifo = Path(self.temp.name) / "fifo"
+        os.mkfifo(fifo)
+        for call in (instructions.stat_size, instructions.inspect):
+            with self.assertRaisesRegex(ValueError, "instructions_not_regular"):
+                call(str(fifo))
+
+    def test_warning_clears_when_the_file_goes_away(self):
+        self.path.write_bytes(b"x" * (instructions.SOFT_BYTES + 1))
+        worker = Worker(Peer(), Ledger(Path(self.temp.name) / "l.sqlite3", SCOPE))
+        worker.instructions_path = str(self.path)
+        with contextlib.redirect_stderr(io.StringIO()):
+            worker.check_instructions()
+        self.assertIsNotNone(worker.instructions_warning)
+        self.path.unlink()
+        worker.check_instructions()
+        self.assertIsNone(worker.instructions_warning)
+
+
 class ReloadTests(Harness):
     def test_oversize_file_on_reload_keeps_the_binding_valid(self):
         rules = Path(self.temp.name) / "CHAT.md"

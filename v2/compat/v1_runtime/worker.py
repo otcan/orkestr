@@ -506,9 +506,9 @@ class Worker:
             self.instructions_warning = None
             return
         try:
-            self.note_instructions_size(instructions.inspect(self.instructions_path)[1])
+            self.note_instructions_size(instructions.stat_size(self.instructions_path))
         except ValueError:
-            pass
+            self.instructions_warning = None
 
     def with_rules(self, data, text):
         """Prefix the binding's chat rules line, frozen with the input on first
@@ -523,6 +523,7 @@ class Worker:
                     self.note_instructions_size(size)
                 except ValueError as error:
                     self.instructions_error = str(error)
+                    self.instructions_warning = None
             else:
                 self.instructions_error = None
                 self.instructions_warning = None
