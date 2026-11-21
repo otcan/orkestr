@@ -127,6 +127,22 @@ class PackageTests(unittest.TestCase):
             with self.assertRaises((Refused, TrustRefused)):
                 Package(self.root, self.fixture.receipt["manifest_sha256"])
 
+    def test_optional_native_attach_directory_is_external_and_protected(self):
+        # Core binds this Root directory of native-attach holds; packaging only checks it.
+        directory = self.fixture.root / "native-attach"
+        directory.mkdir(mode=0o750)
+        self.fixture.alter("beta.json", lambda value: value.update(native_attach_dir=str(directory)))
+        package = Package(self.root, self.fixture.receipt["manifest_sha256"])
+        self.assertNotIn(str(directory), package.manifest["files"])
+        directory.chmod(0o777)
+        with self.assertRaises(TrustRefused):
+            Package(self.root, self.fixture.receipt["manifest_sha256"])
+        directory.chmod(0o750)
+        for invalid in ("relative/holds", str(self.fixture.home / "holds")):
+            self.fixture.alter("beta.json", lambda value: value.update(native_attach_dir=invalid))
+            with self.assertRaises((Refused, TrustRefused)):
+                Package(self.root, self.fixture.receipt["manifest_sha256"])
+
     def test_running_package_rechecks_root_owned_bytecode_without_relaxing_inventory(self):
         package = Package(self.root, self.receipt["manifest_sha256"])
         cache = self.root / "broker/__pycache__"

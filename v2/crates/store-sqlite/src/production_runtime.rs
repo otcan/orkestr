@@ -69,6 +69,7 @@ mod parallel_deep_turns;
 pub use parallel_deep_turns::{PARALLEL_DEEP_DEFAULT_EFFORT, PARALLEL_DEFER};
 mod fence;
 mod held_inputs;
+mod native_attach_note;
 pub(crate) mod retired_inputs;
 mod stale_inputs;
 mod superseded_source;
@@ -145,6 +146,8 @@ pub use worker_tool::*;
 mod workspace_exec;
 #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
 pub use workspace_exec::*;
+#[cfg(test)]
+mod native_attach_stop_tests;
 #[cfg(test)]
 #[path = "source_receipts/tests.rs"]
 mod source_receipt_tests;

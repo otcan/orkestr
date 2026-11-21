@@ -31,10 +31,32 @@ impl Store {
         key: &str,
     ) -> Result<CancelReceipt> {
         Ok(self
-            .production_cancel_guarded(owner, run, key, None, None)
+            .production_cancel_guarded(owner, run, key, None, None, true)
             .await?
             .0)
     }
+    /// `request_cancel` (a window deadline, shutdown or budget cancellation),
+    /// where the server decides whether a canonical Deep run's cancellation
+    /// holds the queued inputs. It passes `false` only while the owner's
+    /// terminal holds the native session (native-attach hold), which already
+    /// queues them. Core reads no hold itself.
+    pub async fn request_cancel_holding(
+        &self,
+        owner: &OwnerId,
+        run: &RunId,
+        key: &str,
+        hold_inputs: bool,
+    ) -> Result<CancelReceipt> {
+        Ok(self
+            .production_cancel_guarded(owner, run, key, None, None, hold_inputs)
+            .await?
+            .0)
+    }
+    /// `hold_inputs`: a canonical Deep Stop cuts the queue at a Stop boundary
+    /// and holds every input before it. `false` only for the owner's Stop
+    /// while a native-attach hold already queues those inputs (`orkestr
+    /// attach --interrupt`): they stay ordinary queued input.
+    #[allow(clippy::too_many_arguments)]
     pub(super) async fn production_cancel_guarded(
         &self,
         owner: &OwnerId,
@@ -42,6 +64,7 @@ impl Store {
         key: &str,
         guard: Option<(&orkestr_v2_contracts::ConversationId, i64, Option<i64>)>,
         credential: Option<&str>,
+        hold_inputs: bool,
     ) -> Result<(CancelReceipt, i64)> {
         let context = self.context()?;
         if owner != &context.owner {
@@ -194,7 +217,8 @@ impl Store {
         // A read-only parallel Deep run consumed only its own input: stopping
         // it alone (deadline, shutdown, budget) holds no other input. The
         // owner's Stop still stops the canonical run, which holds the queue.
-        if provider.run.role == Role::Deep
+        if hold_inputs
+            && provider.run.role == Role::Deep
             && !super::parallel_deep::is_slot(&mut tx, &provider.run.session_id.to_string()).await?
         {
             sqlx::query("INSERT INTO production_stop_boundaries(event_id,owner_id,conversation_id,run_id,through_scope_sequence) VALUES(?,?,?,?,?)")

@@ -78,47 +78,65 @@ impl ReleaseInterruptions {
         })
     }
 
-    #[cfg(target_os = "linux")]
     fn read(&self, run: &RunId) -> Result<Record, &'static str> {
-        use std::io::Read;
-        use std::os::unix::fs::MetadataExt;
-        protected_directory(&self.dir, self.owner_uid)?;
-        let path = self.dir.join(format!("{}.json", run.0));
-        // The final entry must be the regular file we then open: no link.
-        let before = std::fs::symlink_metadata(&path).map_err(|_| REFUSED)?;
-        if !before.file_type().is_file() {
-            return Err(REFUSED);
-        }
-        let file = std::fs::File::open(&path).map_err(|_| REFUSED)?;
-        let info = file.metadata().map_err(|_| REFUSED)?;
-        if (info.dev(), info.ino()) != (before.dev(), before.ino())
-            || !info.is_file()
-            || info.uid() != self.owner_uid
-            || info.nlink() != 1
-            || info.mode() & 0o022 != 0
-            || info.len() == 0
-            || info.len() > MAX_RECORD
-        {
-            return Err(REFUSED);
-        }
-        let mut raw = Vec::new();
-        file.take(MAX_RECORD + 1)
-            .read_to_end(&mut raw)
-            .map_err(|_| REFUSED)?;
-        if raw.len() as u64 != info.len() {
-            return Err(REFUSED);
-        }
+        let raw = read_root_record(&self.dir, self.owner_uid, &format!("{}.json", run.0))?
+            .ok_or(REFUSED)?;
         serde_json::from_slice(&raw).map_err(|_| REFUSED)
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    fn read(&self, _: &RunId) -> Result<Record, &'static str> {
-        Err(REFUSED)
     }
 }
 
+/// The bytes of `<dir>/<name>` under Root custody: the directory as for
+/// `protected_directory`, the record a regular file (no link) owned by
+/// `owner_uid`, not group or world writable, one link, 1..=4096 bytes.
+/// `Ok(None)`: no such entry. Shared with native-attach holds.
 #[cfg(target_os = "linux")]
-fn protected_directory(path: &Path, owner_uid: u32) -> Result<(), &'static str> {
+pub(crate) fn read_root_record(
+    dir: &Path,
+    owner_uid: u32,
+    name: &str,
+) -> Result<Option<Vec<u8>>, &'static str> {
+    use std::io::Read;
+    use std::os::unix::fs::MetadataExt;
+    protected_directory(dir, owner_uid)?;
+    let path = dir.join(name);
+    // The final entry must be the regular file we then open: no link.
+    let before = match std::fs::symlink_metadata(&path) {
+        Ok(before) => before,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(REFUSED),
+    };
+    if !before.file_type().is_file() {
+        return Err(REFUSED);
+    }
+    let file = std::fs::File::open(&path).map_err(|_| REFUSED)?;
+    let info = file.metadata().map_err(|_| REFUSED)?;
+    if (info.dev(), info.ino()) != (before.dev(), before.ino())
+        || !info.is_file()
+        || info.uid() != owner_uid
+        || info.nlink() != 1
+        || info.mode() & 0o022 != 0
+        || info.len() == 0
+        || info.len() > MAX_RECORD
+    {
+        return Err(REFUSED);
+    }
+    let mut raw = Vec::new();
+    file.take(MAX_RECORD + 1)
+        .read_to_end(&mut raw)
+        .map_err(|_| REFUSED)?;
+    if raw.len() as u64 != info.len() {
+        return Err(REFUSED);
+    }
+    Ok(Some(raw))
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn read_root_record(_: &Path, _: u32, _: &str) -> Result<Option<Vec<u8>>, &'static str> {
+    Err(REFUSED)
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn protected_directory(path: &Path, owner_uid: u32) -> Result<(), &'static str> {
     use std::os::unix::fs::MetadataExt;
     if std::fs::canonicalize(path).map_err(|_| REFUSED)? != path {
         return Err(REFUSED);
@@ -142,7 +160,7 @@ fn protected_directory(path: &Path, owner_uid: u32) -> Result<(), &'static str> 
 }
 
 #[cfg(not(target_os = "linux"))]
-fn protected_directory(_: &Path, _: u32) -> Result<(), &'static str> {
+pub(crate) fn protected_directory(_: &Path, _: u32) -> Result<(), &'static str> {
     Err(REFUSED)
 }
 

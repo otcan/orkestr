@@ -258,6 +258,13 @@ impl Controller {
             self.queue.remember(browser);
             return self.enqueue(browser, conversation, input).await;
         }
+        if self.native_attach_held(conversation) {
+            // The owner works in this native session from a terminal: no
+            // open, join or provider switch. The dispatcher admits the
+            // durable intent in order once the hold is released or lapses.
+            self.queue.remember(browser);
+            return self.enqueue(browser, conversation, input).await;
+        }
         let Some(routed) = self
             .route_operator_policy(browser, owner, conversation, input)
             .await?
@@ -275,10 +282,9 @@ impl Controller {
         if input.window_id.is_some() && !self.waiting(browser, conversation).await? {
             if self.joinable(browser, conversation, input).await? {
                 // A follow-up joins this conversation's live window; no new slot.
-                return entry
-                    .process(browser, owner, conversation, input)
-                    .await
-                    .map(WindowOutcome::Admitted);
+                return self
+                    .open_unless_held(&entry, browser, owner, conversation, input)
+                    .await;
             }
             // Under ten minutes of work time left even with extension: queue
             // durably. The dispatcher opens the successor window, which
@@ -306,15 +312,14 @@ impl Controller {
                 && self.live(browser).await? < self.capacity;
         }
         if room && !self.waiting(browser, conversation).await? {
-            return entry
-                .process(browser, owner, conversation, input)
-                .await
-                .map(WindowOutcome::Admitted);
+            return self
+                .open_unless_held(&entry, browser, owner, conversation, input)
+                .await;
         }
         self.enqueue(browser, conversation, input).await
     }
 
-    async fn enqueue(
+    pub(super) async fn enqueue(
         &self,
         browser: &str,
         conversation: &ConversationId,

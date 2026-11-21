@@ -74,6 +74,7 @@ impl ConfiguredExecution {
             fast_factory: None,
             deep_slots: None,
             parallel_factory: None,
+            native_attach: None,
         };
         self.companion = Some(companion);
         self.fast_factory = Some(Box::new(fast));

@@ -45,6 +45,23 @@ impl Store {
         conversation: &ConversationId,
         input: &ExecutionControlRequest,
     ) -> Result<(ExecutionStopReceipt, CancelReceipt)> {
+        self.stop_execution_control_authenticated_holding(credential, conversation, input, true)
+            .await
+    }
+
+    /// `stop_execution_control_authenticated`, where the server decides
+    /// whether the Stop holds queued inputs behind its boundary. It passes
+    /// `false` only while the owner's terminal holds this conversation's
+    /// native session (native-attach hold): the hold already queues them and
+    /// they run after release. Core reads no hold itself. A replay keeps the
+    /// first request's decision.
+    pub async fn stop_execution_control_authenticated_holding(
+        &self,
+        credential: &str,
+        conversation: &ConversationId,
+        input: &ExecutionControlRequest,
+        hold_inputs: bool,
+    ) -> Result<(ExecutionStopReceipt, CancelReceipt)> {
         if credential.is_empty() || credential.len() > 1024 {
             return Err(RuntimeStoreError::Unauthorized);
         }
@@ -56,8 +73,14 @@ impl Store {
         #[cfg(feature = "fixture-test-controls")]
         self.production_checkpoint("stop-after-authentication")
             .await?;
-        self.stop_execution_control_guarded(&owner, conversation, input, Some(credential))
-            .await
+        self.stop_execution_control_guarded(
+            &owner,
+            conversation,
+            input,
+            Some(credential),
+            hold_inputs,
+        )
+        .await
     }
 
     pub(super) async fn stop_execution_guarded(
@@ -68,7 +91,7 @@ impl Store {
         credential: Option<&str>,
     ) -> Result<ExecutionStopReceipt> {
         Ok(self
-            .stop_execution_control_guarded(owner, conversation, input, credential)
+            .stop_execution_control_guarded(owner, conversation, input, credential, true)
             .await?
             .0)
     }
@@ -79,6 +102,7 @@ impl Store {
         conversation: &ConversationId,
         input: &ExecutionControlRequest,
         credential: Option<&str>,
+        hold_inputs: bool,
     ) -> Result<(ExecutionStopReceipt, CancelReceipt)> {
         if !input.is_valid() || !valid(&input.request_key) || conversation.0.is_nil() {
             return Err(RuntimeStoreError::InvalidInput);
@@ -94,6 +118,7 @@ impl Store {
                     input.expected_control_revision,
                 )),
                 credential,
+                hold_inputs,
             )
             .await?;
         let outcome = match (receipt.state, receipt.inflight_status) {

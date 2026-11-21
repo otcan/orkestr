@@ -160,6 +160,7 @@ impl ConfiguredExecution {
             fast_factory: None,
             deep_slots: None,
             parallel_factory: None,
+            native_attach: config.native_attach.clone(),
         };
         if claude.is_none() {
             factory.attach_window_roles(home, config)?;

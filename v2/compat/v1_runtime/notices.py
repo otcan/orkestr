@@ -171,6 +171,24 @@ TEMPLATES = {
     },
     # The same heartbeat for a person's input still queued behind an earlier
     # running turn (activity.waiting): truthful about the wait, no reasons.
+    # The owner's terminal holds this chat's native session (`orkestr attach`,
+    # native_attach.py): one line per hold, for the first message that waits.
+    "native_attach_held": {
+        "en": "\u23f8\ufe0f %(owner)s is working in this chat's terminal right now. Your message waits and is "
+              "answered as soon as they are done.",
+        "tr": "\u23f8\ufe0f %(owner)s şu anda bu sohbetin terminalinde çalışıyor. Mesajınız bekliyor; işi biter "
+              "bitmez yanıtlanacak.",
+        "de": "\u23f8\ufe0f %(owner)s arbeitet gerade im Terminal dieses Chats. Deine Nachricht wartet und wird "
+              "beantwortet, sobald das erledigt ist.",
+    },
+    "native_attach_held_unnamed": {
+        "en": "\u23f8\ufe0f The owner is working in this chat's terminal right now. Your message waits and is "
+              "answered as soon as they are done.",
+        "tr": "\u23f8\ufe0f Sohbet sahibi şu anda bu sohbetin terminalinde çalışıyor. Mesajınız bekliyor; işi "
+              "biter bitmez yanıtlanacak.",
+        "de": "\u23f8\ufe0f Der Inhaber dieses Chats arbeitet gerade im Terminal. Deine Nachricht wartet und wird "
+              "beantwortet, sobald das erledigt ist.",
+    },
     "deep_heartbeat_waiting": {
         "en": "\U0001f9e0 Still on it\u2026 %(minutes)d min so far. An earlier task is finishing first, "
               "then the full answer follows.",

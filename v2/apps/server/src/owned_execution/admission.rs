@@ -14,10 +14,33 @@ impl ConfiguredExecution {
         shutdown: &mut watch::Receiver<bool>,
         heartbeat: &mut Instant,
     ) -> Result<bool, &'static str> {
+        self.wait_eligible_gated(shutdown, heartbeat, false).await
+    }
+
+    /// `wait_eligible` after an accepted turn of this window: a native-attach
+    /// hold also ends the wait, and the caller retires the window through its
+    /// canonical close (`native_attach`).
+    pub(super) async fn wait_eligible_after_turn(
+        &self,
+        shutdown: &mut watch::Receiver<bool>,
+        heartbeat: &mut Instant,
+    ) -> Result<bool, &'static str> {
+        self.wait_eligible_gated(shutdown, heartbeat, true).await
+    }
+
+    async fn wait_eligible_gated(
+        &self,
+        shutdown: &mut watch::Receiver<bool>,
+        heartbeat: &mut Instant,
+        after_turn: bool,
+    ) -> Result<bool, &'static str> {
         loop {
             // An execution window accepts follow-up turns until its work
             // deadline; afterwards its owner retires it and a successor resumes.
             if *shutdown.borrow() || self.window.as_ref().is_some_and(|window| window.work_due()) {
+                return Ok(false);
+            }
+            if after_turn && self.native_attach_held() {
                 return Ok(false);
             }
             self.maintain(heartbeat).await?;
@@ -56,6 +79,31 @@ impl ConfiguredExecution {
         &self,
         shutdown: &mut watch::Receiver<bool>,
         heartbeat: &mut Instant,
+        live: impl FnMut() -> Result<(), &'static str>,
+    ) -> Result<Option<Box<ConsumedProviderDispatch>>, &'static str> {
+        self.next_gated(shutdown, heartbeat, false, live).await
+    }
+
+    /// `next_with_liveness` after a completed turn of this window: while a
+    /// native-attach hold is active it claims nothing and returns `None`, so
+    /// the caller reaps the native tree and closes the window canonically,
+    /// as after its last input (`native_attach`). A window's first turn is
+    /// never gated: its window was admitted before the hold and has no
+    /// canonical close without a turn of its own.
+    pub(super) async fn next_after_turn(
+        &self,
+        shutdown: &mut watch::Receiver<bool>,
+        heartbeat: &mut Instant,
+        live: impl FnMut() -> Result<(), &'static str>,
+    ) -> Result<Option<Box<ConsumedProviderDispatch>>, &'static str> {
+        self.next_gated(shutdown, heartbeat, true, live).await
+    }
+
+    async fn next_gated(
+        &self,
+        shutdown: &mut watch::Receiver<bool>,
+        heartbeat: &mut Instant,
+        after_turn: bool,
         mut live: impl FnMut() -> Result<(), &'static str>,
     ) -> Result<Option<Box<ConsumedProviderDispatch>>, &'static str> {
         let conversation = &self.config.conversation_id;
@@ -77,6 +125,9 @@ impl ConfiguredExecution {
                 }
                 self.maintain(heartbeat).await?;
                 live()?;
+                if after_turn && self.native_attach_held() {
+                    return Ok(None);
+                }
                 if !self.provider_input_allowed(None).await? {
                     return Ok(None);
                 }
@@ -166,7 +217,7 @@ impl ConfiguredExecution {
             self.current().await?;
             // Core authenticates inside consumption and every transport fence. This
             // preliminary current-session check is never the authority for a write.
-            let ExecutionConsumption::Dispatch(capability) = self
+            let ExecutionConsumption::Dispatch(mut capability) = self
                 .store
                 .consume_execution(&reservation)
                 .await
@@ -174,6 +225,7 @@ impl ConfiguredExecution {
             else {
                 return Err("execution delivery is uncertain; automatic replay refused");
             };
+            self.note_native_attach(&mut capability).await;
             return Ok(Some(capability));
         }
     }

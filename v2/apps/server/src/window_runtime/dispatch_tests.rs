@@ -215,6 +215,9 @@ impl Fixture {
     }
 }
 
+#[cfg(target_os = "linux")]
+#[path = "native_attach_admission_tests.rs"]
+mod native_attach_admission_tests;
 #[path = "provider_routing_admission_tests.rs"]
 mod provider_routing_admission_tests;
 

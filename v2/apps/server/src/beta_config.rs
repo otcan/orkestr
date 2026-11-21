@@ -23,6 +23,13 @@ pub(crate) struct BetaConfig {
     /// Root-recorded release interruptions (ORK-792): one continuation each.
     #[serde(default)]
     pub release_interruption_dir: Option<PathBuf>,
+    /// Root-recorded native-attach holds (`orkestr attach`): no V2 resume
+    /// of a native session the owner works in from a terminal.
+    #[serde(default)]
+    pub native_attach_dir: Option<PathBuf>,
+    /// The bound reader of `native_attach_dir` (trusted startup only).
+    #[serde(skip)]
+    pub native_attach: Option<std::sync::Arc<crate::native_attach::NativeAttachHolds>>,
     #[serde(default)]
     pub identity_split: Option<identity_split::IdentitySplit>,
     pub owner_id: OwnerId,
@@ -169,6 +176,13 @@ impl BetaConfig {
             .is_some_and(|path| !conversation_workspace_path(path))
         {
             return Err("invalid release interruption path");
+        }
+        if self
+            .native_attach_dir
+            .as_ref()
+            .is_some_and(|path| !conversation_workspace_path(path))
+        {
+            return Err("invalid native attach path");
         }
         if let Some(identity) = &self.identity_split {
             identity.validate()?;

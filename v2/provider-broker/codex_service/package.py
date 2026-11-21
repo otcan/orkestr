@@ -271,7 +271,7 @@ class Package:
         require(set(beta) - {"roles", "legacy_companions", "workspace_exec", "additional_workspace_exec", "max_active_windows",
                              "window_max_minutes", "conversation_window_max_minutes",
                              "host_full_access", "managed_host", "claude", "conversation_workspaces", "provider_routing", "codex_default_model", "identity_split", "deploy_maintenance_marker",
-                             "release_interruption_dir"} == {"schema_version", "owner_id", "conversation_id", "manager_socket",
+                             "release_interruption_dir", "native_attach_dir"} == {"schema_version", "owner_id", "conversation_id", "manager_socket",
                 "launcher", "launcher_sha256", "workspace", "namespace", "supervisor_key"}
                 and type(beta["schema_version"]) is int and beta["schema_version"] == 1,
                 "beta_format")
@@ -286,6 +286,12 @@ class Package:
             directory = Path(live_map_path(beta["release_interruption_dir"]))
             require(str(directory) == beta["release_interruption_dir"]
                     and self.home not in (directory, *directory.parents), "release_interruption_path")
+            protected(directory, True)
+        if "native_attach_dir" in beta:
+            # Core binds this Root directory of native-attach holds at startup.
+            directory = Path(live_map_path(beta["native_attach_dir"]))
+            require(str(directory) == beta["native_attach_dir"]
+                    and self.home not in (directory, *directory.parents), "native_attach_path")
             protected(directory, True)
         if self.identity_split:
             require("host_full_access" not in beta,

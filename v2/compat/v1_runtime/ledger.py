@@ -665,7 +665,7 @@ class Ledger:
         # bindings, but possibly anyone in a legacy group, so the short notice.
         return role in ("owner", "v1_owner") or (role is None and self.owner_only)
 
-    def expire_stale(self, max_age_s, now=None):
+    def expire_stale(self, max_age_s, now=None, held=False):
         """Refuse inputs that waited longer than max_age_s without a Rust window.
 
         Only inputs with no window opened (or a definite busy refusal) qualify:
@@ -673,7 +673,9 @@ class Ledger:
         alone. V2 timer occurrences follow Core's own dispatch queue and never
         expire here. An input queued behind an earlier input whose Deep run is
         still observed running does not age; its clock restarts when that head
-        stops running. Returns the refused inputs.
+        stops running. The same holds for every input while `held` (the
+        owner's terminal holds the native session; a bool, or a callable read
+        at most once and only when a row could age). Returns the refused inputs.
         """
         now = time.time() if now is None else now
         expired = []
@@ -697,8 +699,12 @@ class Ledger:
                 data["queued_at"] = now
                 self.save(data)
                 continue
-            if live_head is not None and live_head < rowid:
-                # Waiting behind a turn that is still running is not staleness.
+            if callable(held):
+                held = bool(held())  # Read Core only once a row could age (paused bindings never do).
+            if held or (live_head is not None and live_head < rowid):
+                # Waiting behind a turn that is still running, or for the
+                # owner's terminal holding the session (native_attach.py), is
+                # not staleness; the clock restarts when that wait ends.
                 if now - data.get("waiting_behind_at", 0) >= WAITING_BEHIND_STAMP_S:
                     data["waiting_behind_at"] = now
                     self.save(data)

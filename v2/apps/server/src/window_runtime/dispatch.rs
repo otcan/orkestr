@@ -332,6 +332,8 @@ impl Controller {
             .live_execution_windows_authenticated(browser)
             .await?;
         let queued: HashSet<_> = rows.iter().map(|row| row.conversation_id.clone()).collect();
+        // Held by the owner's terminal: neither open nor join (`native_attach_gate`).
+        let held = self.native_attach_held_rows(&rows);
         let mut seen = HashSet::new();
         let mut progressed = false;
         for row in rows {
@@ -339,6 +341,9 @@ impl Controller {
                 continue;
             }
             let conversation = &row.conversation_id;
+            if held.contains(conversation) {
+                continue;
+            }
             let status = self
                 .store
                 .execution_window_status_authenticated(browser, conversation)
@@ -401,7 +406,7 @@ impl Controller {
                     continue;
                 }
             };
-            let Ok(entry) = self.entry(conversation) else {
+            let Some(entry) = self.entry_unless_held(conversation) else {
                 continue;
             };
             let owner = self.config.owner_id.clone();

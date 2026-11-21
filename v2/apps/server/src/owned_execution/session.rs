@@ -174,7 +174,7 @@ impl ConfiguredExecution {
                 // Inputs received during an active turn remain ordered in Core;
                 // neither queued text nor browser JSON can mint a new capability.
                 let Some(capability) = self
-                    .next_with_liveness(shutdown, heartbeat, || {
+                    .next_after_turn(shutdown, heartbeat, || {
                         pump.check_broker_liveness().map_err(|error| {
                             eprintln!(
                                 "owned execution accepted broker liveness refused: {error:?}"
@@ -301,8 +301,7 @@ impl ConfiguredExecution {
                 steering.retire();
                 // Fence durably before local child cleanup; no success is inferred.
                 let receipt = self
-                    .store
-                    .request_cancel(&self.owner, &run, key)
+                    .request_cancel_for(&run, key)
                     .await
                     .map_err(|_| "execution shutdown requires reconciliation")?;
                 run_control.disable();

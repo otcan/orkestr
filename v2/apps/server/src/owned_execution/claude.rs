@@ -8,7 +8,7 @@ use crate::{
     stop_execution::StopProgress,
 };
 use orkestr_runtime::containment::ChildDirectories;
-use orkestr_v2_application::runtime::{RuntimeStore, RuntimeStoreError};
+use orkestr_v2_application::runtime::RuntimeStoreError;
 use orkestr_v2_contracts::ExecutionPhase;
 use std::time::Instant;
 
@@ -118,8 +118,7 @@ impl ConfiguredExecution {
                     Box::pin(managed.cancel()).await?;
                 }
                 run_control.disable();
-                self.store
-                    .request_cancel(&self.owner, &run, "isolated-runtime-shutdown")
+                self.request_cancel_for(&run, "isolated-runtime-shutdown")
                     .await
                     .map_err(|_| "Claude shutdown fence requires reconciliation")?;
                 // Drop the owned live session into cleanup without asserting a
@@ -200,8 +199,7 @@ impl ConfiguredExecution {
                         // Budget expiry uses the same issued control as
                         // owner Stop; no status-derived receipt is constructed.
                         let receipt = self
-                            .store
-                            .request_cancel(&self.owner, &run, key)
+                            .request_cancel_for(&run, key)
                             .await
                             .map_err(|_| "Claude shutdown fence requires reconciliation")?;
                         run_control.disable();
