@@ -62,20 +62,36 @@ async function v2Activity(session, target) {
 }
 
 export const GIVE_UP_MS = 60_000;
+// While the server is down (e.g. a restart) and the hold record still renews
+// on disk, V2 cannot run anything: allow longer before giving up, so a
+// SIGKILL never lands mid-write in the transcript for a short outage.
+export const SERVER_DOWN_GRACE_MS = 5 * 60_000;
+// The server ignores a hold acquired more than 8 h ago, however renewed.
+export const MAX_HOLD_AGE_MS = 8 * 3600_000;
+const AGE_WARN_MS = 10 * 60_000;
+const AGE_CLOSE_MS = 60_000;
 const KILL_GRACE_MS = 5000;
 
-// Does the server honour this hold right now? "held", "not_held" (feature
-// gone, unconfigured, or the hold not seen: e.g. after a rollback) or
-// "unknown" (unreachable; the caller gives up after GIVE_UP_MS).
+// Does the server honour this hold right now? `state` "held", "not_held"
+// (feature gone, unconfigured, or the hold not seen: e.g. after a rollback)
+// or "unknown" (unreachable). With "held": `nativeIdle` (false: V2 has a
+// window or native process for the chat; null: unknown) and the server's
+// `maxAgeDeadlineMs`.
 export async function serverHoldView(session, target) {
   const [health, hold] = await Promise.all([
     readJson(session, "/api/v2/health"),
     readJson(session, `/api/v2/conversations/${target.conversationId}/native-attach`),
   ]);
-  if (health.status === 200 && !(Array.isArray(health.json?.features) && health.json.features.includes(NATIVE_FEATURE))) return "not_held";
-  if (hold.status === 200) return hold.json?.held === true ? "held" : "not_held";
-  if (hold.status === 404) return "not_held";
-  return "unknown";
+  const down = { state: "unknown", nativeIdle: null, maxAgeDeadlineMs: null };
+  if (health.status === 200 && !(Array.isArray(health.json?.features) && health.json.features.includes(NATIVE_FEATURE))) return { ...down, state: "not_held" };
+  if (hold.status === 200) {
+    if (hold.json?.held !== true) return { ...down, state: "not_held" };
+    const idle = hold.json?.native_idle;
+    const deadline = hold.json?.max_age_deadline_ms;
+    return { state: "held", nativeIdle: typeof idle === "boolean" ? idle : null, maxAgeDeadlineMs: Number.isInteger(deadline) ? deadline : null };
+  }
+  if (hold.status === 404) return { ...down, state: "not_held" };
+  return down;
 }
 
 async function guardedStop(session, target, activity, emit) {
@@ -159,8 +175,11 @@ export async function runNativeAttach(target, session, agent, ctx, { takeover = 
     // SIGKILL), because V2 may then resume the same native session.
     const tickMs = ctx.renewMs || RENEW_MS;
     const giveUpMs = ctx.giveUpMs || GIVE_UP_MS;
+    const downGraceMs = ctx.serverDownGraceMs || SERVER_DOWN_GRACE_MS;
     let renewedAt = now();
     let confirmedAt = now();
+    let ageDeadline = record.acquired_at_ms + MAX_HOLD_AGE_MS;
+    let ageWarned = false;
     let closing = false;
     let ticking = false;
     const close = (why) => {
@@ -190,9 +209,22 @@ export async function runNativeAttach(target, session, agent, ctx, { takeover = 
           if (now() - renewedAt > giveUpMs) return close(`The hold could not be renewed for ${Math.round(giveUpMs / 1000)} s`);
         }
         const view = await (ctx.serverHoldViewImpl || serverHoldView)(session, target);
-        if (view === "not_held") return close("The V2 server does not report the hold any more (rolled back, or configured without native attach)");
-        if (view === "held") confirmedAt = now();
-        else if (now() - confirmedAt > giveUpMs) return close(`The V2 server could not confirm the hold for ${Math.round(giveUpMs / 1000)} s`);
+        if (view.state === "not_held") return close("The V2 server does not report the hold any more (rolled back, or configured without native attach)");
+        if (view.state === "held") {
+          confirmedAt = now();
+          if (view.nativeIdle === false) return close("V2 reports its own window or native process for this chat while you are attached");
+          if (view.maxAgeDeadlineMs) ageDeadline = Math.min(ageDeadline, view.maxAgeDeadlineMs);
+        } else {
+          // Unreachable server: longer while the hold record still renews.
+          const grace = now() - renewedAt <= 2 * tickMs ? downGraceMs : giveUpMs;
+          if (now() - confirmedAt > grace) return close(`The V2 server could not confirm the hold for ${Math.round(grace / 1000)} s`);
+        }
+        // The 8 h hold limit: warn 10 min before, close 1 min before.
+        if (now() >= ageDeadline - AGE_CLOSE_MS) return close("The 8 h hold limit is reached; attach again to continue");
+        if (!ageWarned && now() >= ageDeadline - AGE_WARN_MS) {
+          ageWarned = true;
+          emit(`\nThis terminal session reaches the 8 h hold limit at ${new Date(ageDeadline).toISOString()}; it will be closed 1 minute before. Attach again afterwards to continue.\n`);
+        }
       } finally {
         ticking = false;
       }
