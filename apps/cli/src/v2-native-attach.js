@@ -15,7 +15,7 @@ import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import { buildNativeLaunch } from "./v2-native-launch.js";
-import { acquireHold, readHold, releaseHold, renewHold, RENEW_MS, TTL_MS } from "./v2-native-hold.js";
+import { acquireHold, readHold, releaseHold, renewHold, RENEW_MS } from "./v2-native-hold.js";
 import { groupId, nativeAttachConfig, processesNaming, readNativeSession, readSelectedPlan } from "./v2-native-target.js";
 import { v2AttachError } from "./v2-owner-session.js";
 
@@ -61,14 +61,33 @@ async function v2Activity(session, target) {
   };
 }
 
+export const GIVE_UP_MS = 60_000;
+const KILL_GRACE_MS = 5000;
+
+// Does the server honour this hold right now? "held", "not_held" (feature
+// gone, unconfigured, or the hold not seen: e.g. after a rollback) or
+// "unknown" (unreachable; the caller gives up after GIVE_UP_MS).
+export async function serverHoldView(session, target) {
+  const [health, hold] = await Promise.all([
+    readJson(session, "/api/v2/health"),
+    readJson(session, `/api/v2/conversations/${target.conversationId}/native-attach`),
+  ]);
+  if (health.status === 200 && !(Array.isArray(health.json?.features) && health.json.features.includes(NATIVE_FEATURE))) return "not_held";
+  if (hold.status === 200) return hold.json?.held === true ? "held" : "not_held";
+  if (hold.status === 404) return "not_held";
+  return "unknown";
+}
+
 async function guardedStop(session, target, activity, emit) {
   const status = activity.execution;
   if (!status.run_id) return;
   const body = { run_id: status.run_id, expected_revision: status.revision ?? status.conversation_revision, request_key: `cli-attach-interrupt-${randomUUID()}` };
   if (status.control_revision !== undefined) body.expected_control_revision = status.control_revision;
   const response = await session.call("POST", `/api/v2/conversations/${target.conversationId}/stop`, body).catch(() => null);
+  // Sent only once the server reports the hold: a Stop during a hold cancels
+  // the run without V2's stop boundary, so queued inputs still run afterwards.
   emit(response && response.status < 300
-    ? `Stopping V2 run ${status.run_id} (owner Stop). Inputs queued behind it are held by V2's Stop rule; resend or admit them in the chat afterwards.\n`
+    ? `Stopping V2 run ${status.run_id} (owner Stop during the hold; queued messages stay queued).\n`
     : `Owner Stop refused (HTTP ${response?.status || 0}); waiting for the run to finish instead.\n`);
 }
 
@@ -135,25 +154,49 @@ export async function runNativeAttach(target, session, agent, ctx, { takeover = 
     if (!hold?.live || hold.holder_pid !== record.holder_pid) throw v2AttachError("v2_native_hold_lost", "the hold was taken over before the session opened");
     emit(`Opening the ${native.provider} session ${native.nativeSessionId} of ${target.name ? `"${target.name}"` : target.conversationId}: V2's own native session, as V2's executor in V2's file namespace, without the orkestr_managed tools. V2 queues the chat's messages until you leave; exit the session to hand back.\n`);
     let child = null;
+    // Watchdog, every RENEW_MS: renew the record, then ask the server whether
+    // it still honours the hold. Any doubt ends this session (SIGTERM, then
+    // SIGKILL), because V2 may then resume the same native session.
+    const tickMs = ctx.renewMs || RENEW_MS;
+    const giveUpMs = ctx.giveUpMs || GIVE_UP_MS;
     let renewedAt = now();
-    renewTimer = setInterval(() => {
-      let lost = false;
+    let confirmedAt = now();
+    let closing = false;
+    let ticking = false;
+    const close = (why) => {
+      if (closing || !child) return;
+      closing = true;
+      emit(`\n${why}; closing this terminal session so V2 stays the only writer.\n`);
       try {
-        lost = !renewHold(config.holdDir, record, { fsImpl, now, gid });
-        if (!lost) renewedAt = now();
-      } catch {
-        // The hold directory is briefly unwritable (storage busy): keep the
-        // session while the last renewal still covers it, then give it up.
-        lost = now() - renewedAt > TTL_MS - (ctx.renewMs || RENEW_MS);
-      }
-      // A lost hold means V2 may resume the session: never keep a second writer.
-      if (lost && child) {
-        emit("\nThe hold was lost (taken over, or it could not be renewed); closing this terminal session so V2 is the only writer.\n");
+        child.kill("SIGTERM");
+      } catch {}
+      const force = setTimeout(() => {
         try {
-          child.kill("SIGTERM");
+          child.kill("SIGKILL");
         } catch {}
+      }, ctx.killGraceMs || KILL_GRACE_MS);
+      force.unref?.();
+      child.once?.("exit", () => clearTimeout(force));
+    };
+    renewTimer = setInterval(async () => {
+      if (ticking || closing) return;
+      ticking = true;
+      try {
+        try {
+          if (!renewHold(config.holdDir, record, { fsImpl, now, gid })) return close("The hold was taken over or removed");
+          renewedAt = now();
+        } catch {
+          // Storage briefly unwritable: keep going while within the grace.
+          if (now() - renewedAt > giveUpMs) return close(`The hold could not be renewed for ${Math.round(giveUpMs / 1000)} s`);
+        }
+        const view = await (ctx.serverHoldViewImpl || serverHoldView)(session, target);
+        if (view === "not_held") return close("The V2 server does not report the hold any more (rolled back, or configured without native attach)");
+        if (view === "held") confirmedAt = now();
+        else if (now() - confirmedAt > giveUpMs) return close(`The V2 server could not confirm the hold for ${Math.round(giveUpMs / 1000)} s`);
+      } finally {
+        ticking = false;
       }
-    }, ctx.renewMs || RENEW_MS);
+    }, tickMs);
     renewTimer.unref?.();
     const startedAt = now();
     const code = await new Promise((resolve, reject) => {

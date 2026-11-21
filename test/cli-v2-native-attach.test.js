@@ -153,21 +153,22 @@ test("a hold is created, renewed, refused to a second terminal, expires, and is 
     if (!alive.has(pid)) throw Object.assign(new Error("ESRCH"), { code: "ESRCH" });
     if (signal === "SIGTERM") alive.delete(pid);
   };
-  const first = await acquireHold({ dir, native, conversationId, now, kill, selfPid: 111, sleep: async () => {} });
+  const isAttach = (pid) => alive.has(pid);
+  const first = await acquireHold({ dir, native, conversationId, now, kill, isAttach, selfPid: 111, sleep: async () => {} });
   assert.equal(first.format, HOLD_FORMAT);
   assert.equal(first.expires_at_ms, clock + TTL_MS);
   assert.equal(readHold(dir, conversationId, { now: clock }).live, true);
-  await assert.rejects(acquireHold({ dir, native, conversationId, now, kill, selfPid: 222, sleep: async () => {} }), /v2_native_attached_elsewhere: .*pid 111/);
+  await assert.rejects(acquireHold({ dir, native, conversationId, now, kill, isAttach, selfPid: 222, sleep: async () => {} }), /v2_native_attached_elsewhere: .*pid 111/);
   clock += 30_000;
   assert.equal(renewHold(dir, first, { now }), true);
   assert.equal(readHold(dir, conversationId, { now: clock }).expires_at_ms, clock + TTL_MS);
   // A dead terminal stops renewing: the server sees the hold end within the TTL.
   clock += TTL_MS + 1;
   assert.equal(readHold(dir, conversationId, { now: clock }).live, false);
-  const second = await acquireHold({ dir, native, conversationId, now, kill, selfPid: 222, sleep: async () => {} });
+  const second = await acquireHold({ dir, native, conversationId, now, kill, isAttach, selfPid: 222, sleep: async () => {} });
   assert.equal(renewHold(dir, first, { now }), false, "the old terminal lost the hold");
   // Takeover: the current holder is asked to hand back first.
-  const third = await acquireHold({ dir, native, conversationId, now, kill, selfPid: 333, sleep: async () => {}, takeover: true });
+  const third = await acquireHold({ dir, native, conversationId, now, kill, isAttach, selfPid: 333, sleep: async () => {}, takeover: true });
   assert.ok(!alive.has(222));
   releaseHold(dir, second, { now, auditLog: path.join(dir, "audit.jsonl") });
   assert.equal(readHold(dir, conversationId, { now: clock }).holder_pid, 333, "releasing a lost hold leaves the new holder's record");
@@ -259,6 +260,7 @@ test("a lost hold closes the terminal session so V2 stays the only writer", asyn
   let killedWith = null;
   const ctx = baseContext(f, {
     renewMs: 5,
+    serverHoldViewImpl: async () => "held",
     v2RequestImpl: v2Server([]),
     v2ActivityImpl: async () => ({ held: true, busy: false }),
     spawnImpl: () => {
@@ -272,7 +274,7 @@ test("a lost hold closes the terminal session so V2 stays the only writer", asyn
   });
   assert.equal(await runCli(["attach", threadId], ctx), 0);
   assert.equal(killedWith, "SIGTERM");
-  assert.match(ctx.stderr.text(), /The hold was lost/);
+  assert.match(ctx.stderr.text(), /The hold was taken over or removed; closing this terminal session/);
 });
 
 test("attach to a V2 chat needs root and a terminal", async () => {
@@ -296,6 +298,7 @@ test("a briefly unwritable hold directory keeps the session until the hold would
   let killedAt = null;
   const ctx = baseContext(f, {
     renewMs: 5,
+    serverHoldViewImpl: async () => "held",
     fsImpl,
     nowImpl: () => clock,
     v2RequestImpl: v2Server([]),
@@ -307,7 +310,7 @@ test("a briefly unwritable hold directory keeps the session until the hold would
       failing = true;
       // Storage stays unwritable while the clock runs past the hold's TTL.
       const tick = setInterval(() => {
-        clock += 10_000;
+        clock += 1_000;
       }, 2);
       c.once("exit", () => clearInterval(tick));
       return c;
@@ -316,7 +319,8 @@ test("a briefly unwritable hold directory keeps the session until the hold would
   assert.equal(await runCli(["attach", threadId], ctx), 0);
   assert.ok(killedAt !== null, "closed before the hold lapsed");
   assert.ok(killedAt - 1_000_000 > 60_000, `kept the session through transient failures (closed after ${killedAt - 1_000_000} ms)`);
-  assert.ok(killedAt - 1_000_000 <= TTL_MS + 20_000, "never past the hold's expiry");
+  assert.ok(killedAt - 1_000_000 <= 60_000 + 20_000, "gives up at about 60 s, well before the hold's expiry");
+  assert.ok(killedAt - 1_000_000 < TTL_MS);
 });
 
 test("the drain waits for the server's native_idle, not only for the run to end", async () => {
@@ -341,4 +345,79 @@ test("the drain waits for the server's native_idle, not only for the run to end"
   assert.equal(await runCli(["attach", threadId], ctx), 0, ctx.stderr.text());
   assert.equal(spawnedAfter, 0, "opened only after native_idle");
   assert.match(ctx.stderr.text(), /still working on this chat/);
+});
+
+test("the session closes (SIGTERM, then SIGKILL) as soon as the server stops reporting the hold", async () => {
+  const f = await fixture();
+  const signals = [];
+  let view = "held";
+  const ctx = baseContext(f, {
+    renewMs: 5,
+    killGraceMs: 20,
+    serverHoldViewImpl: async () => view,
+    v2RequestImpl: v2Server([]),
+    v2ActivityImpl: async () => ({ held: true, busy: false }),
+    spawnImpl: () => {
+      // A provider that ignores SIGTERM: only SIGKILL ends it.
+      const emitter = new EventEmitter();
+      const alive = setInterval(() => {}, 1000);
+      emitter.kill = (signal) => {
+        signals.push(signal);
+        if (signal === "SIGKILL") setImmediate(() => { clearInterval(alive); emitter.emit("exit", null, signal); });
+      };
+      setTimeout(() => { view = "not_held"; }, 30);
+      return emitter;
+    },
+  });
+  assert.equal(await runCli(["attach", threadId], ctx), 0);
+  assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
+  assert.match(ctx.stderr.text(), /does not report the hold any more/);
+});
+
+test("the server view: health feature and GET native-attach decide; unreachable is unknown", async () => {
+  const { serverHoldView } = await import("../apps/cli/src/v2-native-attach.js");
+  const target = { conversationId };
+  const session = (health, hold) => ({ call: async (method, path) => (path === "/api/v2/health" ? health : hold) });
+  const feature = { status: 200, json: { features: ["native_attach_hold_v1"] } };
+  assert.equal(await serverHoldView(session(feature, { status: 200, json: { held: true } }), target), "held");
+  assert.equal(await serverHoldView(session(feature, { status: 200, json: { held: false } }), target), "not_held");
+  assert.equal(await serverHoldView(session(feature, { status: 404, json: { code: "native_attach_unconfigured" } }), target), "not_held");
+  assert.equal(await serverHoldView(session({ status: 200, json: { features: [] } }, { status: 200, json: { held: true } }), target), "not_held");
+  assert.equal(await serverHoldView(session({ status: 503 }, { status: 503 }), target), "unknown");
+  assert.equal(await serverHoldView({ call: async () => { throw new Error("ECONNREFUSED"); } }, target), "unknown");
+});
+
+test("takeover only signals a real attach CLI; a recycled pid's hold is stale", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-hold-takeover-"));
+  const now = () => 2_000_000;
+  const signalled = [];
+  const kill = (pid, signal) => { if (signal) signalled.push([pid, signal]); };
+  await acquireHold({ dir, native, conversationId, now, kill, isAttach: () => true, selfPid: 700, sleep: async () => {} });
+  // pid 700 is alive but is no attach CLI any more: the record is stale, nothing is signalled.
+  const fresh = await acquireHold({ dir, native, conversationId, now, kill, isAttach: () => false, selfPid: 701, sleep: async () => {}, takeover: true });
+  assert.equal(fresh.holder_pid, 701);
+  assert.deepEqual(signalled, []);
+  const { isAttachProcess } = await import("../apps/cli/src/v2-native-hold.js");
+  const proc = (cmdline, uid) => ({ readFileSync: (file) => (file.endsWith("cmdline") ? cmdline.join("\0") : `Name:\tnode\nUid:\t${uid}\t${uid}\t${uid}\t${uid}\n`) });
+  assert.equal(isAttachProcess(9, proc(["node", "/opt/orkestr/current/apps/cli/bin/orkestr-oss.js", "attach", "132"], 0)), true);
+  assert.equal(isAttachProcess(9, proc(["node", "/opt/orkestr/current/apps/cli/bin/orkestr-oss.js", "attach", "132"], 995)), false);
+  assert.equal(isAttachProcess(9, proc(["sleep", "100"], 0)), false);
+});
+
+test("--interrupt sends the owner Stop only after the server reports the hold", async () => {
+  const f = await fixture();
+  const order = [];
+  const activity = [
+    { held: false, busy: true, phase: "running", windowState: "active", runId: "r1", execution: { run_id: "r1", revision: 3 } },
+    { held: true, busy: true, phase: "running", windowState: "active", runId: "r1", execution: { run_id: "r1", revision: 3 } },
+    { held: true, busy: false, phase: "idle", windowState: "closed", runId: null, execution: {} },
+  ];
+  const ctx = baseContext(f, {
+    v2RequestImpl: v2Server([], { [`POST ${conv}/stop`]: () => { order.push("stop"); return { status: 202, json: {} }; } }),
+    v2ActivityImpl: async () => { const next = activity.shift(); order.push(next.held ? "held" : "not-yet-held"); return next; },
+    spawnImpl: () => { const c = child(); setImmediate(() => c.emit("exit", 0, null)); return c; },
+  });
+  assert.equal(await runCli(["attach", threadId, "--interrupt"], ctx), 0, ctx.stderr.text());
+  assert.deepEqual(order, ["not-yet-held", "held", "stop", "held"]);
+  assert.match(ctx.stderr.text(), /queued messages stay queued/);
 });

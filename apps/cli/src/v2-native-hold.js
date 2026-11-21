@@ -16,7 +16,7 @@ import path from "node:path";
 export const HOLD_FORMAT = "orkestr-native-attach-hold-v1";
 export const ENDED_FORMAT = "orkestr-native-attach-ended-v1";
 export const TTL_MS = 120_000;
-export const RENEW_MS = 30_000;
+export const RENEW_MS = 15_000;
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 function holdError(code, message) {
@@ -63,15 +63,28 @@ function pidAlive(pid, kill = process.kill) {
   }
 }
 
+// Whether pid is an `orkestr attach` CLI run by root, the only kind of
+// process that holds a native-attach record. A recycled pid is not.
+export function isAttachProcess(pid, fsImpl = fs) {
+  try {
+    const argv = fsImpl.readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0").filter(Boolean);
+    const uid = (fsImpl.readFileSync(`/proc/${pid}/status`, "utf8").match(/^Uid:\s+(\d+)/m) || [])[1];
+    return uid === "0" && argv.some((arg) => arg.endsWith("orkestr-oss.js")) && argv.includes("attach");
+  } catch {
+    return false;
+  }
+}
+
 // Creates the hold. Refuses when another live terminal holds it (unless
-// takeover, which signals that terminal to hand back first).
-export async function acquireHold({ dir, gid = null, native, conversationId, fsImpl = fs, now = Date.now, kill = process.kill, sleep, takeover = false, selfPid = process.pid }) {
+// takeover, which signals that terminal to hand back first). A record whose
+// holder is no attach process any more (dead or recycled pid) is stale.
+export async function acquireHold({ dir, gid = null, native, conversationId, fsImpl = fs, now = Date.now, kill = process.kill, sleep, takeover = false, selfPid = process.pid, isAttach = (pid) => isAttachProcess(pid, fsImpl) }) {
   if (!fsImpl.existsSync(dir)) {
     fsImpl.mkdirSync(dir, { recursive: true, mode: 0o750 });
     if (Number.isInteger(gid)) fsImpl.chownSync(dir, 0, gid);
   }
   const existing = readHold(dir, conversationId, { fsImpl, now: now() });
-  if (existing?.live && existing.holder_pid !== selfPid && pidAlive(existing.holder_pid, kill)) {
+  if (existing?.live && existing.holder_pid !== selfPid && pidAlive(existing.holder_pid, kill) && isAttach(existing.holder_pid)) {
     if (!takeover) {
       throw holdError("v2_native_attached_elsewhere", `this chat's ${existing.provider} session is already open in another terminal (pid ${existing.holder_pid}, since ${new Date(existing.acquired_at_ms).toISOString()}); rerun with --takeover to close it there`);
     }
