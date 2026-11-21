@@ -247,7 +247,7 @@ async fn a_deploy_drain_counts_a_held_conversation_with_only_queued_intents_as_q
 }
 
 /// A due timer occurrence of `conversation`, admitted by the durable timer
-/// controller with its Deep window intent (a `timer:` queue row).
+/// controller with its Deep window intent (a `timer-window:` queue row).
 async fn timer_intent(f: &Fixture, conversation: &ConversationId) {
     use orkestr_v2_store_sqlite::history_import::timers::{
         authority::DurableTimerEnable, TimerEnableRequest, TimerImportRequest, TimerSchedule,
@@ -339,7 +339,7 @@ async fn a_held_timer_intent_and_adapter_input_wait_unwithdrawn_then_dispatch_in
     ));
     let queued = rows(&f, &chat);
     assert_eq!(queued.len(), 2);
-    assert!(queued[0].0.starts_with("timer:"), "{queued:?}");
+    assert!(queued[0].0.starts_with("timer"), "{queued:?}");
     assert_eq!(queued[1].0, adapter.request_key);
     for _ in 0..3 {
         controller.queue.wake();
@@ -353,7 +353,10 @@ async fn a_held_timer_intent_and_adapter_input_wait_unwithdrawn_then_dispatch_in
     holds.release(&chat);
     controller.queue.wake();
     controller.dispatch_once().await;
-    let states: Vec<_> = rows(&f, &chat).into_iter().map(|(_, state)| state).collect();
+    let states: Vec<_> = rows(&f, &chat)
+        .into_iter()
+        .map(|(_, state)| state)
+        .collect();
     assert_eq!(states, vec!["dispatched", "queued"]);
     assert_eq!(f.windows(&chat).await, 1);
     controller.queue.close().await;
