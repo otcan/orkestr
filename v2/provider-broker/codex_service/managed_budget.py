@@ -63,6 +63,17 @@ MESSAGES = {
                                        'budget. Nothing was executed. Do not retry in this turn; tell the owner. '
                                        'A later execution window starts a new budget.',
 }
+# Argument-bound refusals (managed_ingress.packet): fixed texts that say which bound the call broke, so an
+# agent does not read a size check as a permission decision (EasyLab, 2026-11-22: an 84-path host.exec
+# summary of about 6.7 KB came back as "Root refused this call" and the chat gave up the cleanup).
+ARGUMENT_MESSAGES = {
+    'managed_submit_text': 'Root did not run this call: action, resource and summary must each be non-empty text '
+                           'without NUL characters, at most 256, 512 and 4096 bytes (UTF-8). Nothing was executed. '
+                           'This is a size check, not a permission or policy decision: split the work into '
+                           'several smaller calls, or put long text in a file and pass its path.',
+    'managed_submit_fields': 'Root did not run this call: send exactly the fields action, resource and summary. '
+                             'Nothing was executed. This is a format check, not a permission or policy decision.',
+}
 STATE_MESSAGES = {
     'refused': 'Root refused this call before running it. Nothing was executed. Do not retry it unchanged.',
     'unknown': 'Root could not complete this call. Its outcome is unknown; do not repeat it automatically.',
@@ -101,10 +112,12 @@ def refusal(error, state):
     reason = error.args[0] if isinstance(error, Refused) and error.args else None
     if type(reason) is not str or not REASON.fullmatch(reason):
         reason = 'managed_refused' if isinstance(error, Refused) else 'managed_internal_error'
-    status = {'refused': 500 if reason == 'managed_internal_error' else 403,
+    argument = state == 'refused' and reason in ARGUMENT_MESSAGES
+    status = {'refused': 500 if reason == 'managed_internal_error' else 400 if argument else 403,
               'unknown': 504 if reason == 'managed_call_deadline' else 502, 'cancelled': 410}[state]
     return {'kind': 'managed_refusal', 'reason': reason, 'limit': None, 'status': status,
-            'retryable': False, 'retry_after_s': None, 'message': STATE_MESSAGES[state]}
+            'retryable': False, 'retry_after_s': None,
+            'message': ARGUMENT_MESSAGES[reason] if argument else STATE_MESSAGES[state]}
 
 
 class Bucket:

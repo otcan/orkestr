@@ -18,7 +18,7 @@ import uuid
 from codex_bounded.trust import metadata, process
 from codex_service import managed_budget as budget
 from codex_service.contract import Refused, canonical
-from codex_service.managed_budget import Admission, Busy, limits, refusal
+from codex_service.managed_budget import STATE_MESSAGES, Admission, Busy, limits, refusal
 from codex_service.managed_http import Peer as HttpPeer
 from codex_service.managed_ingress import Ingress, Peer as SocketPeer
 from codex_service.managed_journal import Journal
@@ -252,6 +252,20 @@ class Answers(unittest.TestCase):
         for value in (unknown, refusal(Busy('managed_window_busy', 'window_in_flight_max', 429, 2), 'refused')):
             self.assertEqual(value['kind'], 'managed_refusal')
             self.assertNotIn('result', value)
+
+    def test_argument_bounds_say_which_bound_and_that_it_is_no_permission_decision(self):
+        # EasyLab 2026-11-22: a 6.7 KB host.exec summary read as a permission refusal.
+        size = refusal(Refused('managed_submit_text'), 'refused')
+        self.assertEqual((size['reason'], size['status'], size['retryable']), ('managed_submit_text', 400, False))
+        for part in ('4096 bytes', 'Nothing was executed', 'not a permission or policy decision', 'split'):
+            self.assertIn(part, size['message'])
+        fields = refusal(Refused('managed_submit_fields'), 'refused')
+        self.assertEqual(fields['status'], 400)
+        self.assertIn('action, resource and summary', fields['message'])
+        # Other refusals keep the generic text; an unknown outcome never reads as a size check.
+        self.assertEqual(refusal(Refused('managed_no_consumed_run'), 'refused')['message'], STATE_MESSAGES['refused'])
+        late = refusal(Refused('managed_submit_text'), 'unknown')
+        self.assertEqual((late['status'], late['message']), (502, STATE_MESSAGES['unknown']))
 
     def test_reports_are_paced_per_window_and_reason_and_lasting_ones_alert(self):
         log = io.StringIO()
