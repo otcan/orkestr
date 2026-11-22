@@ -21,7 +21,7 @@ mod managed_operations;
 mod sign_in;
 #[path = "manager_workers.rs"]
 mod workers;
-pub(crate) use managed_operations::ObservedManagedRequest;
+pub(crate) use managed_operations::{ManagedProof, ObservedManagedRequest};
 pub(crate) use sign_in::SignInCommand;
 #[path = "manager_client_wire.rs"]
 mod wire;

@@ -62,7 +62,15 @@ def authorize_result(ingress,cap,request):
     return record
 
 
-def consume(ingress,cap):
+def consume(ingress,cap,deadline_ms=None):
+    """Apply Core's consumption of one pending claim, at most once.
+
+    `deadline_ms` is the caller's own deadline (wall-clock ms). The manager serves
+    one control request at a time, so a request can wait in its queue past the
+    point where Core gave up on the answer. Such a late request changes nothing:
+    it is refused before any state changes, and Core's later managed_poll then
+    proves the claim was never applied (`consumed` false) instead of leaving its
+    window to pause on an unknown delivery (2026-11-20 and 2026-11-22, PA)."""
     cap=capability(cap);operation=cap['operation_id'];path=ingress.directory/(operation+'.json')
     require(path.exists(),'managed_unknown_request');record=metadata(protected(path),32768)
     require(normalize_source(record['source'])==cap['evidence']['source'] and record['request']==cap['evidence']['request'],
@@ -76,6 +84,8 @@ def consume(ingress,cap):
     pending=ingress.pending(source['window_id'],source['window_generation'])
     require(any(r['request_id']==operation for r in pending),'managed_caller_not_live')
     require(cap['binding_generation']>=source['generation'],'managed_binding_lineage')
+    # Checked last, immediately before the first state change.
+    require(deadline_ms is None or time.time_ns()//1000000<deadline_ms,'managed_request_expired')
     record.update(state='consumed',capability_sha256=fingerprint,run_id=cap['run_id'],capability=cap)
     for peer in ingress.peers:
         if peer.request==operation:peer.deadline=time.monotonic()+max(0,cap['hard_deadline_ms']-int(time.time()*1000))/1000+5
@@ -163,10 +173,13 @@ def tick(ingress):
 
 
 def receipt(record):
+    """`consumed`: whether Core's consumption was ever applied to this claim. Only a
+    consumption writes `capability_sha256`, so false proves that nothing of it ran,
+    whatever the claim's state now (a caller that went away leaves it `unknown`)."""
     source=record['source']
     return {'operation_id':record['request_id'],'run_id':record.get('run_id'),
         'window_id':source['window_id'],'generation':source['window_generation'],
-        'state':record['state'],'result':record.get('result')}
+        'state':record['state'],'result':record.get('result'),'consumed':'capability_sha256' in record}
 
 
 def dispatch(manager,request,window):
@@ -195,7 +208,7 @@ def dispatch(manager,request,window):
         require(scope['window_id']==window_id and scope['window_generation']==generation and
                 scope['owner_id']==request['owner_id'] and scope['conversation_id']==request['conversation_id'],
                 'managed_control_scope')
-        record=consume(ingress,cap) if operation=='managed_consume' else renew(ingress,cap)
+        record=consume(ingress,cap,request.get('deadline_ms')) if operation=='managed_consume' else renew(ingress,cap)
     else:
         path=ingress.directory/(identifier(request['operation_id'])+'.json');record=metadata(protected(path),32768)
         source=record['source']

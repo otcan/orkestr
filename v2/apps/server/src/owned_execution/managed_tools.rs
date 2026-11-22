@@ -1,6 +1,6 @@
 //! Poll only the Root-observed channel, then issue through the current Deep run.
 use super::*;
-use crate::window_runtime::manager_client::ManagerError;
+use crate::window_runtime::manager_client::{ManagedProof, ManagerError};
 use orkestr_v2_store_sqlite::{
     ConsumedManagedOperation, ConsumedProviderDispatch, ManagedOperationConsumption,
     ManagedOperationParent, ManagedOperationSetup,
@@ -233,6 +233,7 @@ impl ManagedTools {
             };
             self.operation = Some(operation);
             let started = Instant::now();
+            let deadline = self.control_deadline()?;
             let result = self
                 .context
                 .manager
@@ -241,11 +242,15 @@ impl ManagedTools {
                     &self.credential,
                     &self.context.window,
                     self.operation.as_ref().ok_or("managed operation lost")?,
-                    self.control_deadline()?,
+                    deadline,
                 )
                 .await;
-            observed_rpc(ManagedRpc::Consume, started, result)
-                .map_err(|_| "managed Root delivery unknown; replay refused")?;
+            if let Err(error) = observed_rpc(ManagedRpc::Consume, started, result) {
+                self.settle_unanswered_consume(error, deadline).await?;
+                if self.operation.is_none() {
+                    return Ok(());
+                }
+            }
         }
         let operation = self.operation.as_ref().ok_or("managed operation lost")?;
         if self
@@ -297,6 +302,73 @@ impl ManagedTools {
         }
         Ok(())
     }
+    /// Core's consumption got no answer, or the manager refused it. The request
+    /// carried its deadline and the manager applies nothing after it, so once
+    /// that has passed Root's own record proves whether it was applied: then
+    /// the claim's ordinary result follows. If it was never applied, nothing
+    /// ran: a claim still pending is cancelled at the manager (its caller is
+    /// answered and can file a new request), Core withdraws the operation, and
+    /// the run continues. Only when no proof can be read does the window pause
+    /// as before (2026-11-20 and 2026-11-22, PA).
+    async fn settle_unanswered_consume(
+        &mut self,
+        error: ManagerError,
+        deadline: Instant,
+    ) -> Result<(), &'static str> {
+        const UNKNOWN: &str = "managed Root delivery unknown; replay refused";
+        if error != ManagerError::Refused {
+            // An answered refusal was handled already; anything else may still
+            // wait in the manager's queue until its deadline.
+            tokio::time::sleep_until((deadline + PROOF_MARGIN).into()).await;
+        }
+        // One control allowance for the proof (and the cancel), inside the
+        // window's work and the run's lease.
+        let until = self.control_deadline().map_err(|_| UNKNOWN)?;
+        let (manager, window) = (&self.context.manager, &self.context.window);
+        let operation = self.operation.as_ref().ok_or("managed operation lost")?;
+        let unavailable = |error: &ManagerError| matches!(error, ManagerError::Unavailable);
+        let proof = close::bounded(
+            until,
+            &close::UNAVAILABLE_BACKOFF,
+            unavailable,
+            move |deadline| manager.prove_managed(window, operation, false, deadline),
+        )
+        .await
+        .map_err(|_| UNKNOWN)?;
+        match unanswered_consume_next(proof) {
+            ConsumeNext::Continue => {
+                eprintln!("owned execution managed consumption unanswered but applied ({error:?})");
+                Ok(())
+            }
+            ConsumeNext::Withdraw { cancel } => {
+                if cancel {
+                    let cancelled = close::bounded(
+                        until,
+                        &close::UNAVAILABLE_BACKOFF,
+                        unavailable,
+                        move |deadline| manager.prove_managed(window, operation, true, deadline),
+                    )
+                    .await
+                    .map_err(|_| UNKNOWN)?;
+                    if cancelled == ManagedProof::Applied {
+                        // Applied in the meantime after all: its result follows.
+                        return Ok(());
+                    }
+                }
+                self.store
+                    .withdraw_managed_operation(
+                        &self.credential,
+                        self.operation.take().ok_or("managed operation lost")?,
+                    )
+                    .await
+                    .map_err(|_| "managed withdrawal persistence uncertain")?;
+                eprintln!(
+                    "owned execution managed Root request not applied ({error:?}); withdrawn, run continues"
+                );
+                Ok(())
+            }
+        }
+    }
     pub(super) async fn cancel(&mut self) -> Result<(), &'static str> {
         let unavailable = |error: &ManagerError| matches!(error, ManagerError::Unavailable);
         // One budget for the closure and the cleanup together: a run's
@@ -345,6 +417,50 @@ impl ManagedTools {
             cancel = false;
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
+    }
+}
+
+/// Past the consumption deadline the manager's clock has passed it too.
+const PROOF_MARGIN: std::time::Duration = std::time::Duration::from_millis(100);
+
+#[derive(Debug, PartialEq, Eq)]
+enum ConsumeNext {
+    /// Applied: the claim's ordinary result follows.
+    Continue,
+    /// Never applied: end the claim (cancelling it at the manager first while
+    /// its caller still waits) and let the run continue.
+    Withdraw { cancel: bool },
+}
+
+/// One write per Core operation (its launch fence): a claim that was never
+/// applied is withdrawn, never sent again. The agent may file it again.
+fn unanswered_consume_next(proof: ManagedProof) -> ConsumeNext {
+    match proof {
+        ManagedProof::Applied => ConsumeNext::Continue,
+        ManagedProof::Pending => ConsumeNext::Withdraw { cancel: true },
+        ManagedProof::NotApplied => ConsumeNext::Withdraw { cancel: false },
+    }
+}
+
+#[cfg(test)]
+mod unanswered_consume_tests {
+    use super::*;
+
+    #[test]
+    fn an_unanswered_consumption_continues_or_is_withdrawn_never_replayed() {
+        assert_eq!(
+            unanswered_consume_next(ManagedProof::Applied),
+            ConsumeNext::Continue
+        );
+        assert_eq!(
+            unanswered_consume_next(ManagedProof::Pending),
+            ConsumeNext::Withdraw { cancel: true }
+        );
+        // 2026-11-22: the caller went away; the manager refused the consumption.
+        assert_eq!(
+            unanswered_consume_next(ManagedProof::NotApplied),
+            ConsumeNext::Withdraw { cancel: false }
+        );
     }
 }
 

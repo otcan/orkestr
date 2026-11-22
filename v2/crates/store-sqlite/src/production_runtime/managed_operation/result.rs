@@ -76,6 +76,39 @@ impl Store {
             attempted: std::sync::atomic::AtomicBool::new(false),
         })
     }
+    /// Root's own record proves that Core's consumption was never applied:
+    /// the manager refused it after its deadline, or its caller had gone away
+    /// first (2026-11-20 and 2026-11-22, PA). Nothing ran, so the operation
+    /// ends `cancelled` with no result to release, and its run continues.
+    pub async fn withdraw_managed_operation(
+        &self,
+        credential: &str,
+        operation: ConsumedManagedOperation,
+    ) -> Result<()> {
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let workspace = self
+            .check_binding_before_writer(&operation.parent.binding)
+            .await?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let store = &*workspace;
+        #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+        let store = self;
+        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        launch_fence::checked(store, &mut tx, credential, &operation).await?;
+        let changed = sqlx::query(
+            "UPDATE managed_operations SET state='cancelled' WHERE id=? AND state='delivery_unknown'",
+        )
+        .bind(operation.id.to_string())
+        .execute(&mut *tx)
+        .await
+        .map_err(db)?
+        .rows_affected();
+        if changed != 1 {
+            return Err(RuntimeStoreError::Fenced);
+        }
+        tx.commit().await.map_err(db)?;
+        Ok(())
+    }
     pub fn with_managed_result_fence<E>(
         &self,
         credential: &str,

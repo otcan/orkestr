@@ -137,6 +137,14 @@ RELEASE_NOTICE = TEMPLATES["release_continue"]["en"]
 RELEASE_PREFIX = ("[The previous turn for this message was stopped by an Orkestr update before it "
                   "finished. Continue the same task from where it stopped; do not repeat steps "
                   "that already succeeded.]\n\n")
+# The server paused this input's own window while its Deep ran (a managed control
+# call it could not settle, a crash): Core reconciles that window
+# (`reconciliation_required`). The owner's message is not dropped: it continues
+# once like a deadline stop, and the owner is told honestly (PA 2026-11-22).
+SERVER_NOTICE = TEMPLATES["server_continue"]["en"]
+SERVER_PREFIX = ("[The previous turn for this message was interrupted by a server error before it "
+                 "finished. Continue the same task from where it stopped; check what already "
+                 "happened and do not repeat steps that already succeeded.]\n\n")
 
 
 class Refused(RuntimeError):
@@ -1387,11 +1395,17 @@ class Worker:
             return False
         if "deep_stop_seen_ms" not in data:
             data["deep_stop_seen_ms"] = int(time.time() * 1000)
+            # The window's state when the stop was first seen: a server pause
+            # leaves it in reconciliation until Core closes it.
+            data["stop_window_state"] = self.own_window_state_now(data)
             self.ledger.save(data)
         released = release_interruption.recorded(self.release_interruption_dir,
                                                  getattr(self.client, "conversation", None), deep.get("run_id"))
+        server = False
         if not released and not self.deadline_stopped(data):
-            return False
+            if not self.server_interrupted(data):
+                return False
+            server = True
         try:
             guard = continuation_guard.freeze(self.call, deep)
         except ValueError as error:
@@ -1414,10 +1428,33 @@ class Worker:
         continued = {"previous_message_id": previous, "at": time.time()}
         if released:
             continued["cause"] = "release"
-        data.update(intake_text=(RELEASE_PREFIX if released else CONTINUE_PREFIX) + text, phase="queued",
+        elif server:
+            continued["cause"] = "server_error"
+        prefix, notice = ((RELEASE_PREFIX, RELEASE_NOTICE) if released else (SERVER_PREFIX, SERVER_NOTICE) if server
+                          else (CONTINUE_PREFIX, CONTINUE_NOTICE))
+        data.update(intake_text=prefix + text, phase="queued",
                     queued_at=time.time(), continued=continued, continuation_guard=guard)
-        self.ledger.continue_notice(data, RELEASE_NOTICE if released else CONTINUE_NOTICE, run_identity(deep))
+        self.ledger.continue_notice(data, notice, run_identity(deep))
         return True
+
+    def own_window_state_now(self, data):
+        """The current state of this input's own window, or None when another
+        window (or none) is current."""
+        window = data.get("window") or {}
+        own = (window.get("status") or {}).get("window_id") or window.get("window_id")
+        current = self.call("GET", "/window", allowed=(200, 204))
+        if own is None or not isinstance(current, dict) or current.get("window_id") != own:
+            return None
+        state = current.get("state")
+        return state if isinstance(state, str) else None
+
+    def server_interrupted(self, data):
+        """Whether the server paused this input's own window while its Deep ran:
+        the window was (or is) in `reconciliation_required`. An owner stop, a
+        deadline or a closed window alone never is (the Deep may have finished its
+        work; see deadline_stopped)."""
+        return (data.get("stop_window_state") == "reconciliation_required" or
+                self.own_window_state_now(data) == "reconciliation_required")
 
     def provider_identity(self, run_id=None, status=None, fast=False):
         """Exact-run evidence for footers; unknown models remain unreported."""

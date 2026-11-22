@@ -112,7 +112,10 @@ def decode(raw):
         "extend": {"window_id", "generation", "expires_at_ms"},
     }
     require(type(operation) is str and operation in fields, "operation")
-    optional = {'workspace_worker'} if operation == 'launch_child' else set()
+    optional = ({'workspace_worker'} if operation == 'launch_child' else
+                # Core's own deadline for this consumption (wall-clock ms): the
+                # manager applies nothing once it has passed (managed_control.consume).
+                {'deadline_ms'} if operation == 'managed_consume' else set())
     require(common | fields[operation] <= set(value) <= common | fields[operation] | optional, "fields")
     require(type(value["version"]) is int and value["version"] == VERSION, "version")
     key(value["request_id"])
@@ -128,6 +131,8 @@ def decode(raw):
     for field in ("generation", "expected_generation"):
         if field in value:
             generation(value[field])
+    if "deadline_ms" in value:
+        require(type(value["deadline_ms"]) is int and 0 < value["deadline_ms"] < 2**53, "deadline_ms")
     if operation == "admit":
         for field in ("opened_at_ms", "work_deadline_ms", "expires_at_ms"):
             require(type(value[field]) is int and 0 <= value[field] < 2**53, "timestamp")

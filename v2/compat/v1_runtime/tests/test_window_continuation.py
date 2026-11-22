@@ -9,7 +9,8 @@ from unittest.mock import patch
 from v2.compat.v1_runtime import recovery
 from v2.compat.v1_runtime.ledger import Ledger
 from v2.compat.v1_runtime.rust_client import ClientError
-from v2.compat.v1_runtime.worker import CONTINUE_NOTICE, CONTINUE_PREFIX, Refused, Worker
+from v2.compat.v1_runtime.worker import (CONTINUE_NOTICE, CONTINUE_PREFIX, SERVER_NOTICE, SERVER_PREFIX, Refused,
+                                         Worker)
 from v2.compat.v1_runtime.tests.test_worker import Peer
 
 
@@ -169,6 +170,62 @@ class DeadlineContinuationTests(Case):
             self.settle_terminal(self.data)
         self.assertEqual(self.notices(), [])
         self.assertNotIn("readmitted", self.ledger.next_input())
+
+    def paused_by_the_server(self, window="window"):
+        # 2026-11-22 (PA): the server paused the window on a managed control
+        # call it could not settle; Core reconciles it and cancels the Deep.
+        self.peer.deep_phase = "cancelled"
+        paused = dict(window_id=window, state="reconciliation_required", conversation_id="conversation",
+                      work_deadline_ms=int(time.time() * 1000) + 600_000)
+        original = self.peer.request
+
+        def request(method, route, body=None, allowed=(200,)):
+            reply = original(method, route, body=body, allowed=allowed)
+            if route == "/window" and method == "POST":
+                self.peer.current = paused  # Admitted, then paused while its Deep ran.
+            return reply
+        self.peer.request = request
+
+    def test_a_server_paused_window_continues_the_message_once_and_says_so(self):
+        self.paused_by_the_server()
+        self.worker.step(self.data)
+        resumed = self.ledger.next_input()
+        self.assertEqual(resumed["phase"], "queued")
+        self.assertTrue(resumed["intake_text"].startswith(SERVER_PREFIX))
+        self.assertTrue(resumed["intake_text"].endswith("request"))
+        self.assertEqual(resumed["continued"]["cause"], "server_error")
+        self.assertEqual([m["text"] for m in self.notices()], [SERVER_NOTICE])
+        self.assertIn("server error", SERVER_NOTICE)
+        # The successor turn completes normally and is mirrored as the reply.
+        self.peer.deep_phase, self.peer.current = None, None
+        self.peer.accepted.clear()
+        self.worker.step(resumed)
+        self.assertEqual(self.ledger.messages()[-1]["text"], "deep result")
+
+    def test_the_pause_is_remembered_after_core_closes_the_window(self):
+        data = dict(window=dict(window_id="window"), stop_window_state="reconciliation_required")
+        self.peer.current = dict(window_id="window", state="closed", conversation_id="conversation")
+        self.assertTrue(self.worker.server_interrupted(data))
+        self.assertFalse(self.worker.server_interrupted(dict(data, stop_window_state="closed")))
+        self.peer.current = dict(window_id="window", state="reconciliation_required", conversation_id="conversation")
+        self.assertTrue(self.worker.server_interrupted(dict(data, stop_window_state=None)))
+
+    def test_a_second_server_pause_refuses_visibly(self):
+        self.paused_by_the_server()
+        self.worker.step(self.data)
+        resumed = self.ledger.next_input()
+        self.peer.accepted.clear()
+        self.peer.current = None  # Core closed the paused window; the next one pauses too.
+        with self.assertRaisesRegex(Refused, "deep_run_cancelled"):
+            self.settle_terminal(resumed)
+        self.assertEqual(len(self.notices()), 1)
+
+    def test_another_current_window_is_not_a_server_pause_of_this_one(self):
+        self.paused_by_the_server(window="another")
+        with self.assertRaisesRegex(Refused, "deep_run_cancelled"):
+            self.settle_terminal(self.data)
+        self.assertNotIn("continued", self.ledger.next_input())
+        self.assertEqual(self.notices(), [])
 
     def test_failed_deep_is_never_continued(self):
         self.peer.deep_phase = "failed"
