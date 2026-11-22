@@ -318,6 +318,39 @@ async fn fast_worker_durable_stop_and_closed_window_are_not_managed_authority() 
         .is_err());
 }
 
+/// 2026-11-20 and 2026-11-22 (PA): Root proves Core's consumption was never
+/// applied. The operation ends `cancelled` with nothing to release, once; the
+/// same claim can never be consumed again.
+#[tokio::test]
+async fn a_never_applied_consumption_is_withdrawn_once() {
+    let (f, bound, token, parent, source) = fixture().await;
+    let id = Uuid::new_v4();
+    let ManagedOperationConsumption::Operation(operation) = bound
+        .consume_managed_operation(&token, &parent, id, &source, &request())
+        .await
+        .unwrap()
+    else {
+        panic!()
+    };
+    bound
+        .withdraw_managed_operation(&token, operation)
+        .await
+        .unwrap();
+    let state: String = sqlx::query_scalar("SELECT state FROM managed_operations WHERE id=?")
+        .bind(id.to_string())
+        .fetch_one(&f.store.pool)
+        .await
+        .unwrap();
+    assert_eq!(state, "cancelled");
+    assert!(matches!(
+        bound
+            .consume_managed_operation(&token, &parent, id, &source, &request())
+            .await
+            .unwrap(),
+        ManagedOperationConsumption::ReconciliationRequired
+    ));
+}
+
 #[tokio::test]
 async fn submitted_receipt_is_not_approval_and_unknown_claims_consume_window_budget() {
     let (f, bound, token, parent, source) = fixture().await;

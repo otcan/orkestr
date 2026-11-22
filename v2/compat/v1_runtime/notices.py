@@ -114,6 +114,12 @@ TEMPLATES = {
         "tr": "\U0001f4ce Orkestr uygulamasında: %(files)s",
         "de": "\U0001f4ce In der Orkestr-App: %(files)s",
     },
+    "server_continue": {
+        "en": "Your message was interrupted by a server error before it finished. It is being retried now in a new turn.",
+        "tr": "Mesajın bir sunucu hatası nedeniyle bitmeden kesildi. Şimdi yeni bir turda yeniden deneniyor.",
+        "de": "Deine Nachricht wurde vor dem Abschluss durch einen Serverfehler unterbrochen. Sie wird jetzt in "
+              "einem neuen Durchgang erneut versucht.",
+    },
     "release_continue": {
         "en": "Orkestr was updated while this task was running. Continuing it in a new turn.",
         "tr": "Bu görev çalışırken Orkestr güncellendi. Yeni bir turda devam ediliyor.",
