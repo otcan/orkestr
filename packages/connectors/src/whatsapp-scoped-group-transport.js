@@ -101,6 +101,11 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
   const db=new DatabaseSync(dbPath);db.exec(`PRAGMA journal_mode=WAL;
     CREATE TABLE IF NOT EXISTS group_input(id TEXT PRIMARY KEY,chat_id TEXT NOT NULL,body TEXT NOT NULL,created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS group_send(id TEXT PRIMARY KEY,hash TEXT NOT NULL,chat_id TEXT NOT NULL,parent_id TEXT NOT NULL,state TEXT NOT NULL,provider_id TEXT,created_at TEXT NOT NULL);
+    -- The relay asks "is any send unresolved?" once per journal input on every
+    -- tick, and inbound echo checks look sends up by provider id. Unindexed,
+    -- both scan every send ever made, so the cost grows with inputs x sends.
+    CREATE INDEX IF NOT EXISTS group_send_state ON group_send(state);
+    CREATE INDEX IF NOT EXISTS group_send_provider ON group_send(provider_id);
     CREATE TABLE IF NOT EXISTS group_input_author(id TEXT PRIMARY KEY,proof TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS group_input_participant_recovery(id TEXT PRIMARY KEY,receipt TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS group_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
