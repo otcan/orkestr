@@ -10,7 +10,8 @@
 // (issued by the V2 manager for a run) and the run's cgroup.
 //
 // The interactive command is the provider's own TUI resume:
-//   claude:  <executable> --resume <session> --dangerously-skip-permissions
+//   claude:  <executable> --resume <session> --dangerously-skip-permissions --settings <session-only first-run choices>
+//            (DISABLE_AUTOUPDATER / DISABLE_UPDATES: V2's pinned build is never updated from here)
 //   codex:   <release>/package/native --dangerously-bypass-approvals-and-sandbox resume <thread>
 import fs from "node:fs";
 
@@ -37,6 +38,8 @@ export function parseEnvironmentFile(text) {
   return values;
 }
 
+const INTERACTIVE_SETTINGS = JSON.stringify({ theme: "dark", skipDangerousModePermissionPrompt: true, env: { DISABLE_AUTOUPDATER: "1", DISABLE_UPDATES: "1" } });
+
 const passthrough = ["TERM", "COLORTERM", "TERM_PROGRAM", "LC_TERMINAL", "COLUMNS", "LINES"];
 
 // The launch for one native session. `plan` is the deployment's selected
@@ -60,10 +63,18 @@ export function buildNativeLaunch({ plan, native, conversationId, settings = {},
       CLAUDE_CONFIG_DIR: c.account,
       // Same as V2 runs: a detached background task would outlive the session.
       CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1",
+      // V2 pins its Claude build. An interactive start must never update or
+      // (re)install Claude Code into the executor home (2026-11-21: the
+      // built-in updater installed 2.1.330 there and registered a URL handler).
+      DISABLE_AUTOUPDATER: "1",
+      DISABLE_UPDATES: "1",
       ...(clean(settings.model) ? { ANTHROPIC_MODEL: clean(settings.model) } : {}),
       ...(["low", "medium", "high", "max"].includes(clean(settings.reasoning_effort)) ? { CLAUDE_CODE_EFFORT_LEVEL: clean(settings.reasoning_effort) } : {}),
     };
-    argv = [c.executable, "--resume", native.nativeSessionId, "--dangerously-skip-permissions"];
+    // First-run choices for this session only (`--settings` overrides for the
+    // session and is not written back): no theme picker, no bypass-mode prompt,
+    // so nothing creates settings.json in the shared account.
+    argv = [c.executable, "--resume", native.nativeSessionId, "--dangerously-skip-permissions", "--settings", INTERACTIVE_SETTINGS];
   } else if (native.provider === "codex") {
     const host = plan.managed_host || {};
     if (!plan.native || !host.environment?.CODEX_HOME) throw launchError("v2_native_launch_unavailable", "plan names no Codex launch");
