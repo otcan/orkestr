@@ -1,7 +1,7 @@
 """Closed no-tools interrupt observations; private JSON is not Core authority."""
 import json
 import uuid
-from protocol import exact, require
+from protocol import clip_with_note, exact, require
 
 # Bounded native result telemetry; validated by size only and never forwarded.
 TELEMETRY = frozenset({'fast_mode_disabled_reason', 'queued_turn_count', 'result_index',
@@ -27,9 +27,10 @@ def text_blocks(content, tools=False):
             require(isinstance(block.get("type"), str) and 0 < len(block["type"]) <= 64)
             continue
         exact(block, ("type", "text"))
-        require(block["type"] == "text" and isinstance(block["text"], str)
-                and len(block["text"].encode()) <= 8192)
-        blocks.append(block)
+        require(block["type"] == "text" and isinstance(block["text"], str))
+        # The delivered reply: over Core's progress bound it is cut with a
+        # note, never refused (a refusal ended the run with nothing delivered).
+        blocks.append({"type": "text", "text": clip_with_note(block["text"])})
     return blocks
 
 
