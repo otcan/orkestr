@@ -26,6 +26,7 @@ fn every_view_round_trips_through_its_fragment() {
         Route::OrkestrSettings,
         Route::Credentials,
         Route::Sites,
+        Route::Apps,
         Route::V1Thread {
             thread: "group-coordinated".into(),
         },
@@ -278,4 +279,22 @@ fn sites_are_a_global_page_reached_from_orkestr_settings() {
         None,
         "sites never take a conversation's scope"
     );
+}
+
+#[test]
+fn apps_are_a_global_page_reached_from_the_header() {
+    // The owner's tools and apps the host lists, and his live sites, at
+    // `#apps`, never inside a conversation's scope.
+    assert_eq!(Route::parse("#apps"), Some(Route::Apps));
+    assert_eq!(Route::Apps.hash(), "#apps");
+    assert!(Tab::GLOBAL.contains(&Tab::Apps));
+    assert!(Tab::Apps.is_global() && !Tab::Apps.in_more());
+    assert_eq!(Tab::Apps.label(), "Apps");
+    for hash in [
+        format!("#conversation/{ID}/apps"),
+        "#apps/x".to_owned(),
+        "#appsx".to_owned(),
+    ] {
+        assert_eq!(Route::parse(&hash), None, "{hash}");
+    }
 }

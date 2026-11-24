@@ -21,6 +21,7 @@ use uuid::Uuid;
 mod accepted_results_http;
 mod agent_attachments_http;
 mod agent_timers_http;
+mod app_links_http;
 mod archived_history_http;
 pub mod attachment_keys_http;
 mod attachment_transfer;
@@ -175,6 +176,9 @@ pub struct AppState {
     credentials: credentials_http::Backend,
     /// Where the host's sites catalog is read (ORK-834); none until startup names it.
     sites: sites_http::SitesCatalog,
+    /// Where the host's list of the owner's tools and apps is read; none
+    /// until startup names it.
+    app_links: app_links_http::AppLinks,
     /// Reads a conversation's working folder for the Files panel; none: the
     /// panel says this host cannot show it.
     workspace_reader: Option<Arc<dyn workspace_files_http::reader::Reader>>,
@@ -439,6 +443,7 @@ impl AppState {
             vault_reader: Arc::default(),
             credentials: Default::default(),
             sites: Default::default(),
+            app_links: Default::default(),
             workspace_reader: None,
             v1_timers: Default::default(),
             claude_turns: false,
@@ -689,7 +694,7 @@ pub fn router_with_google_catalog(
     catalog: google_registry_metadata::RegistryCatalog,
 ) -> Router {
     Router::new()
-        .route("/api/v2/health",get(|State(state): State<AppState>| async move { Json(serde_json::json!({"status":"ok","product":"orkestr-v2","contract_version":0,"fixture_mode":false,"features":native_attach_http::features(&state,&["message_author","message_revisions_v1","message_retries_v1","thread_asks","agent_timers","source_receipts_v1","root_intake_v1","fast_run_receipts_v1","provider_quotas_v1","provider_sign_in_v1","local_files_v1","local_file_writes_waiting_v1","vault_v1","held_input_lookup_v1","credentials_v1","sites_v1","history_before_v1","request_metrics_v1","workspace_files_v1","run_updates_v1"]),"build":build_identity::identity(),"deployment":deployment_identity::identity()})) }))
+        .route("/api/v2/health",get(|State(state): State<AppState>| async move { Json(serde_json::json!({"status":"ok","product":"orkestr-v2","contract_version":0,"fixture_mode":false,"features":native_attach_http::features(&state,&["message_author","message_revisions_v1","message_retries_v1","thread_asks","agent_timers","source_receipts_v1","root_intake_v1","fast_run_receipts_v1","provider_quotas_v1","provider_sign_in_v1","local_files_v1","local_file_writes_waiting_v1","vault_v1","held_input_lookup_v1","credentials_v1","sites_v1","app_links_v1","history_before_v1","request_metrics_v1","workspace_files_v1","run_updates_v1"]),"build":build_identity::identity(),"deployment":deployment_identity::identity()})) }))
         .route("/api/v2/setup",get(auth::setup_status).post(auth::setup))
         .route("/api/v2/session",post(auth::session))
         .route("/api/v2/machine/session",post(auth::session))
@@ -780,6 +785,7 @@ pub fn router_with_google_catalog(
         .merge(vault_http::router())
         .merge(credentials_http::router())
         .merge(sites_http::router())
+        .merge(app_links_http::router())
         .merge(workspace_files_http::router())
         // Labels each matched request with its route template for logs and metrics.
         .route_layer(middleware::from_fn(observability::record_route))

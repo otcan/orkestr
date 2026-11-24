@@ -1,6 +1,6 @@
 // ORK-786 application shell against the synthetic API, in the real WASM
 // bundle: the compact global header, Chat / Work / Files with the rest under
-// More, global Virtual desks, host and Orkestr settings views (ORK-789), quota
+// More, global Virtual desks, Apps, host and Orkestr settings views (ORK-789), quota
 // and host states, and the collapsible, resizable conversation list. Five
 // widths plus 200% zoom (1280 x 860 at 2x = 640 x 430 CSS px). Synthetic data
 // only; no provider.
@@ -86,12 +86,13 @@ async function headerAndBadge(label, phone) {
       global: [...h.querySelectorAll('nav[aria-label="Global"] button')].map(b => b.textContent.trim()),
       inConversationNav: [...document.querySelectorAll('nav[aria-label="Conversation"] button')].map(b => b.textContent.trim()) };
   });
-  assert.deepEqual(view.global, ['Virtual desks', 'Settings'], 'global resources live in the header');
-  for (const global of ['Virtual desks', 'Host resources', 'Settings', 'Orkestr settings']) assert.ok(!view.inConversationNav.includes(global), `${global} is not a conversation tab`);
+  assert.deepEqual(view.global, ['Virtual desks', 'Apps', 'Settings'], 'global resources live in the header');
+  for (const global of ['Virtual desks', 'Apps', 'Host resources', 'Settings', 'Orkestr settings']) assert.ok(!view.inConversationNav.includes(global), `${global} is not a conversation tab`);
   if (!phone) assert.ok(view.height <= 64, `${label}: one compact header row, got ${view.height}px`);
-  // Settings (ORK-789) joins the header without wrapping its controls: desks,
-  // Settings, build and Sign out share one row at every width.
-  const rows = await page.evaluate(() => ['.global-link', '.global-settings', '.build-badge > button', '.app-heading > .sign-out']
+  // Settings (ORK-789) and Apps join the header without wrapping its
+  // controls: desks, Apps, Settings, build and Sign out share one row at
+  // every width.
+  const rows = await page.evaluate(() => ['.global-link', '.global-apps', '.global-settings', '.build-badge > button', '.app-heading > .sign-out']
     .map(s => { const r = document.querySelector(s).getBoundingClientRect(); return [s, Math.round(r.top + r.height / 2)]; }));
   const middles = rows.map(([, y]) => y);
   assert.ok(Math.max(...middles) - Math.min(...middles) <= 6, `${label}: header controls on one row ${JSON.stringify(rows)}`);
@@ -246,7 +247,28 @@ async function globalViews(label) {
   assert.equal(await page.$eval('.conversation-heading h2', n => n.textContent), 'Host resources');
   await clickVisible('Back to chat');
   await page.waitForSelector('#composer');
+  await apps(label);
   await orkestrSettings(label);
+}
+
+// The owner's tools, apps and live sites: a global page from the header's
+// Apps button, reachable and without sideways scroll at every width.
+async function apps(label) {
+  await clickVisible('Apps');
+  await waitHash('#apps');
+  await page.waitForSelector('.apps-page .app-card', { timeout: 20000 });
+  const view = await page.evaluate(() => ({
+    scope: document.querySelector('.conversation-heading')?.dataset.scope,
+    title: document.querySelector('.conversation-heading h2')?.textContent,
+    tabs: document.querySelectorAll('nav[aria-label="Conversation"]').length,
+    current: [...document.querySelectorAll('nav[aria-label="Global"] button[aria-current=page]')].map(b => b.textContent.trim()),
+  }));
+  assert.deepEqual(view, { scope: 'global', title: 'Apps', tabs: 0, current: ['Apps'] });
+  await screenshot(label, 'apps');
+  await noHorizontalScroll();
+  await clickVisible('Back to chat');
+  await waitHash(`#conversation/${A}`);
+  await page.waitForSelector('#composer');
 }
 
 // ORK-789: account, credentials, provider sign-in and About are one global page,
@@ -406,7 +428,7 @@ async function compactLayout(label, phone) {
   }
   if (phone) for (const [name, height] of layout.targets) assert.ok(height >= 44, `${label}: ${name} is ${height}px tall (44px touch target)`);
   // Every action stays reachable: header and conversation controls are on screen.
-  for (const selector of ['.global-link', '.global-settings', '#more-tabs-toggle', '.build-badge > button', '.app-heading > .sign-out', phone ? '.threads-toggle' : '.sidebar-collapse']) {
+  for (const selector of ['.global-link', '.global-apps', '.global-settings', '#more-tabs-toggle', '.build-badge > button', '.app-heading > .sign-out', phone ? '.threads-toggle' : '.sidebar-collapse']) {
     const box = await page.$eval(selector, n => { const r = n.getBoundingClientRect(); return { left: r.left, right: r.right, width: r.width }; });
     assert.ok(box.width > 0 && box.left >= 0 && box.right <= await page.evaluate(() => innerWidth) + 1, `${label}: ${selector} reachable`);
   }

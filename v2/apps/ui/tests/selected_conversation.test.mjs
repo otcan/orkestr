@@ -38,3 +38,8 @@ test('the Sites page is global: kept when the default conversation is selected o
  for(const selected of [null,id]) assert.equal(keepsFragment('#sites',selected),true);
  for(const hash of ['#sites/x','#sitesx',`#conversation/${id}/sites`]) assert.equal(keepsFragment(hash,id),false,hash);
 });
+test('the Apps page is global: kept when the default conversation is selected on reload',()=>{
+ assert.equal(selectedConversation('#apps'),null);
+ for(const selected of [null,id]) assert.equal(keepsFragment('#apps',selected),true);
+ for(const hash of ['#apps/x','#appsx',`#conversation/${id}/apps`]) assert.equal(keepsFragment(hash,id),false,hash);
+});

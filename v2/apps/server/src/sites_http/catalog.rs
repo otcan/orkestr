@@ -198,19 +198,29 @@ pub(crate) fn slug_valid(slug: &str) -> bool {
 /// `https://<slug>.<domain>[:port][/path]`: plain ASCII with nothing an
 /// attribute could break on, no user info, and the slug's own host.
 fn url_valid(url: &str, slug: &str) -> bool {
+    https_host(url).is_some_and(|host| {
+        host.strip_prefix(slug)
+            .and_then(|parent| parent.strip_prefix('.'))
+            .is_some_and(domain)
+    })
+}
+
+/// The lowercased host of a plain `https://[host][:port][/path]` address:
+/// ASCII with nothing an attribute could break on, at most 512 bytes, no
+/// user info, and a port of 1 to 5 digits. The host itself is not checked.
+/// Shared with the owner's app links (`app_links_http`).
+pub(crate) fn https_host(url: &str) -> Option<String> {
     if url.len() > MAX_URL
         || url.bytes().any(|b| {
             !b.is_ascii_graphic() || matches!(b, b'"' | b'\'' | b'<' | b'>' | b'\\' | b'`')
         })
     {
-        return false;
+        return None;
     }
-    let Some(rest) = url.strip_prefix("https://") else {
-        return false;
-    };
+    let rest = url.strip_prefix("https://")?;
     let authority = &rest[..rest.find(['/', '?', '#']).unwrap_or(rest.len())];
     if authority.contains('@') {
-        return false;
+        return None;
     }
     let host = match authority.split_once(':') {
         None => authority,
@@ -219,15 +229,13 @@ fn url_valid(url: &str, slug: &str) -> bool {
         {
             host
         }
-        Some(_) => return false,
+        Some(_) => return None,
     };
-    let host = host.to_ascii_lowercase();
-    host.strip_prefix(slug)
-        .and_then(|parent| parent.strip_prefix('.'))
-        .is_some_and(domain)
+    Some(host.to_ascii_lowercase())
 }
 
-fn domain(host: &str) -> bool {
+/// Lowercase DNS labels of 1 to 63 letters, digits and inner hyphens.
+pub(crate) fn domain(host: &str) -> bool {
     host.len() <= 253
         && host.split('.').all(|label| {
             (1..=63).contains(&label.len())

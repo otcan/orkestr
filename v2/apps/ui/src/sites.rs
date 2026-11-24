@@ -49,12 +49,7 @@ impl Site {
     /// The address an Open link may use: a live site's own `https://`
     /// address, plain enough for an attribute. Disabled sites have none.
     pub fn link(&self) -> Option<&str> {
-        let plain = self.url.len() <= 512
-            && self.url.starts_with("https://")
-            && self.url.bytes().all(|b| {
-                b.is_ascii_graphic() && !matches!(b, b'"' | b'\'' | b'<' | b'>' | b'\\' | b'`')
-            });
-        (self.live() && plain).then_some(self.url.as_str())
+        (self.live() && plain_https(&self.url)).then_some(self.url.as_str())
     }
     /// The address without its scheme and trailing slash, for a second line.
     pub fn address(&self) -> &str {
@@ -66,6 +61,17 @@ impl Site {
             .as_deref()
             .is_some_and(|id| id.eq_ignore_ascii_case(conversation))
     }
+}
+
+/// An `https://` address of at most 512 bytes, plain enough for an
+/// attribute: visible ASCII without quotes, `<`, `>`, `\` or backticks.
+/// Shared with the Apps page's links (`app_links`).
+pub fn plain_https(url: &str) -> bool {
+    url.len() <= 512
+        && url.starts_with("https://")
+        && url.bytes().all(|b| {
+            b.is_ascii_graphic() && !matches!(b, b'"' | b'\'' | b'<' | b'>' | b'\\' | b'`')
+        })
 }
 
 pub fn kind_label(kind: &str) -> &'static str {
