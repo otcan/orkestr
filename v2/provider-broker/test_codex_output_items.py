@@ -1,8 +1,30 @@
 """Item evidence survives the owned broker; it never supplies dispatch authority."""
 import copy
+import json
+import pathlib
 import unittest
-from protocol import Refused
+from protocol import CLIPPED_NOTE, MAX_FRAME, MAX_REPLY_BYTES, Refused, clip_utf8, encode
 from test_protocol import opened, ready, request, turn
+
+RUNTIME_CLIP = (pathlib.Path(__file__).resolve().parent.parent
+                / "crates/orkestr-runtime/src/codex_rpc/turn/clip.rs")
+
+
+def turkish_reply(size=8211):
+    """Synthetic Turkish prose of exactly `size` UTF-8 bytes. Its letters take
+    two bytes, so far fewer characters than bytes reach the 8 KiB bound; byte
+    8,192 falls inside a two-byte letter."""
+    sentence = "Çalışma planı güncellendi; bütçe, iş paketleri ve ölçütler şöyle sıralandı. "
+    text = "."
+    while len((text + sentence).encode()) <= size:
+        text += sentence
+    for letter in sentence:
+        if len((text + letter).encode()) > size:
+            break
+        text += letter
+    text += "." * (size - len(text.encode()))
+    assert len(text.encode()) == size and len(text) < size
+    return text
 
 
 def active():
@@ -74,7 +96,7 @@ class OutputItems(unittest.TestCase):
 
     def test_invalid_item_fields_and_summary_bounds_refuse(self):
         for key, value in (("id", ""), ("id", "x" * 513), ("text", 1),
-                           ("text", "🦀" * 2049), ("phase", "analysis"), ("phase", False)):
+                           ("phase", "analysis"), ("phase", False)):
             frame = item()
             frame["params"]["item"][key] = value
             with self.subTest(key=key), self.assertRaises(Refused):
@@ -84,6 +106,41 @@ class OutputItems(unittest.TestCase):
                 "turn": {"id": "synthetic-turn", "status": "completed", "items": items, "itemsView": view}}}
             with self.assertRaises(Refused):
                 active().provider(frame)
+
+    def test_reply_over_the_bound_is_cut_on_a_character_boundary_and_marked(self):
+        full = turkish_reply()
+        kept = full.encode()[:MAX_REPLY_BYTES].decode("utf-8", "ignore")
+        frame = item()
+        frame["params"]["item"]["text"] = full
+        channel = active()
+        output = channel.provider(frame)
+        clean = output["params"]["frame"]["params"]["item"]
+        self.assertEqual(clean, {"type": "agentMessage", "id": "answer", "text": kept,
+                                 "phase": "final_answer", "clipped": True})
+        # Byte 8,192 is inside a letter: the cut keeps the whole letters before it.
+        self.assertEqual(len(clean["text"].encode()), MAX_REPLY_BYTES - 1)
+        self.assertTrue(full.startswith(clean["text"]))
+        self.assertFalse(channel.terminal)
+        # The escaped broker frame still fits the transport bound.
+        self.assertLessEqual(len(encode(output)), MAX_FRAME + 1)
+        terminal = {"method": "turn/completed", "params": {"threadId": "synthetic-native",
+            "turn": {"id": "synthetic-turn", "status": "completed", "itemsView": "full",
+                     "items": [frame["params"]["item"]]}}}
+        items = channel.provider(terminal)["params"]["frame"]["params"]["turn"]["items"]
+        self.assertEqual(items, [clean])
+
+    def test_clip_utf8_keeps_text_within_the_bound_unchanged(self):
+        for text in ("", "Whole answer.", "ş" * (MAX_REPLY_BYTES // 2), "x" * MAX_REPLY_BYTES):
+            self.assertEqual(clip_utf8(text), (text, False))
+        sample = "aş🦀ı"  # 1 + 2 + 4 + 2 bytes
+        for size, expected in ((1, "a"), (2, "a"), (3, "aş"), (6, "aş"), (7, "aş🦀"), (8, "aş🦀")):
+            self.assertEqual(clip_utf8(sample, size), (expected, True))
+        self.assertEqual(clip_utf8(sample, 9), (sample, False))
+
+    def test_runtime_appends_the_same_note(self):
+        if not RUNTIME_CLIP.exists():
+            self.skipTest("Runtime source is not part of this tree")
+        self.assertIn(json.dumps(CLIPPED_NOTE), RUNTIME_CLIP.read_text())
 
     def test_non_agent_items_never_become_tool_authority(self):
         channel = active()

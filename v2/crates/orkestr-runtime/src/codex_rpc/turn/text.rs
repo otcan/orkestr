@@ -1,4 +1,5 @@
 //! Bounded assistant-item snapshots. Text remains evidence, never authority.
+use super::clip::{clip, fit};
 use crate::ports::Blocker;
 use orkestr_v2_application::runtime::MAX_PROVIDER_PROGRESS_BYTES;
 use serde_json::Value;
@@ -42,6 +43,10 @@ struct Item {
     deltas: bool,
     /// `delivery: "async"`: an interim question, never the final answer.
     question: bool,
+    /// The native text exceeded the progress bound: `text` holds its longest
+    /// bounded prefix (later deltas are dropped) and is delivered with
+    /// `CLIPPED_NOTE`.
+    clipped: bool,
     next_snapshot: usize,
 }
 
@@ -49,7 +54,8 @@ struct Item {
 pub(super) struct TurnText {
     items: Vec<Item>,
     final_item: Option<usize>,
-    last_emitted: Option<(usize, usize)>,
+    /// Item, text size and cut state of the last emitted snapshot.
+    last_emitted: Option<(usize, usize, bool)>,
 }
 
 fn identifier(value: &Value) -> Result<&str, Blocker> {
@@ -81,6 +87,16 @@ fn async_question(item: &Value) -> Result<bool, Blocker> {
     }
 }
 
+/// The broker's closed mark of an agent message it cut at the bound: absent,
+/// or exactly `true`.
+fn clipped_mark(item: &Value) -> Result<bool, Blocker> {
+    match item.get("clipped") {
+        None => Ok(false),
+        Some(Value::Bool(true)) => Ok(true),
+        _ => Err(refused("agent message clipped mark")),
+    }
+}
+
 impl TurnText {
     fn insert(&mut self, id: Option<&str>) -> Result<usize, Blocker> {
         if self.items.len() == MAX_ITEMS {
@@ -95,6 +111,7 @@ impl TurnText {
             completed: false,
             deltas: false,
             question: false,
+            clipped: false,
             next_snapshot: 1,
         });
         Ok(index)
@@ -136,15 +153,16 @@ impl TurnText {
     fn snapshot(&mut self, index: usize, complete: bool) -> Option<String> {
         let item = &mut self.items[index];
         let size = item.text.len();
-        if size == 0 || self.last_emitted == Some((index, size)) {
+        let key = (index, size, item.clipped);
+        if size == 0 || self.last_emitted == Some(key) {
             return None;
         }
         if !complete && size < item.next_snapshot {
             return None;
         }
         item.next_snapshot = size * 2;
-        self.last_emitted = Some((index, size));
-        Some(item.text.clone())
+        self.last_emitted = Some(key);
+        Some(fit(&item.text, MAX_PROVIDER_PROGRESS_BYTES, item.clipped))
     }
 
     /// An item that never completed although a later item did: its stream was
@@ -171,14 +189,19 @@ impl TurnText {
                 .ok_or(Blocker::Protocol)?;
             let index = self.delta_item(params)?;
             let item = &mut self.items[index];
-            if item.completed
-                || delta.len() > MAX_PROVIDER_PROGRESS_BYTES
-                || item.text.len() + delta.len() > MAX_PROVIDER_PROGRESS_BYTES
-            {
+            if item.completed || delta.len() > MAX_PROVIDER_PROGRESS_BYTES {
                 return Err(Blocker::Protocol);
             }
             item.deltas = true;
-            item.text.push_str(delta);
+            if !item.clipped {
+                // A message over the bound keeps its longest bounded prefix
+                // (whole characters) and the turn goes on: the broker cuts the
+                // completed item at the same byte.
+                let room = MAX_PROVIDER_PROGRESS_BYTES.saturating_sub(item.text.len());
+                let kept = clip(delta, room);
+                item.clipped = kept.len() < delta.len();
+                item.text.push_str(kept);
+            }
             // With an item lifecycle only a completed item (or the turn's final
             // selection) is progress: delivery layers export progress as owner
             // messages, and a delta prefix ("Two Doc") is a half sentence that
@@ -197,11 +220,13 @@ impl TurnText {
             .get("text")
             .and_then(Value::as_str)
             .ok_or(Blocker::Protocol)?;
+        // The broker forwards at most the bound and marks a message it cut.
         if text.len() > MAX_PROVIDER_PROGRESS_BYTES {
             return Err(Blocker::Protocol);
         }
         let phase = phase(value)?;
         let question = async_question(value)?;
+        let cut = clipped_mark(value)?;
         let completed = method == "item/completed";
         let index = match self
             .items
@@ -233,9 +258,15 @@ impl TurnText {
         if completed {
             // A completed snapshot must agree with all observed deltas. A model
             // may provide a full completed item without streaming any deltas.
-            if (item.deltas && item.text != text) || !text.starts_with(&item.text) {
+            // Deltas over the bound were cut at the byte the broker cuts at,
+            // so a cut item agrees with them and carries the broker's mark.
+            if (item.deltas && item.text != text)
+                || !text.starts_with(&item.text)
+                || (item.clipped && !cut)
+            {
                 return Err(Blocker::Protocol);
             }
+            item.clipped = cut;
             if item.phase == Some(Phase::Final) && !item.question && !text.trim().is_empty() {
                 if self.final_item.is_some_and(|previous| previous != index) {
                     return Err(refused("second final answer in one turn"));
@@ -254,6 +285,7 @@ impl TurnText {
                 return Err(Blocker::Protocol);
             }
             item.text = text.to_owned();
+            item.clipped |= cut;
         }
         item.boundary = true;
         if item.question || !completed {
@@ -270,17 +302,19 @@ impl TurnText {
 
     /// The marked snapshot of one completed asynchronous question.
     fn question_snapshot(&mut self, index: usize) -> Option<String> {
-        let text = self.items[index].text.trim();
+        let item = &self.items[index];
+        let text = item.text.trim();
         if text.is_empty() {
             return None;
         }
         let marked = format!("{ASYNC_QUESTION_PREFIX}{text}");
-        self.last_emitted = Some((index, self.items[index].text.len()));
-        Some(if marked.len() <= MAX_PROVIDER_PROGRESS_BYTES {
+        let delivered = if !item.clipped && marked.len() <= MAX_PROVIDER_PROGRESS_BYTES {
             marked
         } else {
-            self.items[index].text.clone()
-        })
+            fit(&item.text, MAX_PROVIDER_PROGRESS_BYTES, item.clipped)
+        };
+        self.last_emitted = Some((index, item.text.len(), item.clipped));
+        Some(delivered)
     }
 
     /// Questions of this turn the final text does not already contain.
@@ -392,7 +426,12 @@ impl TurnText {
                         item.completed && !item.question && !item.text.trim().is_empty()
                     });
                     let reply = match last {
-                        Some(last) => format!("{NO_FINAL_NOTE}\n\n{}", self.items[last].text),
+                        Some(last) => {
+                            let prefix = format!("{NO_FINAL_NOTE}\n\n");
+                            let item = &self.items[last];
+                            let room = MAX_PROVIDER_PROGRESS_BYTES - prefix.len();
+                            format!("{prefix}{}", fit(&item.text, room, item.clipped))
+                        }
                         // Only questions: they are the reply.
                         None if !self.open_questions("").is_empty() => {
                             match self.with_open_questions("") {
@@ -419,7 +458,13 @@ impl TurnText {
         if self.items[index].text.trim().is_empty() {
             return Err(Blocker::Protocol);
         }
-        if let Some(text) = self.with_open_questions(&self.items[index].text) {
+        // A cut answer leaves no room for the open questions.
+        let open = if self.items[index].clipped {
+            None
+        } else {
+            self.with_open_questions(&self.items[index].text)
+        };
+        if let Some(text) = open {
             // The completion payload is the latest progress: always emit it.
             self.last_emitted = None;
             return Ok(Some(text));

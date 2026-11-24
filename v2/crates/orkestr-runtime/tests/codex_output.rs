@@ -1,6 +1,6 @@
 //! Synthetic native notifications only: full final output is immutable evidence.
 use orkestr_runtime::{
-    codex_rpc::{TurnStream, ASYNC_QUESTION_PREFIX},
+    codex_rpc::{TurnStream, ASYNC_QUESTION_PREFIX, CLIPPED_NOTE},
     ports::{Blocker, ProviderEvent},
 };
 use serde_json::{json, Value};
@@ -508,9 +508,21 @@ fn commentary_only_or_textless_completion_replies_instead_of_failing() {
 
 #[test]
 fn text_bytes_and_number_of_items_remain_bounded() {
+    // A message over the progress bound is cut, never refused: the turn
+    // completes with its bounded prefix and the note.
     let mut stream = active();
-    receive(&mut stream, delta(None, &"🦀".repeat(2048)));
-    refuse(&mut stream, delta(None, "x"));
+    let full = "🦀".repeat(2048);
+    let mut events = receive(&mut stream, delta(None, &full));
+    events.extend(receive(&mut stream, delta(None, "x")));
+    events.extend(receive(&mut stream, done()));
+    let reply = progress(&events).last().copied().unwrap();
+    assert!(reply.len() <= 8192);
+    assert!(reply.ends_with(CLIPPED_NOTE));
+    assert!(full.starts_with(reply.trim_end_matches(CLIPPED_NOTE)));
+    assert!(matches!(
+        events.last(),
+        Some(ProviderEvent::CompletedProposal { synthetic: false })
+    ));
     let mut stream = active();
     for index in 0..128 {
         receive(&mut stream, delta(Some(&format!("item-{index}")), "x"));

@@ -116,15 +116,46 @@ def identifier(value):
     return isinstance(value, str) and 0 < len(value) <= 512
 
 
+# Core stores at most this many bytes of one progress payload
+# (MAX_PROVIDER_PROGRESS_BYTES). A longer reply is cut, never refused: a refusal
+# ended the whole run and the owner received nothing.
+MAX_REPLY_BYTES = 8192
+# Ends a cut reply. Runtime appends the same text to a cut Codex reply
+# (crates/orkestr-runtime/src/codex_rpc/turn/clip.rs); this broker appends it to
+# a cut Claude reply, whose text Runtime forwards unchanged.
+CLIPPED_NOTE = ("\n\n(Reply cut at the 8 KB message limit; the rest was not delivered. "
+                "Ask for it as a file.)")
+
+
+def clip_utf8(text, limit=MAX_REPLY_BYTES):
+    """(longest prefix of `text` within `limit` UTF-8 bytes that ends on a
+    character boundary, whether it was cut). Runtime cuts streamed deltas at
+    the same byte, so both agree on a cut Codex message."""
+    raw = text.encode()
+    if len(raw) <= limit:
+        return text, False
+    return raw[:limit].decode("utf-8", "ignore"), True
+
+
+def clip_with_note(text, limit=MAX_REPLY_BYTES):
+    """`text` within `limit` bytes; a cut one ends with CLIPPED_NOTE."""
+    if len(text.encode()) <= limit:
+        return text
+    return clip_utf8(text, limit - len(CLIPPED_NOTE.encode()))[0] + CLIPPED_NOTE
+
+
 def agent_item(item):
     require(isinstance(item, dict) and item.get("type") == "agentMessage"
             and identifier(item.get("id")) and isinstance(item.get("text"), str)
-            and len(item["text"].encode()) <= 8192
             and item.get("phase") in (None, "commentary", "partial_answer", "final_answer")
             and item.get("delivery") in (None, "async"),
             Failure.TURN_SCHEMA)
-    clean = {"type": "agentMessage", "id": item["id"], "text": item["text"],
+    # Runtime adds CLIPPED_NOTE to the bounded text; `clipped` is only ever true.
+    text, clipped = clip_utf8(item["text"])
+    clean = {"type": "agentMessage", "id": item["id"], "text": text,
              "phase": item.get("phase")}
+    if clipped:
+        clean["clipped"] = True
     # `request_user_input_async`: an interim question, not the turn's final.
     if item.get("delivery") == "async":
         clean["delivery"] = "async"
