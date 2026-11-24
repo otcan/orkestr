@@ -2,7 +2,7 @@
 import json
 import secrets
 import uuid
-from protocol import PROTOCOL, Refused, exact, identifier, require
+from protocol import PROTOCOL, Refused, clip_with_note, exact, identifier, require
 from claude_telemetry import PROGRESS_LIMIT, progress_notice, validate_telemetry
 from claude_quota import project
 from claude_control import ClaudeControl, canonical, text_blocks
@@ -339,13 +339,16 @@ class ClaudeChannel:
             require(self.active is not None and not self.terminal)
             require(type(frame.get("is_error")) is bool)
             require(identifier(frame.get("subtype")))
-            require(isinstance(frame.get("result"), str) and len(frame["result"].encode()) <= 8192)
+            require(isinstance(frame.get("result"), str))
             require(frame["is_error"] or frame["subtype"] == "success")
             value = canonical(frame.get("uuid"))
             require(value not in (self.native,self.input_uuid) and value not in self.telemetry_uuids)
             self.terminal_uuid = value
             self.terminal = True
             clean = {key: frame[key] for key in ("type", "session_id", "subtype", "is_error", "result")}
+            # Runtime bounds every forwarded string to 8 KiB: a longer result is
+            # cut with the same note as the reply, never refused.
+            clean["result"] = clip_with_note(frame["result"])
         else:
             require(False)  # No tool requests, raw controls or unknown passthrough.
         for key in ("uuid", "user_message_uuid"):

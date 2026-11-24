@@ -4,10 +4,12 @@ use serde_json::Value;
 use std::collections::VecDeque;
 #[cfg(test)]
 mod capacity_tests;
+mod clip;
 #[cfg(test)]
 mod model_tests;
 mod models;
 mod text;
+pub use clip::CLIPPED_NOTE;
 pub use text::ASYNC_QUESTION_PREFIX;
 
 /// One fresh owned native thread and one submitted request, never a resumed

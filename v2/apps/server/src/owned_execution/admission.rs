@@ -210,7 +210,10 @@ impl ConfiguredExecution {
                 .store
                 .claim_provider_dispatch(&admitted, &key)
                 .await
-                .map_err(|_| "execution reservation refused")?
+                .map_err(|error| {
+                    eprintln!("owned execution reservation refused: {error:?}");
+                    "execution reservation refused"
+                })?
             else {
                 return Err("execution reservation requires reconciliation");
             };
