@@ -134,6 +134,26 @@ pub struct Store {
 fn db(_: impl std::fmt::Display) -> StoreError {
     StoreError::Unavailable
 }
+/// SQLite options under which migrations run: its temporary storage stays in
+/// memory. A rebuild migration (0102) drops a table inside the migration's
+/// transaction, and SQLite spills that statement's journal to a temporary
+/// file; on a host without a writable temporary directory (the read-only
+/// qualification namespace) that failed the whole startup with
+/// SQLITE_IOERR_GETTEMPPATH. Ordinary connections keep SQLite's default.
+pub(crate) fn migration_options(options: SqliteConnectOptions) -> SqliteConnectOptions {
+    options.pragma("temp_store", "memory")
+}
+/// Apply pending migrations on one dedicated connection, closed afterwards.
+async fn migrate_without_temp_files(options: SqliteConnectOptions) -> Result<()> {
+    use sqlx::Connection;
+    let mut connection = sqlx::SqliteConnection::connect_with(&migration_options(options))
+        .await
+        .map_err(db)?;
+    let migrated = sqlx::migrate!("./migrations").run(&mut connection).await;
+    let closed = connection.close().await;
+    migrated.map_err(db)?;
+    closed.map_err(db)
+}
 fn digest(s: &str) -> String {
     format!("{:x}", Sha256::digest(s.as_bytes()))
 }
@@ -167,14 +187,11 @@ impl Store {
         };
         let pool = SqlitePoolOptions::new()
             .max_connections(6)
-            .connect_with(options)
+            .connect_with(options.clone())
             .await
             .map_err(db)?;
         if migrate {
-            sqlx::migrate!("./migrations")
-                .run(&pool)
-                .await
-                .map_err(db)?;
+            migrate_without_temp_files(options).await?;
         }
         Ok(Self {
             pool,
