@@ -273,6 +273,7 @@ fn input_to_nonreading_child_remains_bounded_and_nonblocking() {
     let (authority, _) = authority(&scope);
     let bounds = TransportBounds {
         max_frame_bytes: 65536,
+        max_output_frame_bytes: 65536,
         max_pending_frames: 2,
         io_bytes_per_poll: 1024,
     };
