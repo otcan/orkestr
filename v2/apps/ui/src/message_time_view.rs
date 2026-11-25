@@ -64,17 +64,23 @@ pub fn MessageTime(
 }
 
 /// Times of native messages from `start` on (pages of 200), refreshed every
-/// 15 s so receipts recorded later appear.
+/// 15 s so receipts recorded later appear. Nothing is read while `start` is
+/// `None` (no row on screen yet), and older rows coming on screen are read
+/// at once instead of at the next refresh.
 pub fn use_message_times(
     id: String,
-    start: Signal<i64>,
+    start: Signal<Option<i64>>,
 ) -> Signal<BTreeMap<i64, orkestr_v2_contracts::MessageTime>> {
     let mut times = use_signal(BTreeMap::new);
     use_future(move || {
         let id = id.clone();
         async move {
             loop {
-                let mut after = (*start.peek()).max(0);
+                let Some(from) = *start.peek() else {
+                    crate::transport::sleep(250).await;
+                    continue;
+                };
+                let mut after = from;
                 let mut next = BTreeMap::new();
                 for _ in 0..5 {
                     let path =
@@ -104,7 +110,12 @@ pub fn use_message_times(
                 if !next.is_empty() {
                     times.write().extend(next);
                 }
-                crate::transport::sleep(15_000).await;
+                for _ in 0..15 {
+                    crate::transport::sleep(1_000).await;
+                    if start.peek().is_some_and(|now| now < from) {
+                        break;
+                    }
+                }
             }
         }
     });
