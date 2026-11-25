@@ -192,7 +192,7 @@ async fn schema101_upgrade_needs_no_writable_temporary_directory() {
     tx.commit().await.unwrap();
     downgrade_payload_bound(&f.store).await;
     let before = rows_of(&f.store).await;
-    assert!(before.len() > 300);
+    assert_eq!(before.len(), 300);
 
     // Store::open in a child on a read-only host: only the data directory is
     // writable, there is no TMPDIR, and the working directory is read-only.
