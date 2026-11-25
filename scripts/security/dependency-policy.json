@@ -60,7 +60,7 @@
       "package": "picomatch",
       "version": "4.0.4",
       "advisoryId": "GHSA-fc5q-39xc-vjpf",
-      "approvedBy": "pending-owner-approval",
+      "approvedBy": "release-owner-coordinator",
       "reviewRef": "ORK-845",
       "approvedAt": "2026-11-25T13:20:00Z",
       "expiresAt": "2026-12-02T05:00:00Z",
