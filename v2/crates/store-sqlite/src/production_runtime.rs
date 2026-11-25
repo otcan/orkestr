@@ -106,6 +106,8 @@ mod model_migration_tests;
 mod observation_tests;
 mod observations;
 #[cfg(test)]
+mod payload_migration_tests;
+#[cfg(test)]
 mod payload_tests;
 mod payloads;
 pub use metadata::{BoundSessionMetadata, ReadySessionTransition};

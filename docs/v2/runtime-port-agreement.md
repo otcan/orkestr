@@ -43,7 +43,8 @@ implementation: they carry internal authority or provider identity.
 `ProviderObservation` has a stable source_event_key, typed run/session IDs,
 lease generation and `ObservationKind`. The nested kind uses serde's internally
 tagged `kind` representation; see fixtures below. Keys are 1..128 ASCII
-alphanumeric or `-_.:`; Progress text is at most 8192 UTF-8 bytes. The
+alphanumeric or `-_.:`; Progress text is at most 32768 UTF-8 bytes (8192
+before Core migration 0102). The
 `payload_is_bounded` helper validates those bounds only. Store admission also
 checks association, owner, lease expiry, cancellation fence and lifecycle in
 one transaction. `record_observation` requires its event_key to equal the

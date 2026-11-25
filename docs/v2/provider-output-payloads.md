@@ -27,3 +27,29 @@ Tests exercise the actual ordinary Store output pump with an owned synthetic
 protocol process, and the actual HTTP router with an ordinary scoped payload.
 These are separate checks; a complete HTTP-to-owned-broker execution composition
 and a canonical subscription acceptance run remain additional gates.
+
+## Size of one reply
+
+A reply is the run's last progress payload. It holds at most 32 KiB
+(32,768 UTF-8 bytes, `MAX_PROVIDER_PROGRESS_BYTES`); until Core migration
+0102 the bound was 8 KiB. A longer reply is cut on a character boundary and
+ends with the note "(Reply cut at the 32 KB message limit; the rest was not
+delivered. Ask for it as a file.)", so the turn still completes.
+
+| Layer | Bound |
+|---|---|
+| Codex: one streamed delta (broker and Runtime) | 8 KiB |
+| Codex and Claude: one agent message, text block or `result` (broker cuts, Runtime agrees) | 32 KiB |
+| Broker to Runtime: one output frame (ASCII-escaped JSON, up to six bytes per text byte) | 256 KiB |
+| Runtime to broker: one frame; a contained provider's raw frame | 64 KiB (unchanged) |
+| Core `production_payloads.text` (CHECK) | 32,768 bytes |
+| A thread-ask answer stored for the asking conversation | 8 KiB, cut with its own note |
+| API: one payload / a batch of payloads | served whole / 1 MiB per batch, the rest read singly |
+
+Migration 0102 rebuilds `production_payloads` with the wider CHECK. It keeps
+every row with its rowid, columns, keys and NULL (removed) texts, and recreates
+the 0059 index; nothing else refers to the table. Rollback restores the
+pre-upgrade database with its old binary, as for every migration: an older
+binary refuses schema 102. While no stored text exceeds 8 KiB the table can
+also be rebuilt back to its 0014 definition (the test downgrade fixture does
+exactly that).
