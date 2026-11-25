@@ -55,16 +55,5 @@
       "rationale": "Upstream Puppeteer 25.13.0 migrates BiDi to Zod 4. The browser download provisioner remains node install.mjs; lifecycle execution stays disabled and runtime browsers remain separately managed."
     }
   ],
-  "exceptions": [
-    {
-      "package": "picomatch",
-      "version": "4.0.4",
-      "advisoryId": "GHSA-fc5q-39xc-vjpf",
-      "approvedBy": "release-owner-coordinator",
-      "reviewRef": "ORK-845",
-      "approvedAt": "2026-11-18T06:34:00Z",
-      "expiresAt": "2026-11-25T05:00:00Z",
-      "rationale": "ReDoS in picomatch <= 4.0.7 via single-branch repeated extglobs such as +(*); no patched release exists (4.0.7 is also affected), so no override is possible. Locked only as a dev dependency (vite, tinyglobby, fdir, @parcel/watcher, @angular/build); the runtime image installs with npm ci --omit=dev and the V1 server and V2 image do not ship it. Patterns come from repository build configuration, never from request or chat input. Renew only while upstream has no fix; then bump."
-    }
-  ]
+  "exceptions": []
 }
