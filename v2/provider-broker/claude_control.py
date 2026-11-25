@@ -1,7 +1,7 @@
 """Closed no-tools interrupt observations; private JSON is not Core authority."""
 import json
 import uuid
-from protocol import clip_with_note, exact, require
+from protocol import MAX_OUTPUT_FRAME, MAX_REPLY_BYTES, clip_with_note, exact, require
 
 # Bounded native result telemetry; validated by size only and never forwarded.
 TELEMETRY = frozenset({'fast_mode_disabled_reason', 'queued_turn_count', 'result_index',
@@ -97,8 +97,8 @@ class ClaudeControl:
                     'num_turns','total_cost_usd','usage','modelUsage','permission_denials',
                     'stop_reason','fast_mode_state'} | TELEMETRY
         require(required <= set(frame) and set(frame) <= required | optional)
-        require(len(json.dumps(frame, allow_nan=False).encode()) <= 16384)
-        if 'result' in frame:require(isinstance(frame['result'], str) and len(frame['result'].encode()) <= 8192)
+        require(len(json.dumps(frame, allow_nan=False).encode()) <= MAX_OUTPUT_FRAME)
+        if 'result' in frame:require(isinstance(frame['result'], str) and len(frame['result'].encode()) <= MAX_REPLY_BYTES)
         if 'errors' in frame:
             require(isinstance(frame['errors'], list) and len(frame['errors']) <= 128
                     and all(isinstance(v,str) and len(v.encode()) <= 8192 for v in frame['errors']))
@@ -144,7 +144,7 @@ class ClaudeControl:
         if 'user_message_uuids' in frame:require(frame['user_message_uuids'] == [self.message])
         for key in ('isSynthetic','isReplay'):
             if key in frame:require(type(frame[key]) is bool)
-        require(len(json.dumps(frame, allow_nan=False).encode()) <= 16384)
+        require(len(json.dumps(frame, allow_nan=False).encode()) <= MAX_OUTPUT_FRAME)
         if kind in ('user', 'assistant'):
             require(set(frame) <= {'type','session_id','uuid','user_message_uuid',
                 'user_message_uuids','parent_tool_use_id','message','isSynthetic','isReplay',
@@ -159,7 +159,7 @@ class ClaudeControl:
             require(message['role'] == kind)
             content = message['content']
             if isinstance(content, str):
-                require(len(content.encode()) <= 8192)
+                require(len(content.encode()) <= MAX_REPLY_BYTES)
             else:
                 require(isinstance(content, list) and len(content) <= 128)
                 text_blocks(content)

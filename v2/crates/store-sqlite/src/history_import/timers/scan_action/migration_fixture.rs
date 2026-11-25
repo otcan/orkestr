@@ -4,7 +4,37 @@ use crate::Store;
 #[path = "credential_migration_fixture.rs"]
 mod credentials;
 
+/// Migration 102 down: rebuild `production_payloads` with its 0014 definition
+/// (8 KiB bound) and its 0059 index, keeping every row and rowid. Only while
+/// every stored text fits the old bound, so no reply is cut.
+pub(crate) async fn downgrade_payload_bound(store: &Store) {
+    let long: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM production_payloads WHERE length(CAST(text AS BLOB))>8192",
+    )
+    .fetch_one(&store.pool)
+    .await
+    .unwrap();
+    assert_eq!(long, 0, "historical fixture must not cut a stored reply");
+    let original = include_str!("../../../../migrations/0014_production_payloads.sql");
+    let start = original.find("CREATE TABLE production_payloads (").unwrap();
+    let end = start + original[start..].find(";\n").unwrap() + 1;
+    sqlx::raw_sql(&format!(
+        "ALTER TABLE production_payloads RENAME TO production_payloads_32k;
+         {}
+         INSERT INTO production_payloads(rowid,id,event_id,owner_id,conversation_id,run_id,text)
+          SELECT rowid,id,event_id,owner_id,conversation_id,run_id,text FROM production_payloads_32k;
+         DROP TABLE production_payloads_32k;
+         CREATE INDEX production_payloads_run ON production_payloads(run_id,owner_id);
+         DELETE FROM _sqlx_migrations WHERE version=102;",
+        &original[start..end]
+    ))
+    .execute(&store.pool)
+    .await
+    .unwrap();
+}
+
 pub(crate) async fn downgrade_empty(store: &Store) {
+    downgrade_payload_bound(store).await;
     // Migration 101 down: only with no recorded instruction update.
     let updates: i64 = sqlx::query_scalar("SELECT count(*) FROM agent_timer_instruction_updates")
         .fetch_one(&store.pool)

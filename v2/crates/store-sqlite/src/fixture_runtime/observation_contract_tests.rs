@@ -270,7 +270,11 @@ async fn progress_unavailable_and_stopped_fenced_without_payload_or_cancel_autho
             .append_provider_event(
                 &f.owner,
                 &p,
-                &input(&p, 1, ProviderEvent::Progress("é".repeat(4097)))
+                &input(
+                    &p,
+                    1,
+                    ProviderEvent::Progress("é".repeat(MAX_PROVIDER_PROGRESS_BYTES / 2 + 1))
+                )
             )
             .await
             .unwrap_err(),

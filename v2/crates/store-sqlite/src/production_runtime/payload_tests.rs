@@ -219,6 +219,7 @@ async fn committed_progress_replay_survives_expiry_takeover_and_removal_but_new_
 }
 #[tokio::test]
 async fn progress_byte_bounds_and_forged_envelope_do_not_spend_sequence() {
+    use orkestr_v2_application::runtime::MAX_PROVIDER_PROGRESS_BYTES as MAX;
     let f = setup().await;
     let p = consumed(&f).await;
     f.handle
@@ -231,7 +232,7 @@ async fn progress_byte_bounds_and_forged_envelope_do_not_spend_sequence() {
             .append_provider_event(
                 &f.owner,
                 &p,
-                &input(&p, 2, ProviderEvent::Progress("😀".repeat(2049)))
+                &input(&p, 2, ProviderEvent::Progress("😀".repeat(MAX / 4 + 1)))
             )
             .await,
         Err(RuntimeStoreError::InvalidInput)
@@ -253,7 +254,7 @@ async fn progress_byte_bounds_and_forged_envelope_do_not_spend_sequence() {
         .append_provider_event(
             &f.owner,
             &p,
-            &input(&p, 2, ProviderEvent::Progress("😀".repeat(2048))),
+            &input(&p, 2, ProviderEvent::Progress("😀".repeat(MAX / 4))),
         )
         .await
         .unwrap();

@@ -113,7 +113,7 @@ cause, for example `Failed: provider usage limit reached`.
   Worker tasks under a Claude parent) are not implemented: Worker tasks in a
   Claude conversation are refused rather than run on Codex.
 - Steer is unavailable; a follow-up stays queued until acceptance.
-- A text block (or `result`) over 8 KiB is cut on a character boundary and
+- A text block (or `result`) over 32 KiB is cut on a character boundary and
   ends with a note that the rest was not delivered; the turn still completes.
   Codex replies get the same bound and note. Before this, such a reply
   refused the turn and the owner received nothing.

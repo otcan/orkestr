@@ -20,6 +20,13 @@ use serde_json::{json, Value};
 
 pub const PROTOCOL: &str = "orkestr-v2-provider-broker-v1";
 
+/// One frame the provider broker writes to Runtime (`protocol.py`
+/// `MAX_OUTPUT_FRAME`). It carries a reply of up to
+/// `MAX_PROVIDER_PROGRESS_BYTES`, which the broker's ASCII-only JSON can grow
+/// up to six times (`\u00XX`), plus the envelope. Frames Runtime writes to the
+/// broker keep their 64 KiB bound.
+pub const MAX_OUTPUT_FRAME_BYTES: usize = 256 * 1024;
+
 /// One correlated metadata open, derived only from an issuer-created grant.
 /// Construction does not refresh the grant; transport must hold metadata fence.
 /// No Debug/Clone or public handle accessor: this is never execution authority.

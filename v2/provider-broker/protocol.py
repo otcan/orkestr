@@ -6,7 +6,12 @@ import uuid
 from enum import IntEnum
 
 PROTOCOL = "orkestr-v2-provider-broker-v1"
+# One frame from the parent (Runtime), and from a contained provider.
 MAX_FRAME = 65536
+# One frame this broker writes. Its output carries a whole reply of up to
+# MAX_REPLY_BYTES, which ASCII-only JSON grows up to six times (\u00XX), plus
+# the envelope (Runtime: broker::MAX_OUTPUT_FRAME_BYTES).
+MAX_OUTPUT_FRAME = 256 * 1024
 
 
 class Failure(IntEnum):
@@ -119,11 +124,14 @@ def identifier(value):
 # Core stores at most this many bytes of one progress payload
 # (MAX_PROVIDER_PROGRESS_BYTES). A longer reply is cut, never refused: a refusal
 # ended the whole run and the owner received nothing.
-MAX_REPLY_BYTES = 8192
+MAX_REPLY_BYTES = 32 * 1024
+# One streamed agent message delta (Runtime: MAX_DELTA_BYTES). Natives stream a
+# few tokens per delta; a whole message may reach MAX_REPLY_BYTES.
+MAX_DELTA_BYTES = 8192
 # Ends a cut reply. Runtime appends the same text to a cut Codex reply
 # (crates/orkestr-runtime/src/codex_rpc/turn/clip.rs); this broker appends it to
 # a cut Claude reply, whose text Runtime forwards unchanged.
-CLIPPED_NOTE = ("\n\n(Reply cut at the 8 KB message limit; the rest was not delivered. "
+CLIPPED_NOTE = ("\n\n(Reply cut at the 32 KB message limit; the rest was not delivered. "
                 "Ask for it as a file.)")
 
 
@@ -187,7 +195,7 @@ def decode(raw, limit=MAX_FRAME):
 
 def encode(value):
     raw = json.dumps(value, separators=(",", ":"), ensure_ascii=True).encode() + b"\n"
-    require(len(raw) <= MAX_FRAME + 1, Failure.FRAME_BOUND)
+    require(len(raw) <= MAX_OUTPUT_FRAME + 1, Failure.FRAME_BOUND)
     return raw
 
 
@@ -569,7 +577,7 @@ class Channel:
                 require(params["threadId"] == self.native)
             if frame["method"] == "item/agentMessage/delta":
                 require(identifier(params.get("turnId")) and isinstance(params.get("delta"), str)
-                        and len(params["delta"].encode()) <= 8192, Failure.TURN_SCHEMA)
+                        and len(params["delta"].encode()) <= MAX_DELTA_BYTES, Failure.TURN_SCHEMA)
                 turn_id = params["turnId"]
                 clean = {k: params[k] for k in ("threadId", "turnId", "delta")}
                 if "itemId" in params:

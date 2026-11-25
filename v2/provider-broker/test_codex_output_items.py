@@ -3,17 +3,17 @@ import copy
 import json
 import pathlib
 import unittest
-from protocol import CLIPPED_NOTE, MAX_FRAME, MAX_REPLY_BYTES, Refused, clip_utf8, encode
+from protocol import CLIPPED_NOTE, MAX_OUTPUT_FRAME, MAX_REPLY_BYTES, Refused, clip_utf8, encode
 from test_protocol import opened, ready, request, turn
 
 RUNTIME_CLIP = (pathlib.Path(__file__).resolve().parent.parent
                 / "crates/orkestr-runtime/src/codex_rpc/turn/clip.rs")
 
 
-def turkish_reply(size=8211):
+def turkish_reply(size=MAX_REPLY_BYTES + 19):
     """Synthetic Turkish prose of exactly `size` UTF-8 bytes. Its letters take
-    two bytes, so far fewer characters than bytes reach the 8 KiB bound; byte
-    8,192 falls inside a two-byte letter."""
+    two bytes, so far fewer characters than bytes reach the 32 KiB bound; byte
+    32,768 falls inside a two-byte letter."""
     sentence = "Çalışma planı güncellendi; bütçe, iş paketleri ve ölçütler şöyle sıralandı. "
     text = "."
     while len((text + sentence).encode()) <= size:
@@ -117,17 +117,29 @@ class OutputItems(unittest.TestCase):
         clean = output["params"]["frame"]["params"]["item"]
         self.assertEqual(clean, {"type": "agentMessage", "id": "answer", "text": kept,
                                  "phase": "final_answer", "clipped": True})
-        # Byte 8,192 is inside a letter: the cut keeps the whole letters before it.
+        # Byte 32,768 is inside a letter: the cut keeps the whole letters before it.
         self.assertEqual(len(clean["text"].encode()), MAX_REPLY_BYTES - 1)
         self.assertTrue(full.startswith(clean["text"]))
         self.assertFalse(channel.terminal)
         # The escaped broker frame still fits the transport bound.
-        self.assertLessEqual(len(encode(output)), MAX_FRAME + 1)
+        self.assertLessEqual(len(encode(output)), MAX_OUTPUT_FRAME + 1)
         terminal = {"method": "turn/completed", "params": {"threadId": "synthetic-native",
             "turn": {"id": "synthetic-turn", "status": "completed", "itemsView": "full",
                      "items": [frame["params"]["item"]]}}}
         items = channel.provider(terminal)["params"]["frame"]["params"]["turn"]["items"]
         self.assertEqual(items, [clean])
+
+    def test_a_cut_reply_of_control_characters_still_fits_one_output_frame(self):
+        # Worst case for ASCII-only JSON: every byte becomes a six-byte \u00XX.
+        frame = item()
+        frame["params"]["item"]["text"] = "\x01" * (MAX_REPLY_BYTES + 100)
+        output = active().provider(frame)
+        clean = output["params"]["frame"]["params"]["item"]
+        self.assertEqual(len(clean["text"].encode()), MAX_REPLY_BYTES)
+        self.assertTrue(clean["clipped"])
+        raw = encode(output)
+        self.assertGreater(len(raw), 6 * MAX_REPLY_BYTES)
+        self.assertLessEqual(len(raw), MAX_OUTPUT_FRAME + 1)
 
     def test_clip_utf8_keeps_text_within_the_bound_unchanged(self):
         for text in ("", "Whole answer.", "ş" * (MAX_REPLY_BYTES // 2), "x" * MAX_REPLY_BYTES):

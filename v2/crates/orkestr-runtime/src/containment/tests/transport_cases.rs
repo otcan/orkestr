@@ -49,6 +49,7 @@ fn output_overflow_and_truncated_eof_fail_closed() {
     ] {
         let bounds = TransportBounds {
             max_frame_bytes: 16,
+            max_output_frame_bytes: 16,
             ..TransportBounds::default()
         };
         let child = fixture
@@ -59,6 +60,25 @@ fn output_overflow_and_truncated_eof_fail_closed() {
         assert_eq!(child.poll_stdout(&scope), Err(Error::PipeClosed));
         assert_eq!(child.flush_pending_stdin(&scope), Err(Error::PipeClosed));
     }
+}
+
+#[test]
+fn a_whole_reply_frame_is_read_while_written_frames_keep_their_bound() {
+    let fixture = Fixture::new();
+    let scope = scope("synthetic-owner", 1);
+    let (authority, _) = authority(&scope);
+    // A 32 KiB reply in ASCII-escaped JSON reaches about 192 KiB.
+    let size = crate::broker::MAX_OUTPUT_FRAME_BYTES;
+    let code = format!("import sys; sys.stdout.write('x'*{size}+'\\n'); sys.stdout.flush()");
+    let child = fixture
+        .executor(&authority, &scope, &code, TransportBounds::default())
+        .spawn(&scope)
+        .unwrap();
+    assert_eq!(frame(&child, &scope).unwrap().len(), size);
+    assert_eq!(
+        child.enqueue_metadata(&scope, "x".repeat(65537).as_bytes()),
+        Err(Error::FrameTooLarge)
+    );
 }
 
 #[test]
@@ -253,6 +273,7 @@ fn input_to_nonreading_child_remains_bounded_and_nonblocking() {
     let (authority, _) = authority(&scope);
     let bounds = TransportBounds {
         max_frame_bytes: 65536,
+        max_output_frame_bytes: 65536,
         max_pending_frames: 2,
         io_bytes_per_poll: 1024,
     };

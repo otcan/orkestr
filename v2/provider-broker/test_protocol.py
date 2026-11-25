@@ -1,6 +1,6 @@
 import unittest
 from pathlib import Path
-from protocol import Channel, PROTOCOL, Refused, decode, encode
+from protocol import Channel, MAX_FRAME, MAX_OUTPUT_FRAME, PROTOCOL, Refused, decode, encode
 
 IDENTITY = {"provider": "codex", "role": "deep", "owner_id": "synthetic-owner",
             "session_id": "synthetic-session", "namespace": "subscription:local",
@@ -144,8 +144,11 @@ class ProtocolTests(unittest.TestCase):
         for raw in [b'{"id":1,"id":2}', b'NaN', b' ' * 65537]:
             with self.assertRaises(Refused):
                 decode(raw)
+        self.assertEqual(MAX_FRAME, 65536)  # Input keeps its bound.
+        # Output carries a whole reply: larger, but still bounded.
+        self.assertLessEqual(len(encode({"text": "x" * 65536})), MAX_OUTPUT_FRAME + 1)
         with self.assertRaises(Refused):
-            encode({"text": "x" * 65536})
+            encode({"text": "x" * MAX_OUTPUT_FRAME})
         channel, _ = opened()
         with self.assertRaises(Refused):
             channel.provider({"id": 1, "method": "exec", "params": {}})

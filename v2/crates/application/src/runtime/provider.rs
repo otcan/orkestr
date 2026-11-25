@@ -2,7 +2,11 @@
 use super::{Binding, RunAdmission, RunState};
 use orkestr_v2_contracts::{EventId, RunId, SessionId};
 
-pub const MAX_PROVIDER_PROGRESS_BYTES: usize = 8192;
+/// One progress payload (a reply is the run's last one), in UTF-8 bytes. Core
+/// stores at most this much (`production_payloads.text`, migration 0102).
+/// Runtime and the provider broker cut a longer reply at this bound and end
+/// it with a note; they never refuse it.
+pub const MAX_PROVIDER_PROGRESS_BYTES: usize = 32 * 1024;
 
 /// Execution-only envelope. A CancelReceipt is never a substitute for this admission.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,7 +76,8 @@ mod tests {
     use super::*;
     #[test]
     fn progress_limit_counts_utf8_bytes() {
-        assert!(ProviderEvent::Progress("é".repeat(4096)).is_bounded());
-        assert!(!ProviderEvent::Progress("é".repeat(4097)).is_bounded());
+        assert_eq!(MAX_PROVIDER_PROGRESS_BYTES, 32768);
+        assert!(ProviderEvent::Progress("é".repeat(16384)).is_bounded());
+        assert!(!ProviderEvent::Progress("é".repeat(16385)).is_bounded());
     }
 }

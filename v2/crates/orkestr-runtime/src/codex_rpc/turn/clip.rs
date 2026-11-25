@@ -6,7 +6,7 @@
 /// Ends a reply cut at the progress bound. The provider broker appends the
 /// same text to a cut Claude reply (`provider-broker/protocol.py`).
 pub const CLIPPED_NOTE: &str =
-    "\n\n(Reply cut at the 8 KB message limit; the rest was not delivered. Ask for it as a file.)";
+    "\n\n(Reply cut at the 32 KB message limit; the rest was not delivered. Ask for it as a file.)";
 
 /// The longest prefix of `text` within `max` bytes that ends on a character
 /// boundary. The broker cuts a completed agent message the same way

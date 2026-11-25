@@ -84,6 +84,25 @@ fn render_answer(answer: Option<&str>) -> String {
         answer.to_owned()
     }
 }
+/// `thread_asks.answer_text` keeps at most this much of an answer (its 0078
+/// bound): quoted back into the asking conversation it must fit one message.
+/// A target's accepted reply may be up to 32 KiB.
+pub(super) const ANSWER_MAX_BYTES: usize = 8192;
+/// Ends an answer cut at `ANSWER_MAX_BYTES`.
+pub(super) const ANSWER_CUT_NOTE: &str =
+    "\n\n(Answer cut at the 8 KB thread-answer limit; ask that thread for the rest as a file.)";
+/// The answer as stored: unchanged within the bound, else its longest prefix
+/// on a character boundary followed by `ANSWER_CUT_NOTE`.
+fn bounded_answer(text: String) -> String {
+    if text.len() <= ANSWER_MAX_BYTES {
+        return text;
+    }
+    let mut end = ANSWER_MAX_BYTES - ANSWER_CUT_NOTE.len();
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}{ANSWER_CUT_NOTE}", &text[..end])
+}
 /// Runs whose agent can still take a tool result (a dispatched Deep run is
 /// `starting` until the provider's first event is recorded).
 const ACTIVE_RUN: &str = "('starting','running','cancel_requested')";
@@ -206,7 +225,9 @@ async fn observe(tx: &mut SqliteConnection, ask: &SqliteRow) -> R<Observed> {
                 state: ThreadAskState::Answered,
                 detail: None,
                 run: Some(id),
-                answer: accepted.get("text"),
+                answer: accepted
+                    .get::<Option<String>, _>("text")
+                    .map(bounded_answer),
             });
         }
         let (state, detail) = match run.get::<&str, _>("state") {
