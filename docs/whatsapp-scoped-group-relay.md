@@ -45,7 +45,7 @@ Config fields:
 | `heldInputIds` | Optional array of exact transport input IDs excluded before any API call or send; malformed values fail startup |
 | `replyPrefix` | Deployment's configured reply identity |
 | `appendDebugFooter` | Enable the shared WhatsApp model/quota/queue footer in every configured group, shared groups included, and on operator notices; per-thread/chat suppression and tenant isolation still apply |
-| `maxReplyChars` | Optional single-message budget for new replies, 1000 to 60000 characters (default 20000, or `ORKESTR_WHATSAPP_MAX_REPLY_CHARS`) |
+| `maxReplyChars` | Optional text budget for new replies, 1000 to 60000 characters (default 40000, or `ORKESTR_WHATSAPP_MAX_REPLY_CHARS`): up to it a reply goes as text, in numbered parts of at most 4000 characters; a longer one also goes as a document |
 | `forwardProgressUpdates` | Boolean for completed assistant commentary and approval updates; defaults on for the validated owner groups, independently of the legacy mirror |
 | `forwardProgressSince` | ISO activation cutoff; required for explicit global `forwardProgressUpdates: true`. When omitted with default-on or group-only activation, process startup is the cutoff |
 | `formattingModulePath` | Optional existing immutable Orkestr formatter module for a minimal transport install; defaults to the product module in the same repository |
@@ -181,19 +181,28 @@ uncertain send blindly. A confirmed receipt can be replayed locally by the same
 request ID without another external send.
 
 Formatted chunks are saved in the relay journal before dispatch, keeping retries
-byte-identical even when quota or load changes. A reply within the budget
-(`maxReplyChars`, default 20000) is sent as one message, never split. A longer
-reply is sent as one message with its first part, cut at the last paragraph or
-line break in the final quarter of the window (else a sentence end or space, and
-never inside a surrogate pair or emoji sequence), ending with
+byte-identical even when quota or load changes. A reply of at most 4000
+characters (or `maxReplyChars`, when that is smaller) is sent as one message,
+never split. A longer reply within the budget (`maxReplyChars`, default 40000,
+which covers a whole 32 KiB V2 reply) is sent as numbered messages of at most
+4000 characters each: every part starts with the reply prefix and its number,
+`(1/3)`, on its own line. Each cut falls at the last paragraph or line break in
+the final quarter of the window (else a sentence end or space, and never inside
+a surrogate pair or emoji sequence); only the whitespace at a cut is dropped.
+The parts are one delivery: they are frozen together, sent in order (only the
+first may quote the input), each with its own journaled request ID, and a retry resends
+only the parts not yet confirmed, byte-identical. A mirrored remote reply is
+reported to V1 once, after its last part, with every part's request and
+provider IDs. A reply over the budget, or one that would need more than 16
+parts, is sent as one message with its first part, ending with
 `… (full reply attached)`, followed by the full text as a Markdown document
 `reply-<id>.md` in the same group. The document is one more journaled send with
 the same parent or timer-proof authorization, deduplication and uncertainty
 rules as a text; it needs a scoped native worker (`/send-document`). Timer
 notifications behave the same way. Payloads frozen by an older build keep their
-stored chunks on retry. The footer stays on the message and is not counted
-against the budget; a footer (`⚡ Quick:` or older `dbg:`) already embedded at the end of a long reply
-stays on the message as well. When WhatsApp Web delivers a message but
+stored chunks on retry. The footer rides on the last part (or the only
+message) and is not counted against the budget; a footer (`⚡ Quick:` or older
+`dbg:`) already embedded at the end of a long reply stays there as well. When WhatsApp Web delivers a message but
 `sendMessage` returns no usable model (or throws), the transport confirms the
 send only by exactly one own, server-acked, not yet journaled message in that
 group created after the send started; otherwise it stays `uncertain`. Quota telemetry comes from

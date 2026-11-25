@@ -2,13 +2,21 @@
 // Only Node built-ins are imported so the standalone bridge's graph stays closed.
 import crypto from 'node:crypto';
 
-export const SCOPED_REPLY_DEFAULT_CHARS = 20000;
+// The most reply text sent as WhatsApp text; a longer reply also goes as a
+// Markdown document. The default covers a whole V2 reply (32 KiB, at most
+// 32,768 characters) plus the prefix and the cut note.
+export const SCOPED_REPLY_DEFAULT_CHARS = 40000;
 export const SCOPED_REPLY_MIN_CHARS = 1000;
 export const SCOPED_REPLY_MAX_CHARS = 60000;
+// One WhatsApp message of a longer reply, label included (footer excluded).
+export const SCOPED_REPLY_PART_CHARS = 4000;
+// Numbered parts of one reply at most; more goes as a document instead.
+export const SCOPED_REPLY_MAX_PARTS = 16;
 export const SCOPED_FOOTER_MAX_CHARS = 4000;
 export const SCOPED_ATTACHED_MARKER = '… (full reply attached)';
 // Largest single WhatsApp text the scoped send path accepts (String#length):
-// the reply budget plus the attachment marker and the footer.
+// the reply budget plus the attachment marker and the footer (payloads frozen
+// before numbered parts kept a whole budget in one message).
 export const SCOPED_SEND_MAX_TEXT_LENGTH = 65000;
 // Shape of a serialized WhatsApp message id a text may quote (reply-to).
 // Only the shape: the transport checks it names an input of the same group.
@@ -143,16 +151,35 @@ export function scopedReplyPreview(text, limit) {
   return text.slice(0, Math.max(1, cut)).trimEnd() || text.slice(0, end);
 }
 
+// `text` as numbered WhatsApp messages of at most `size` code units each:
+// "<prefix> (i/n)" on the first line, then the next part, cut like a preview
+// (paragraph, line, sentence end or space in the window's last quarter, never
+// inside a grapheme). Whitespace at a cut is dropped, nothing else. Null when
+// the reply needs more than SCOPED_REPLY_MAX_PARTS parts.
+export function scopedReplyParts(text, size, prefix = '') {
+  const head = (index, count) => `${prefix ? `${prefix} ` : ''}(${index}/${count})`;
+  const room = size - head(SCOPED_REPLY_MAX_PARTS, SCOPED_REPLY_MAX_PARTS).length - 1;
+  const parts = [];
+  for (let rest = text.trim(); rest; rest = rest.slice(parts.at(-1).length).trimStart()) {
+    if (parts.length === SCOPED_REPLY_MAX_PARTS) return null;
+    parts.push(scopedReplyPreview(rest, room));
+  }
+  return parts.map((part, index) => `${head(index + 1, parts.length)}\n${part}`);
+}
+
 export function scopedReplyDocumentName(seed) {
   return `reply-${crypto.createHash('sha256').update(String(seed)).digest('hex').slice(0, 10)}.md`;
 }
 
 // Inject the product formatter so a minimal transport installation can reuse
 // its existing immutable Orkestr release without copying the application.
-// A reply within the budget is one message. A longer one is one message with
-// the first part, the attachment marker and the footer, followed by the full
-// text as a Markdown document. Callers freeze the returned entries before the
-// first send attempt; retries reuse them, so older frozen chunks stay intact.
+// A reply of one part (SCOPED_REPLY_PART_CHARS, or a smaller budget) is one
+// message. A longer reply within the budget is numbered parts ("(1/3)"), the
+// footer on the last. A reply over the budget (or SCOPED_REPLY_MAX_PARTS) is
+// one message with its first part, the attachment marker and the footer,
+// followed by the full text as a Markdown document. Callers freeze the
+// returned entries before the first send attempt and send them in order;
+// retries reuse them, so older frozen chunks stay intact.
 export function scopedGroupReplyChunks({text, message, thread, messages, config, formatter, env = process.env, deliveryType = 'final'}) {
   const clean = formatter ? formatter.stripWhatsAppDebugFooter(text) : text;
   const prefix = String(config.replyPrefix || '').trim();
@@ -169,15 +196,24 @@ export function scopedGroupReplyChunks({text, message, thread, messages, config,
   // Entries are exactly what is sent: the bridge trims outbound text, so an
   // untrimmed entry would no longer match its frozen timer proof.
   const body = content.trim();
+  const part = Math.min(limit, SCOPED_REPLY_PART_CHARS);
   // The footer rides on the message and does not count against the budget.
-  if (body.length <= limit) return [body + suffix];
+  if (body.length <= part) return [body + suffix];
   const marker = `\n\n${SCOPED_ATTACHED_MARKER}`;
   // A footer already embedded at the end of the reply text (a final "dbg:"
   // block of up to five lines) stays on the message too, not only in the file.
   const embedded = suffix ? null : body.match(/\n\n((?:dbg: |🤖 |⚡ Quick:|🧠 (?:Deep|Coordinator):)[^\n]*(?:\n[^\n]+){0,4})$/);
   if (embedded && embedded[1].length <= SCOPED_FOOTER_MAX_CHARS) suffix = `\n\n${embedded[1]}`;
   const lead = embedded && suffix ? body.slice(0, embedded.index).trimEnd() : body;
-  const preview = scopedReplyPreview(lead, limit - marker.length);
+  if (body.length <= limit) {
+    // Every part carries the reply prefix; the reply's own leading prefix is
+    // not repeated after the label.
+    const prefixed = prefix && lead.toLowerCase().startsWith(prefix.toLowerCase());
+    const parts = scopedReplyParts(prefixed ? lead.slice(prefix.length) : lead, part, prefix);
+    if (parts?.length === 1) return [lead + suffix];
+    if (parts) return [...parts.slice(0, -1), parts.at(-1) + suffix];
+  }
+  const preview = scopedReplyPreview(lead, part - marker.length);
   const whole = clean.trim();
   const full = whole.length > SCOPED_DOCUMENT_MAX_CHARS
     ? scopedReplyPreview(whole, SCOPED_DOCUMENT_MAX_CHARS - TRUNCATED_NOTE.length) + TRUNCATED_NOTE : whole;
