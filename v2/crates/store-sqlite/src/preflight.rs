@@ -84,12 +84,13 @@ async fn inspect(path: &Path, current_only: bool) -> Result<()> {
     }
     // Rebuild SHM only on the expendable copy. read_only on the source alone is
     // insufficient: SQLite may create or modify source sidecars on a refused open.
-    let mut probe = SqliteConnection::connect_with(
-        &SqliteConnectOptions::new()
+    // The rehearsal migrates like Store::open does: temporary storage in memory.
+    let mut probe = SqliteConnection::connect_with(&crate::migration_options(
+        SqliteConnectOptions::new()
             .filename(&copied)
             .foreign_keys(true)
             .create_if_missing(false),
-    )
+    ))
     .await
     .map_err(db)?;
     let result = async {
