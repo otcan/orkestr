@@ -159,8 +159,10 @@ async fn schema101_upgrade_needs_no_writable_temporary_directory() {
         .append_provider_event(&f.owner, &p, &input(&p, 1, ProviderEvent::Started))
         .await
         .unwrap();
-    // Enough stored replies that dropping the old table spills its statement
-    // journal (well over SQLite's 64 KiB in-memory statement journal).
+    // As many stored replies as live Core had (about 60,000 of some 150
+    // bytes, scattered keys): dropping the old table then spills its
+    // statement journal past SQLite's 64 KiB in-memory limit. A few hundred
+    // rows do not.
     let run = p.run.run_id.to_string();
     let (owner, conversation) = (f.owner.to_string(), f.conversation.to_string());
     let mut tx = f.store.pool.begin().await.unwrap();
@@ -179,20 +181,20 @@ async fn schema101_upgrade_needs_no_writable_temporary_directory() {
     .fetch_one(&mut *tx)
     .await
     .unwrap();
-    let rows = "WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<300)";
-    sqlx::query(&format!("{rows} INSERT INTO events(id,owner_id,conversation_id,message_id,sequence,kind,schema_version) SELECT printf('00000000-0000-4000-8000-%012d',i),?,?,NULL,?+i,'provider_observed',8 FROM n"))
+    let rows = "WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<60000)";
+    sqlx::query(&format!("{rows} INSERT INTO events(id,owner_id,conversation_id,message_id,sequence,kind,schema_version) SELECT printf('%08x-0000-4000-8000-%012d',(i*2654435761)%4294967296,i),?,?,NULL,?+i,'provider_observed',8 FROM n"))
         .bind(&owner).bind(&conversation).bind(sequence)
         .execute(&mut *tx).await.unwrap();
-    sqlx::query(&format!("{rows} INSERT INTO production_observations(event_id,run_id,run_sequence,semantic_digest,kind,lease_generation,dispatch_fence,receipt_state) SELECT printf('00000000-0000-4000-8000-%012d',i),?,?+i,printf('synthetic-%d',i),'progress',?,?,'running' FROM n"))
+    sqlx::query(&format!("{rows} INSERT INTO production_observations(event_id,run_id,run_sequence,semantic_digest,kind,lease_generation,dispatch_fence,receipt_state) SELECT printf('%08x-0000-4000-8000-%012d',(i*2654435761)%4294967296,i),?,?+i,printf('synthetic-%d',i),'progress',?,?,'running' FROM n"))
         .bind(&run).bind(run_sequence).bind(lease).bind(fence)
         .execute(&mut *tx).await.unwrap();
-    sqlx::query(&format!("{rows} INSERT INTO production_payloads(id,event_id,owner_id,conversation_id,run_id,text) SELECT printf('10000000-0000-4000-8000-%012d',i),printf('00000000-0000-4000-8000-%012d',i),?,?,?,hex(randomblob(2000)) FROM n"))
+    sqlx::query(&format!("{rows} INSERT INTO production_payloads(id,event_id,owner_id,conversation_id,run_id,text) SELECT printf('%08x-1000-4000-8000-%012d',(i*40503)%4294967296,i),printf('%08x-0000-4000-8000-%012d',(i*2654435761)%4294967296,i),?,?,?,hex(randomblob(75)) FROM n"))
         .bind(&owner).bind(&conversation).bind(&run)
         .execute(&mut *tx).await.unwrap();
     tx.commit().await.unwrap();
     downgrade_payload_bound(&f.store).await;
     let before = rows_of(&f.store).await;
-    assert_eq!(before.len(), 300);
+    assert_eq!(before.len(), 60000);
 
     // Store::open in a child on a read-only host: only the data directory is
     // writable, there is no TMPDIR, and the working directory is read-only.
