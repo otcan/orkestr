@@ -414,3 +414,16 @@ test('the sites list is one fixed same-origin read (ORK-834)', async () => {
         ['GET','/api/v2/sites/../vault'],['GET','https://notes.sites.example.com/']])
         await assert.rejects(execute({recv:async()=>({...base,method,path,body:null})},()=>assert.fail('fetch must not run')),/Invalid API path/);
 });
+
+test('the owner\'s tools and apps list is one fixed same-origin read', async () => {
+    await execute({recv:async()=>({...base,method:'GET',path:'/api/v2/app-links',body:null,csrf:'synthetic-csrf'})},async(actual,options)=>{
+        assert.equal(actual,'/api/v2/app-links');
+        assert.equal(options.method,'GET');
+        assert.equal(options.credentials,'same-origin');
+        assert.equal(options.headers['x-orkestr-csrf'],undefined);
+        return Response.json({configured:true,links:[]});
+    });
+    for (const [method,path] of [['POST','/api/v2/app-links'],['PUT','/api/v2/app-links'],['DELETE','/api/v2/app-links'],['GET','/api/v2/app-links/vault'],
+        ['GET','/api/v2/app-links?all=1'],['GET','/api/v2/app-links/../vault'],['GET','https://vault.example.com/ui/']])
+        await assert.rejects(execute({recv:async()=>({...base,method,path,body:null})},()=>assert.fail('fetch must not run')),/Invalid API path/);
+});

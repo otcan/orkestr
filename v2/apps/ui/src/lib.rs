@@ -2,6 +2,7 @@
 pub mod acceptance;
 pub mod accepted_payloads;
 pub mod accepted_results;
+pub mod app_links;
 pub mod archived_history;
 pub mod payload;
 use orkestr_v2_contracts::{ConversationEvent, ConversationSnapshot, Message, MessageInput, Scope};

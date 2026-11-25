@@ -11,7 +11,7 @@
 use super::*;
 use std::path::{Path, PathBuf};
 
-mod catalog;
+pub(crate) mod catalog;
 #[cfg(test)]
 mod tests;
 

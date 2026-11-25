@@ -10,6 +10,7 @@ import { liveAnswerApi } from './headless-live-answer.mjs';
 import { agentAttachmentApi, markedPayload } from './headless-agent-attachments.mjs';
 import { credentialsApi } from './headless-credentials-mock.mjs';
 import { sitesApi } from './headless-sites-mock.mjs';
+import { appLinksApi } from './headless-apps-mock.mjs';
 import { workspaceFilesApi } from './headless-workspace-files-mock.mjs';
 
 export const A = '00000000-0000-4000-8000-00000000000a';
@@ -280,6 +281,7 @@ async function api(state, req, res, url) {
   if (await trackerApi(state, req, res, url, { json, body })) return;
   if (await credentialsApi(state, req, res, url, { json, body })) return;
   if (await sitesApi(state, req, res, url, { json })) return;
+  if (await appLinksApi(state, req, res, url, { json })) return;
   if (path === '/api/v2/desktops' && req.method === 'GET') return json(res,200,{
     schema_version:1, observed_at_ms:Date.now(), resources:[
       {slug:'synthetic-desk',label:'Synthetic desk',state:'running',lease_state:state.deskReserved?'reserved':'unreserved',holder:state.deskReserved?'Assistant':null,expires_at:null},

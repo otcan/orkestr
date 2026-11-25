@@ -4,6 +4,7 @@ mod accepted_payloads_view;
 mod accepted_results_bridge;
 mod accepted_results_newest;
 mod accepted_results_view;
+mod apps_view;
 mod archived_history_view;
 mod attachment_keys_view;
 mod attachments_view;
@@ -117,8 +118,11 @@ pub struct GlobalViews {
     pub settings: Signal<u64>,
     /// Bumped by Orkestr settings' "Open credentials" (ORK-826).
     pub credentials: Signal<u64>,
-    /// Bumped by Orkestr settings' "Open sites" (ORK-834).
+    /// Bumped by Orkestr settings' "Open sites" (ORK-834) and the Apps
+    /// page's "All sites and versions".
     pub sites: Signal<u64>,
+    /// Bumped by the header's Apps button: the owner's tools, apps and sites.
+    pub apps: Signal<u64>,
     pub shown: Signal<Option<orkestr_v2_ui::route::Tab>>,
 }
 
@@ -157,6 +161,7 @@ fn App() -> Element {
         settings: Signal::new(0),
         credentials: Signal::new(0),
         sites: Signal::new(0),
+        apps: Signal::new(0),
         shown: Signal::new(None),
     });
     // The view named by the URL at load; the workspace opens it once mounted.
@@ -278,6 +283,13 @@ fn App() -> Element {
                             // "Desks" on narrow phones, so Settings fits on the same row.
                             span { class: "global-link-qualifier", "Virtual " }
                             span { class: "global-link-noun", "desks" }
+                        }
+                        // The owner's tools and apps the host lists (the vault's own UI,
+                        // dashboards) and his published sites, each opened in a new tab.
+                        button { r#type: "button", class: "global-link global-apps", title: "Apps: your tools, apps and published sites",
+                            "aria-current": if (global_views.shown)() == Some(orkestr_v2_ui::route::Tab::Apps) { "page" } else { "false" },
+                            onclick: move |_| { let mut apps = global_views.apps; apps += 1; },
+                            "Apps"
                         }
                         // Account and server-wide settings; a chat's own settings stay under its More menu.
                         button { r#type: "button", class: "global-link global-settings", title: "Orkestr settings: account, credentials, provider sign-in and this installation",

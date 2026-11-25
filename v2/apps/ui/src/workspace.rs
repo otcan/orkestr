@@ -33,6 +33,7 @@ pub fn Workspace(
         Some(Route::OrkestrSettings) => Tab::OrkestrSettings,
         Some(Route::Credentials) => Tab::Credentials,
         Some(Route::Sites) => Tab::Sites,
+        Some(Route::Apps) => Tab::Apps,
         _ => Tab::Chat,
     });
     let mut host_charts = use_signal(|| matches!(initial, Some(Route::Host { charts: true, .. })));
@@ -94,9 +95,10 @@ pub fn Workspace(
         _ => None,
     });
     // The header's Settings button opens Orkestr settings (ORK-789), and
-    // Orkestr settings opens Credentials (ORK-826) and Sites (ORK-834). Each
-    // also drops a V1 chat the URL named but the list has not shown yet, so
-    // that chat cannot replace the page when it appears.
+    // Orkestr settings opens Credentials (ORK-826) and Sites (ORK-834); the
+    // header's Apps button opens Apps, which opens Sites too. Each also drops
+    // a V1 chat the URL named but the list has not shown yet, so that chat
+    // cannot replace the page when it appears.
     let mut open_page = move |page: Tab| {
         wanted.set(None);
         linked.set(None);
@@ -110,6 +112,7 @@ pub fn Workspace(
         open_page(Tab::Credentials)
     });
     use_page_request(global_views.sites, move || open_page(Tab::Sites));
+    use_page_request(global_views.apps, move || open_page(Tab::Apps));
     // Published sites (ORK-834): the open chat's Site link and the Sites page.
     let sites = crate::sites_view::use_sites_catalog(session_scope);
     // The URL follows the view: each change the owner makes is a history entry.
@@ -124,6 +127,7 @@ pub fn Workspace(
             None if tab() == Tab::OrkestrSettings => Route::OrkestrSettings,
             None if tab() == Tab::Credentials => Route::Credentials,
             None if tab() == Tab::Sites => Route::Sites,
+            None if tab() == Tab::Apps => Route::Apps,
             None if tab() == Tab::Host => Route::Host {
                 charts: host_charts(),
                 range: host_range(),
@@ -171,12 +175,16 @@ pub fn Workspace(
                     linked.set(None);
                     tab.set(Tab::VirtualDesks);
                 }
-                page @ (Route::OrkestrSettings | Route::Credentials | Route::Sites) => {
+                page @ (Route::OrkestrSettings
+                | Route::Credentials
+                | Route::Sites
+                | Route::Apps) => {
                     wanted.set(None);
                     linked.set(None);
                     tab.set(match page {
                         Route::Credentials => Tab::Credentials,
                         Route::Sites => Tab::Sites,
+                        Route::Apps => Tab::Apps,
                         _ => Tab::OrkestrSettings,
                     });
                 }
@@ -415,6 +423,9 @@ pub fn Workspace(
                             crate::credentials_view::Credentials { key: "credentials-{session_scope.read().generation()}", csrf, session_scope, onexpired }
                         } else if tab() == Tab::Sites {
                             crate::sites_view::Sites { key: "sites-{session_scope.read().generation()}", sites, session_scope }
+                        } else if tab() == Tab::Apps {
+                            // The owner's tools, apps and live sites; owner-wide, never under a chat.
+                            crate::apps_view::Apps { key: "apps-{session_scope.read().generation()}", sites, session_scope, onsites: move |_| open_page(Tab::Sites) }
                         } else {
                             crate::chat_settings_view::ChatSettings { key: "settings-{current()}-{session_scope.read().generation()}", conversation: current(), csrf, session_scope, onexpired }
                         }

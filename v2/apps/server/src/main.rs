@@ -216,6 +216,9 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     // Optional: the host's sites catalog (ORK-834), read per request; a
     // missing file lists no sites.
     state = state.with_sites_catalog(&home);
+    // Optional: the host's list of the owner's tools and apps (the Apps
+    // page), read per request; a missing file lists none.
+    state = state.with_app_links(&home);
     // Optional: the Files panel's folder view reads through the workspace
     // reader socket; without one the panel says this host cannot show it.
     state = state.with_workspace_reader_from_env();

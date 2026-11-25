@@ -96,8 +96,9 @@ in between.
   a small **+N** button next to it opens the Sites page. No link shows for a
   chat without a live site, a linked V1 chat, an older server without the
   route, or when the list could not be read.
-- **Sites page** (`#sites`). Opened from Orkestr settings ("Open sites") or
-  from a chat's **+N**. One row per site: title (or slug) and address, the
+- **Sites page** (`#sites`). Opened from Orkestr settings ("Open sites"),
+  from a chat's **+N**, or from the Apps page ("All sites and versions",
+  `app-links.md`), which also links every live site. One row per site: title (or slug) and address, the
   chat by name (from the conversation list; "No chat" for `null`, "Chat not
   in your list" for an id the list does not show), kind (Static site or App),
   last publish (relative, with the exact UTC time as a tooltip), version, and

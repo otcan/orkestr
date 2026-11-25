@@ -9,6 +9,7 @@ import { trackerScenario } from './headless-tracker.mjs';
 import { virtualDesksAndAccountSettings } from './headless-virtual-desks-settings.mjs';
 import { credentialsPage } from './headless-credentials.mjs';
 import { sitesPage } from './headless-sites.mjs';
+import { appsPage } from './headless-apps.mjs';
 import { providerSignIn } from './headless-provider-sign-in.mjs';
 import { silentReplies } from './headless-silent-replies.mjs';
 import { answerLoading } from './headless-answer-loading.mjs';
@@ -728,6 +729,7 @@ export const scenarios = [
   }],
   ['credentials', label => credentialsPage({ page, state, clickText, waitText, screenshot, label, noHorizontalScroll })],
   ['sites', label => sitesPage({ page, state, label, openDrawer, choose, clickText, waitText, screenshot, noHorizontalScroll })],
+  ['apps', label => appsPage({ page, state, label, clickText, waitText, screenshot, noHorizontalScroll })],
   ['provider-handoff', label => providerHandoff({ page, state, label, openDrawer, choose, clickText, waitText, screenshot, noHorizontalScroll })],
   ['v1-manage', async label => {
     await openDrawer(label);
