@@ -346,7 +346,7 @@ class ClaudeChannel:
             self.terminal_uuid = value
             self.terminal = True
             clean = {key: frame[key] for key in ("type", "session_id", "subtype", "is_error", "result")}
-            # Runtime bounds every forwarded string to 8 KiB: a longer result is
+            # Runtime bounds every forwarded string to 32 KiB: a longer result is
             # cut with the same note as the reply, never refused.
             clean["result"] = clip_with_note(frame["result"])
         else:

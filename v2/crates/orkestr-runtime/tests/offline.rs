@@ -199,7 +199,12 @@ fn cancellation_ack_token_cannot_start_execution() {
     p.start(&a).unwrap();
     assert_eq!(p.poll(&control(&a).cancellation), Err(Blocker::StaleLease));
     assert_eq!(
-        p.emit(&a, ProviderEvent::Progress("é".repeat(4097))),
+        p.emit(
+            &a,
+            ProviderEvent::Progress(
+                "é".repeat(orkestr_v2_application::runtime::MAX_PROVIDER_PROGRESS_BYTES / 2 + 1)
+            )
+        ),
         Err(Blocker::QueueFull)
     );
 }

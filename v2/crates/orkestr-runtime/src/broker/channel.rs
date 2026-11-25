@@ -335,7 +335,7 @@ impl BrokerChannel {
         result
     }
     fn decode(&mut self, bytes: &[u8]) -> Result<Option<Value>, Blocker> {
-        if bytes.len() > 65536 {
+        if bytes.len() > super::MAX_OUTPUT_FRAME_BYTES {
             return Err(Blocker::Protocol);
         }
         let value: Value = serde_json::from_slice(bytes).map_err(|_| Blocker::Protocol)?;

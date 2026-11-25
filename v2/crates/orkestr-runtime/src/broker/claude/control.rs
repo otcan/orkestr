@@ -103,7 +103,10 @@ impl ClaudeControl {
     }
 
     fn decode(&mut self, bytes: &[u8]) -> Result<ControlFrame, Blocker> {
-        if !self.requested || bytes.is_empty() || bytes.len() > 65536 {
+        if !self.requested
+            || bytes.is_empty()
+            || bytes.len() > crate::broker::MAX_OUTPUT_FRAME_BYTES
+        {
             return Err(Blocker::Protocol);
         }
         let text = std::str::from_utf8(bytes).map_err(|_| Blocker::Protocol)?;

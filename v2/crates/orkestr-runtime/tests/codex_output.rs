@@ -510,13 +510,19 @@ fn commentary_only_or_textless_completion_replies_instead_of_failing() {
 fn text_bytes_and_number_of_items_remain_bounded() {
     // A message over the progress bound is cut, never refused: the turn
     // completes with its bounded prefix and the note.
+    use orkestr_v2_application::runtime::MAX_PROVIDER_PROGRESS_BYTES as MAX;
     let mut stream = active();
-    let full = "🦀".repeat(2048);
-    let mut events = receive(&mut stream, delta(None, &full));
+    // Deltas of at most 8 KiB each (the broker's bound) fill the reply bound.
+    let chunk = "🦀".repeat(2048);
+    let full = chunk.repeat(MAX / chunk.len());
+    let mut events = Vec::new();
+    for _ in 0..MAX / chunk.len() {
+        events.extend(receive(&mut stream, delta(None, &chunk)));
+    }
     events.extend(receive(&mut stream, delta(None, "x")));
     events.extend(receive(&mut stream, done()));
     let reply = progress(&events).last().copied().unwrap();
-    assert!(reply.len() <= 8192);
+    assert!(reply.len() <= MAX);
     assert!(reply.ends_with(CLIPPED_NOTE));
     assert!(full.starts_with(reply.trim_end_matches(CLIPPED_NOTE)));
     assert!(matches!(

@@ -5,6 +5,10 @@ use orkestr_v2_application::runtime::MAX_PROVIDER_PROGRESS_BYTES;
 use serde_json::Value;
 
 const MAX_ITEMS: usize = 128;
+/// One streamed delta, as the provider broker bounds it (`protocol.py`).
+/// Natives stream a few tokens per delta; a whole message may reach
+/// `MAX_PROVIDER_PROGRESS_BYTES`.
+const MAX_DELTA_BYTES: usize = 8192;
 /// Marks a reply taken from the last progress message of a turn that ended
 /// without a final answer.
 pub(crate) const NO_FINAL_NOTE: &str = "(Ended without a final answer; last update:)";
@@ -189,7 +193,7 @@ impl TurnText {
                 .ok_or(Blocker::Protocol)?;
             let index = self.delta_item(params)?;
             let item = &mut self.items[index];
-            if item.completed || delta.len() > MAX_PROVIDER_PROGRESS_BYTES {
+            if item.completed || delta.len() > MAX_DELTA_BYTES {
                 return Err(Blocker::Protocol);
             }
             item.deltas = true;

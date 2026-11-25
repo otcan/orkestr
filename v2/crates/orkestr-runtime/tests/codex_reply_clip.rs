@@ -1,13 +1,15 @@
-//! A Codex reply over the 8 KiB progress bound is cut, never refused.
+//! A Codex reply over the 32 KiB progress bound is cut, never refused.
 //! Synthetic text only: Turkish letters take two UTF-8 bytes, so a reply of
-//! 7,445 characters is 8,211 bytes and crossed the bound mid-stream.
+//! 27,382 characters is 32,787 bytes and crosses the bound mid-stream.
 use orkestr_runtime::{
     codex_rpc::{TurnStream, CLIPPED_NOTE},
     ports::ProviderEvent,
 };
+use orkestr_v2_application::runtime::MAX_PROVIDER_PROGRESS_BYTES as MAX;
 use serde_json::{json, Value};
 
-const MAX: usize = 8192;
+/// The synthetic reply's size: 19 bytes over the bound.
+const SIZE: usize = MAX + 19;
 
 fn active() -> TurnStream {
     let mut stream = TurnStream::new("thread", 4).unwrap();
@@ -42,24 +44,24 @@ fn progress(events: &[ProviderEvent]) -> Vec<&str> {
         .collect()
 }
 
-/// Exactly 8,211 bytes of synthetic Turkish prose; byte 8,192 falls inside a
-/// two-byte letter (the broker test builds the same text).
+/// Exactly 32,787 bytes of synthetic Turkish prose; byte 32,768 falls inside
+/// a two-byte letter (the broker test builds the same text).
 fn turkish_reply() -> String {
     let sentence = "Çalışma planı güncellendi; bütçe, iş paketleri ve ölçütler şöyle sıralandı. ";
     let mut text = String::from(".");
-    while text.len() + sentence.len() <= 8211 {
+    while text.len() + sentence.len() <= SIZE {
         text.push_str(sentence);
     }
     for letter in sentence.chars() {
-        if text.len() + letter.len_utf8() > 8211 {
+        if text.len() + letter.len_utf8() > SIZE {
             break;
         }
         text.push(letter);
     }
-    while text.len() < 8211 {
+    while text.len() < SIZE {
         text.push('.');
     }
-    assert_eq!(text.len(), 8211);
+    assert_eq!(text.len(), SIZE);
     assert!(text.chars().count() < text.len());
     assert!(!text.is_char_boundary(MAX));
     text
@@ -126,10 +128,14 @@ fn completed_cut_reply_without_deltas_is_delivered_with_the_note() {
 
 #[test]
 fn reply_within_the_bound_is_unchanged() {
-    let full = "ş".repeat(MAX / 2);
+    // Exactly at the bound, streamed in deltas of 8 KiB (the broker's bound).
+    let chunk = "ş".repeat(4096);
+    let full = chunk.repeat(MAX / chunk.len());
     let mut stream = active();
     let mut events = receive(&mut stream, &item("item/started", ""));
-    events.extend(receive(&mut stream, &delta(&full)));
+    for _ in 0..MAX / chunk.len() {
+        events.extend(receive(&mut stream, &delta(&chunk)));
+    }
     events.extend(receive(&mut stream, &item("item/completed", &full)));
     events.extend(receive(&mut stream, &done()));
     assert_eq!(progress(&events), [full.as_str()]);

@@ -5,7 +5,11 @@ use std::process::{ChildStdin, ChildStdout};
 
 #[derive(Clone, Copy)]
 pub struct TransportBounds {
+    /// One frame Runtime writes to the child.
     pub max_frame_bytes: usize,
+    /// One frame Runtime reads from the child (the broker's output): larger,
+    /// because it carries a whole reply in ASCII-escaped JSON.
+    pub max_output_frame_bytes: usize,
     pub max_pending_frames: usize,
     pub io_bytes_per_poll: usize,
 }
@@ -14,6 +18,7 @@ impl Default for TransportBounds {
     fn default() -> Self {
         Self {
             max_frame_bytes: 65536,
+            max_output_frame_bytes: crate::broker::MAX_OUTPUT_FRAME_BYTES,
             max_pending_frames: 8,
             io_bytes_per_poll: 65536,
         }
@@ -23,6 +28,7 @@ impl Default for TransportBounds {
 impl TransportBounds {
     pub(super) fn validate(self) -> Result<Self, Error> {
         if !(1..=1048576).contains(&self.max_frame_bytes)
+            || !(1..=1048576).contains(&self.max_output_frame_bytes)
             || !(1..=64).contains(&self.max_pending_frames)
             || !(1..=1048576).contains(&self.io_bytes_per_poll)
         {
@@ -144,7 +150,7 @@ impl Framing {
                 }
                 return Ok(Output::Frame(frame));
             }
-            if self.buffer.len() > self.bounds.max_frame_bytes {
+            if self.buffer.len() > self.bounds.max_output_frame_bytes {
                 return Err(Error::FrameTooLarge);
             }
             if self.eof {
@@ -162,7 +168,7 @@ impl Framing {
             let capacity = chunk
                 .len()
                 .min(self.bounds.io_bytes_per_poll - read)
-                .min(self.bounds.max_frame_bytes + 1 - self.buffer.len());
+                .min(self.bounds.max_output_frame_bytes + 1 - self.buffer.len());
             match self
                 .output
                 .as_mut()

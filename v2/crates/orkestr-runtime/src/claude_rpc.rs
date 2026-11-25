@@ -4,8 +4,10 @@ use crate::ports::Blocker;
 use serde_json::Value;
 use std::collections::HashSet;
 
-pub const MAX_FRAME_BYTES: usize = 64 * 1024;
-const MAX_STRING_BYTES: usize = 8 * 1024;
+/// One broker frame as Runtime re-serializes it; it carries a whole reply.
+pub const MAX_FRAME_BYTES: usize = crate::broker::MAX_OUTPUT_FRAME_BYTES;
+/// Any one string: the broker cuts a reply or result to this bound.
+const MAX_STRING_BYTES: usize = orkestr_v2_application::runtime::MAX_PROVIDER_PROGRESS_BYTES;
 const MAX_KEY_BYTES: usize = 128;
 const MAX_DEPTH: usize = 16;
 const MAX_COLLECTION: usize = 128;

@@ -1,12 +1,12 @@
-"""A Claude reply over the 8 KiB progress bound is cut with a note, never refused.
+"""A Claude reply over the 32 KiB progress bound is cut with a note, never refused.
 
 Synthetic values only, no provider launch. Runtime forwards Claude text blocks
-unchanged and bounds every string to 8 KiB, so the broker cuts the reply and
+unchanged and bounds every string to 32 KiB, so the broker cuts the reply and
 its `result` and appends the note itself.
 """
 import unittest
 import uuid
-from protocol import CLIPPED_NOTE, MAX_FRAME, MAX_REPLY_BYTES, encode
+from protocol import CLIPPED_NOTE, MAX_OUTPUT_FRAME, MAX_REPLY_BYTES, encode
 from test_claude_full_access import INPUT, tool_turn
 from test_codex_output_items import turkish_reply
 
@@ -35,7 +35,7 @@ class ClaudeReplyClipTests(unittest.TestCase):
         full = turkish_reply()
         channel, native, _ = tool_turn(tools)
         output = channel.provider(answer(native, full))
-        self.assertLessEqual(len(encode(output)), MAX_FRAME + 1)
+        self.assertLessEqual(len(encode(output)), MAX_OUTPUT_FRAME + 1)
         blocks = output["params"]["frame"]["message"]["content"]
         self.assertEqual(len(blocks), 1)
         self.assertEqual(blocks[0]["type"], "text")

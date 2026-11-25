@@ -267,7 +267,7 @@ impl TurnStream {
         Ok(())
     }
     fn decode(&mut self, line: &str) -> Result<(), Blocker> {
-        if line.len() > 64 * 1024 {
+        if line.len() > crate::broker::MAX_OUTPUT_FRAME_BYTES {
             return Err(Blocker::Protocol);
         }
         let value: Value = serde_json::from_str(line).map_err(|_| Blocker::Protocol)?;
