@@ -208,6 +208,22 @@ test('a long V2 timer reply is one message plus the full text as a Markdown docu
   assert.equal(state.sent.length, 2);
 });
 
+test('a long V2 timer reply within the budget is numbered parts, reported together', async t => {
+  const {state, options} = fixture(t);
+  state.messages[1].text = Array.from({length: 3}, (_, i) => `Brief ${i}. ${'Morning paragraph. '.repeat(180).trim()}`).join('\n\n');
+  const notifier = createScopedTimerNotifications({...options, env: {}});
+  t.after(() => notifier.close());
+  assert.equal((await notifier.tick()).sent, 3);
+  assert.deepEqual(state.sent.map(sent => sent.text.split('\n')[0]), ['(1/3)', '(2/3)', '(3/3)']);
+  assert.match(state.sent[0].text, /^\(1\/3\)\n⏰ Morning brief\nBrief 0\. Morning paragraph\./);
+  assert.ok(state.sent.every(sent => typeof sent.text === 'string' && sent.text.length <= 4000));
+  assert.equal(state.reports.length, 1);
+  assert.equal(state.reports[0].body.requestIds.length, 3);
+  assert.deepEqual(state.reports[0].body.connectorMessageIds, ['sent-1', 'sent-2', 'sent-3']);
+  const resumed = createScopedTimerNotifications({...options, env: {}}); await resumed.tick(); resumed.close();
+  assert.equal(state.sent.length, 3, 'no part repeats after a restart');
+});
+
 // A V2 Quick reply for an input whose Deep final V1 already has was withdrawn
 // by the V2 adapter's ordering fence: it must never go out late, neither on a
 // first pass nor when a prepared send resumes after a relay restart.

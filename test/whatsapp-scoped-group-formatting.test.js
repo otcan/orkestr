@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  decodeReplyEntry, encodeReplyEntry, replyEntrySendFields, scopedGroupReplyChunks, scopedGroupReplyLimit, scopedReplyDeliveryType, scopedReplyHeader, scopedReplyPreview,
-  SCOPED_ATTACHED_MARKER, SCOPED_SEND_MAX_TEXT_LENGTH,
+  decodeReplyEntry, encodeReplyEntry, replyEntrySendFields, scopedGroupReplyChunks, scopedGroupReplyLimit, scopedReplyDeliveryType, scopedReplyHeader, scopedReplyParts, scopedReplyPreview,
+  SCOPED_ATTACHED_MARKER, SCOPED_REPLY_MAX_PARTS, SCOPED_REPLY_PART_CHARS, SCOPED_SEND_MAX_TEXT_LENGTH,
 } from '../packages/connectors/src/whatsapp-scoped-group-formatting.js';
 import * as formatter from '../packages/connectors/src/whatsapp-formatting.js';
 
@@ -12,6 +12,9 @@ const chunk = (text, config = {}, env = {}, withFormatter = false) =>
 const loneSurrogate = text => /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(text);
 const words = n => Array.from({length: n}, (_, i) => `word${i}`).join(' ');
 const marker = `\n\n${SCOPED_ATTACHED_MARKER}`;
+const label = /^(?:agent: )?\((\d+)\/(\d+)\)\n/;
+// The reply's text without labels and without the whitespace dropped at cuts.
+const compact = text => text.replace(/\s+/g, '');
 
 test('only real timer metadata adds a reminder heading', () => {
   assert.equal(scopedReplyHeader({timerId: '10000000-0000-4000-8000-000000000001', label: 'Daily brief'}), '⏰ Daily brief');
@@ -35,28 +38,71 @@ test('a V2 pseudo-timer reply is a notice, an update or a final by its source (O
   }
 });
 
-test('reply limit defaults to 20000, honours config then env, and is clamped', () => {
-  assert.equal(scopedGroupReplyLimit({}, {}), 20000);
+test('reply limit defaults to 40000, honours config then env, and is clamped', () => {
+  assert.equal(scopedGroupReplyLimit({}, {}), 40000);
   assert.equal(scopedGroupReplyLimit({}, {ORKESTR_WHATSAPP_MAX_REPLY_CHARS: '2500'}), 2500);
   assert.equal(scopedGroupReplyLimit({maxReplyChars: 8000}, {ORKESTR_WHATSAPP_MAX_REPLY_CHARS: '2500'}), 8000);
   assert.equal(scopedGroupReplyLimit({maxReplyChars: 10}, {}), 1000);
   assert.equal(scopedGroupReplyLimit({}, {ORKESTR_WHATSAPP_MAX_REPLY_CHARS: '999999'}), 60000);
-  assert.equal(scopedGroupReplyLimit({maxReplyChars: 'many'}, {ORKESTR_WHATSAPP_MAX_REPLY_CHARS: ''}), 20000);
+  assert.equal(scopedGroupReplyLimit({maxReplyChars: 'many'}, {ORKESTR_WHATSAPP_MAX_REPLY_CHARS: ''}), 40000);
   assert.ok(SCOPED_SEND_MAX_TEXT_LENGTH >= 60000 + marker.length + 4002);
 });
 
-test('a reply within the budget is exactly one unsplit message', () => {
+test('a reply of one part is exactly one unsplit message', () => {
   const short = words(400).slice(0, 2500);
   assert.deepEqual(chunk(short), [short]);
-  const atLimit = 'x'.repeat(20000);
-  assert.deepEqual(chunk(atLimit), [atLimit]);
+  const atPart = 'x'.repeat(SCOPED_REPLY_PART_CHARS);
+  assert.deepEqual(chunk(atPart), [atPart]);
 });
 
-test('a longer reply is one preview message plus the full text as a Markdown document', () => {
-  const text = `${'a'.repeat(15000)}\n\n${'b'.repeat(4000)}\n\n${'c'.repeat(6000)}`;
+test('a longer reply within the budget is numbered parts cut at paragraphs, in order', () => {
+  const paragraphs = Array.from({length: 12}, (_, i) => `Paragraph ${i}: ${'lorem ipsum '.repeat(70).trim()}.`);
+  const text = paragraphs.join('\n\n');
+  assert.ok(text.length > 2 * SCOPED_REPLY_PART_CHARS && text.length < 40000);
+  const entries = chunk(text, {replyPrefix: 'agent:'});
+  assert.ok(entries.length >= 3 && entries.length <= SCOPED_REPLY_MAX_PARTS);
+  entries.forEach((entry, i) => {
+    assert.equal(typeof entry, 'string');
+    assert.ok(entry.length <= SCOPED_REPLY_PART_CHARS, `part ${i + 1} is ${entry.length}`);
+    const [head, index, count] = entry.match(label);
+    assert.equal(head, `agent: (${i + 1}/${entries.length})\n`);
+    assert.deepEqual([Number(index), Number(count)], [i + 1, entries.length]);
+    const body = entry.slice(head.length);
+    // Each part ends a paragraph and starts the next one.
+    assert.match(body, /^Paragraph \d+: /);
+    assert.ok(body.endsWith('ipsum.'), `part ${i + 1} ends inside a paragraph`);
+  });
+  assert.equal(compact(entries.map(entry => entry.replace(label, '')).join('')), compact(text));
+  assert.deepEqual(chunk(text, {replyPrefix: 'agent:'}), entries, 'the same reply always splits the same way');
+});
+
+test('a whole 32 KiB reply (two-byte letters) is numbered parts, never a document', () => {
+  const sentence = 'Çalışma planı güncellendi; bütçe, iş paketleri ve ölçütler şöyle sıralandı. ';
+  let text = '';
+  while (Buffer.byteLength(text + sentence) <= 32768) text += sentence;
+  text = text.trim();
+  const entries = chunk(text);
+  assert.ok(entries.length >= 7 && entries.length <= SCOPED_REPLY_MAX_PARTS, `${entries.length} parts`);
+  assert.ok(entries.every(entry => typeof entry === 'string' && entry.length <= SCOPED_REPLY_PART_CHARS && label.test(entry)));
+  assert.ok(entries.slice(0, -1).every(entry => entry.endsWith('sıralandı.')), 'cut at sentence ends');
+  assert.equal(compact(entries.map(entry => entry.replace(label, '')).join('')), compact(text));
+});
+
+test('parts never exceed their maximum count; more falls back to a document', () => {
+  const paragraphs = Array.from({length: 19}, (_, i) => `${i}`.padEnd(3000, 'p'));
+  const text = paragraphs.join('\n\n');
+  assert.equal(scopedReplyParts(text, SCOPED_REPLY_PART_CHARS), null);
+  const entries = chunk(text, {maxReplyChars: 60000});
+  assert.equal(entries.length, 2);
+  assert.ok(entries[0].endsWith(marker) && entries[0].length <= SCOPED_REPLY_PART_CHARS);
+  assert.equal(entries[1].document.text, text);
+});
+
+test('a reply over the budget is one preview message plus the full text as a Markdown document', () => {
+  const text = `${'a'.repeat(3500)}\n\n${'b'.repeat(30000)}\n\n${'c'.repeat(10000)}`;
   const entries = chunk(text);
   assert.equal(entries.length, 2);
-  assert.equal(entries[0], `${'a'.repeat(15000)}\n\n${'b'.repeat(4000)}${marker}`);
+  assert.equal(entries[0], `${'a'.repeat(3500)}${marker}`);
   assert.deepEqual(entries[1], {document: {filename: entries[1].document.filename, mimetype: 'text/markdown', text}});
   assert.match(entries[1].document.filename, /^reply-[0-9a-f]{10}\.md$/);
   assert.equal(chunk(text)[1].document.filename, entries[1].document.filename, 'the name is stable for the same message');
@@ -71,10 +117,13 @@ test('the preview prefers a paragraph, then a line break, in the last quarter of
   assert.ok(words(1000).startsWith(`${spaced} `), 'no word is cut');
 });
 
-test('text without whitespace is hard cut at the budget', () => {
-  const entries = chunk('z'.repeat(25000));
-  assert.equal(entries[0], 'z'.repeat(20000 - marker.length) + marker);
-  assert.equal(entries[1].document.text, 'z'.repeat(25000));
+test('text without whitespace is hard cut at a part', () => {
+  const entries = chunk('z'.repeat(45000));
+  assert.equal(entries[0], 'z'.repeat(SCOPED_REPLY_PART_CHARS - marker.length) + marker);
+  assert.equal(entries[1].document.text, 'z'.repeat(45000));
+  const parts = chunk('z'.repeat(9000));
+  assert.deepEqual(parts.map(entry => entry.match(label)[0]), ['(1/3)\n', '(2/3)\n', '(3/3)\n']);
+  assert.equal(parts.map(entry => entry.replace(label, '')).join(''), 'z'.repeat(9000));
 });
 
 test('emoji, surrogate pairs and joined emoji sequences are never split by the preview', () => {
@@ -88,6 +137,18 @@ test('emoji, surrogate pairs and joined emoji sequences are never split by the p
     }
   }
   assert.equal(scopedReplyPreview('😀'.repeat(5000), 4001), '😀'.repeat(2000));
+});
+
+test('the footer rides on the last part only', () => {
+  const text = Array.from({length: 6}, (_, i) => `Section ${i}. ${words(250)}`).join('\n\n');
+  const entries = chunk(text, {appendDebugFooter: true}, {}, true);
+  assert.ok(entries.length >= 2);
+  assert.match(entries.at(-1), /\n\ndbg: codex\/example-model/);
+  assert.ok(entries.slice(0, -1).every(entry => !entry.includes('dbg:') && entry.length <= SCOPED_REPLY_PART_CHARS));
+  const embedded = 'dbg: claude-code/example · rt:coordinator · msg:*final*';
+  const own = chunk(`${text}\n\n${embedded}`);
+  assert.ok(own.at(-1).endsWith(`\n\n${embedded}`));
+  assert.ok(own.slice(0, -1).every(entry => !entry.includes('dbg:')));
 });
 
 test('the footer stays on the message, for short and for attached replies', () => {

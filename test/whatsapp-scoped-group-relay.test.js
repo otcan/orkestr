@@ -246,20 +246,51 @@ test('shared footer includes model, both provider quotas and queue context once'
   assert.equal(text.match(/dbg:/g).length, 1);
 });
 
-test('a long reply is one message with the footer plus the full text as a Markdown document', async t => {
+test('a long reply is numbered parts sent in order, the footer on the last', async t => {
   const {relay, state} = fixture(t, true);
   const text = Array.from({length: 4000}, (_, i) => `word${i}`).join(' ');
   state.pages['/api/threads/thread-1/messages?limit=200'] = {messages: [{...answer('final'), text}]};
   assert.equal((await relay.tick()).completed, 1);
-  assert.equal(state.sent.length, 2);
-  assert.ok(state.sent[0].text.length <= 20000 + 4000);
-  assert.match(state.sent[0].text, /^agent: word0 [\s\S]*\n\n… \(full reply attached\)\n\ndbg:.*\ncodex.*\nclaude.*\nq:/);
-  assert.equal(state.sent[1].text, undefined);
-  assert.deepEqual(state.sent[1].document, {filename: state.sent[1].document.filename, mimetype: 'text/markdown', text});
-  assert.match(state.sent[1].document.filename, /^reply-[0-9a-f]{10}\.md$/);
-  assert.notEqual(state.sent[0].requestId, state.sent[1].requestId);
+  const count = state.sent.length;
+  assert.ok(count >= 9 && count <= 16, `${count} parts`);
+  state.sent.forEach((sent, i) => {
+    assert.match(sent.text, new RegExp(`^agent: \\(${i + 1}/${count}\\)\nword\\d+ `));
+    assert.equal(sent.document, undefined);
+    if (i < count - 1) assert.ok(sent.text.length <= 4000 && !sent.text.includes('dbg:'));
+  });
+  assert.match(state.sent.at(-1).text, /\n\ndbg:.*\ncodex.*\nclaude.*\nq:/);
+  assert.equal(new Set(state.sent.map(sent => sent.requestId)).size, count);
+  const words = state.sent.map(sent => sent.text.replace(/^agent: \(\d+\/\d+\)\n/, '').replace(/\n\ndbg:[\s\S]*$/, ''));
+  assert.equal(words.join(' '), text, 'every word once, in order');
   await relay.tick();
-  assert.equal(state.sent.length, 2, 'neither send repeats');
+  assert.equal(state.sent.length, count, 'no part repeats');
+});
+
+test('a part that fails is resent from the frozen payload; sent parts never repeat', async t => {
+  const {relay, state, relayDb} = fixture(t);
+  const text = Array.from({length: 3}, (_, i) => `Part ${i}. ${'x '.repeat(1800).trim()}`).join('\n\n');
+  state.pages['/api/threads/thread-1/messages?limit=200'] = {messages: [
+    {...answer('remote-final'), text, source: 'remote-runtime', remoteMessageId: 'remote-1'}]};
+  // The first part is confirmed; the second fails before confirmation.
+  const original = state.sent.push.bind(state.sent);
+  state.sent.push = payload => { const n = original(payload); state.failReply = n === 2; return n; };
+  assert.equal((await relay.tick()).completed, 0);
+  assert.equal(state.sent.length, 2);
+  assert.equal(state.reports.length, 0, 'nothing is reported before every part is sent');
+  state.sent.push = original; state.failReply = false;
+  assert.equal((await relay.tick()).completed, 1);
+  assert.equal(state.sent.length, 4);
+  assert.deepEqual(state.sent[2], state.sent[1], 'the failed part is resent byte-identical');
+  assert.deepEqual(state.sent.map(sent => sent.text.split('\n')[0]), ['agent: (1/3)', 'agent: (2/3)', 'agent: (2/3)', 'agent: (3/3)']);
+  assert.deepEqual(state.sent.map(sent => sent.text.split('\n')[1].slice(0, 7)), ['Part 0.', 'Part 1.', 'Part 1.', 'Part 2.']);
+  assert.equal(relayDb.prepare('SELECT count(*) n FROM reply_payloads').get().n, 1);
+  // One logical delivery: one report naming every part.
+  assert.equal(state.reports.length, 1);
+  assert.equal(state.reports[0].body.requestIds.length, 3);
+  assert.deepEqual(state.reports[0].body.requestIds, [...new Set([state.sent[0], state.sent[1], state.sent[3]].map(sent => sent.requestId))]);
+  await relay.tick();
+  assert.equal(state.sent.length, 4);
+  assert.equal(state.reports.length, 1);
 });
 
 test('a 2500-character reply with its footer is delivered as one message', async t => {
@@ -283,7 +314,7 @@ test('relay config maxReplyChars sets the budget for new payloads', async t => {
 
 test('a document send that fails is retried from the frozen payload without resending the message', async t => {
   const {relay, state, relayDb} = fixture(t);
-  state.pages['/api/threads/thread-1/messages?limit=200'] = {messages: [{...answer('final'), text: 'd '.repeat(15000)}]};
+  state.pages['/api/threads/thread-1/messages?limit=200'] = {messages: [{...answer('final'), text: 'd '.repeat(25000)}]};
   // The message is confirmed; the document send then fails before confirmation.
   const original = state.sent.push.bind(state.sent);
   state.sent.push = payload => { const n = original(payload); state.failReply = n === 2; return n; };
