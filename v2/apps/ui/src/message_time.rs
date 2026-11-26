@@ -188,3 +188,12 @@ pub fn receipt_label(receipt: &MessageReceipt) -> &'static str {
         K::Failed => "! Delivery failed",
     }
 }
+
+/// The sequence the chat reads message times after: just before the oldest
+/// row on screen, or `None` while no row is shown yet. Reading from 0 before
+/// the rows arrive fetched the times of a long chat's oldest messages (five
+/// pages, sequences 1 to about 5,500 of 9,300) and left the shown owner
+/// messages without a time until the next refresh 15 s later.
+pub fn times_after(oldest_shown: Option<i64>) -> Option<i64> {
+    oldest_shown.map(|sequence| (sequence - 1).max(0))
+}

@@ -1,19 +1,27 @@
-# Files panel: the chat folder
+# Files panel: the server folder
 
 A conversation's Files panel shows, read-only, the folder its agent works in
 on the host. Sections, top to bottom:
 
-1. **Chat folder**: the folder's files and folders (folders first, then
-   newest first, with size and modified time). A folder opens in place and the
-   breadcrumbs lead back. A file opens a preview (text, the first 512 KiB, or
-   an image) with Download (at most 25 MiB). Nothing can be written, renamed
-   or deleted.
+1. **Your folder**: the folder on the owner's computer that the chat may use
+   while the tab is open ([local folder relay](local-files.md)): its state in
+   words, Connect, Reconnect or Disconnect, why the browser refused the last
+   Connect, the connected folder's own files (top level, read in the browser)
+   and the folder activity. The composer's folder chip leads here.
 2. **In this chat**: the files the owner attached and the files the assistant
    sent, newest first (unchanged).
-3. **More**, collapsed: *Your folder* (a folder on the owner's computer that the
-   chat may use while the tab is open) and *Private copies*. A connected
-   folder opens "More" so its state and Disconnect stay where the composer chip
-   leads.
+3. **More**, collapsed:
+   - *Server folder*: the folder's files and folders (folders first, then
+     newest first, with size and modified time). A folder opens in place and
+     the breadcrumbs lead back. A file opens a preview (text, the first
+     512 KiB, or an image) with Download (at most 25 MiB). Nothing can be
+     written, renamed or deleted. The shared default workspace is not listed
+     until the owner presses **Show files of all chats** (see below).
+   - *Private copies*.
+
+Until 2026-11-26 the server folder came first and *Your folder* sat under
+More. For a chat without a pinned folder that put every chat's files at the
+top of Files and hid the owner's own folder, its Connect and its errors.
 
 ## Which folder
 
@@ -23,7 +31,7 @@ the provider's default workspace (`workspace`, or `claude.workspace` for a
 Claude conversation). Every conversation without a pinned folder shares that
 default, so the panel labels it **Shared default workspace** and says that
 files of other chats appear there too. It never presents the shared folder as
-the chat's own.
+the chat's own, and lists it only after **Show files of all chats**.
 
 ## Who reads it
 

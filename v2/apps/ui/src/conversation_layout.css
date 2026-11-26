@@ -45,6 +45,8 @@
 .composer-context a.local-folder-chip, .composer-context span.local-folder-chip { display: inline-flex; align-items: center; min-height: 2.1rem; max-width: 100%; padding: .2rem .75rem; font-size: .78rem; font-weight: 600; border-radius: 1.05rem; background: var(--surface-2); color: var(--text); border: 1px solid var(--border); text-decoration: none; overflow-wrap: anywhere; }
 .composer-context .local-folder-chip[data-state=ready] { background: var(--accent-soft); color: var(--accent-text); border-color: transparent; }
 .composer-context .local-folder-chip[data-state=offline] { background: var(--warn-soft); color: var(--warn-text); border-color: transparent; }
+/* Why the last Connect or Reconnect did not work, under the chip. */
+.composer-context .local-folder-chip-note { flex-basis: 100%; max-width: 32rem; margin-left: auto; font-size: .75rem; color: var(--warn-text); text-align: right; overflow-wrap: anywhere; }
 .local-folder-state { display: inline-flex; align-items: center; gap: .35rem; padding: .2rem .65rem; border-radius: 1rem; background: var(--surface-2); color: var(--muted); font-weight: 600; overflow-wrap: anywhere; }
 .local-folder-state::before { content: ""; flex: none; width: .5rem; height: .5rem; border-radius: 50%; background: var(--faint); }
 .local-folder-state.local-folder-live { background: var(--accent-soft); color: var(--accent-text); }
@@ -108,7 +110,7 @@
 .files-private-toggle::after { content: "\25B8"; color: var(--muted); }
 .files-private-toggle[aria-expanded=true]::after { content: "\25BE"; }
 .thread-files button { margin: .25rem .3rem .25rem 0; }
-/* "More": your computer's folder and private copies, collapsed by default. */
+/* "More": the chat's folder on the server and private copies, collapsed by default. */
 .files-more { padding: .5rem 0 0; }
 .files-more-toggle { display: flex; align-items: center; min-height: 2.2rem; color: var(--muted); font-size: .85rem; cursor: pointer; }
 .files-more[open] > .files-more-toggle { color: var(--text); font-weight: 600; }
@@ -129,4 +131,5 @@
  .message-composer .composer-context button, .composer-context .local-folder-chip, .message-composer .composer-tools .tool-button, .files-drawer-close, .files-private-toggle, .run-state button, .run-state summary, .message-menu-toggle, .message-menu-item { min-height: 44px; }
  .message-menu-toggle { min-width: 44px; }
  .composer-context { justify-content: flex-start; margin-left: 0; }
+ .composer-context .local-folder-chip-note { margin-left: 0; text-align: left; }
 }

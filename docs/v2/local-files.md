@@ -94,10 +94,19 @@ owner's tab ── poll every 2 s ─► POST /local-files/poll ────┘ 
   tab held are offered to the new one.
 - **Visible.** While connected, the composer's folder chip shows "● name"
   and the browser tab title starts with "● ". The chip links to the chat's
-  **Files** panel (ORK-809), whose **Your folder** section holds the state in
-  words, Disconnect and **Folder activity**.
+  **Files** panel (ORK-809), whose first section, **Your folder**, holds the
+  state in words, Disconnect, the folder's own files (top level, read in the
+  browser, refreshed after each write and on **Refresh**) and **Folder
+  activity**.
   Disconnecting (or leaving the conversation) stops serving the folder at
   once and fails what is still open.
+- **Refusals are said.** When the browser refuses (the picker is blocked,
+  for example `NotAllowedError` from a site setting or a work computer's
+  browser policy, or a Reconnect is not allowed), the chip says why right
+  under it, Files says it too, and the chip then offers **Choose folder…**
+  instead of a Reconnect the browser keeps refusing. A cancelled picker says
+  nothing. Before 2026-11-26 these messages only went to the collapsed Files
+  section, so a refused Connect looked like a button that did nothing.
 - **No approval step (ORK-810).** Before ORK-810 each write waited for the
   owner's **Allow write** in the tab serving the folder, and every tab read
   `GET /api/v2/local-files/waiting` to say so (ORK-804). Writes now apply on
@@ -258,7 +267,11 @@ private overlay has a one-off update for them.
   Edge (version 86 or later) on Windows, macOS, Linux or ChromeOS. Firefox,
   Safari and mobile browsers do not have it; the control then says so.
   Chrome refuses to grant some system folders (for example the whole home
-  folder or system directories); pick a subfolder.
+  folder or system directories); pick a subfolder. A managed (work) browser
+  can block folder access for every site (`DefaultFileSystemReadGuardSetting`,
+  `DefaultFileSystemWriteGuardSetting` or their per-site lists; see
+  `chrome://policy`), and the site's own **File editing** setting can block it
+  too; the chip then names the browser's error.
 - **The tab must stay open on that conversation.** Leaving the conversation
   disconnects the folder at once; closing or reloading the tab disconnects it
   at the latest 75 s later (requests then fail as `local_files_disconnected`).
