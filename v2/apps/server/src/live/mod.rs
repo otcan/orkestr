@@ -256,11 +256,16 @@ async fn serve_websocket(state: AppState, opening: Opening, mut socket: WebSocke
                 Some(Ok(Message::Text(text))) => {
                     seen = Instant::now();
                     match serde_json::from_str::<ClientFrame>(text.as_str()) {
-                        Ok(frame) => {
-                            if to_session.send(frame).await.is_err() {
-                                break session_reason((&mut session).await);
+                        // Never wait on the session here (it may be waiting on
+                        // this loop to write): a browser that floods frames is
+                        // closed instead.
+                        Ok(frame) => match to_session.try_send(frame) {
+                            Ok(()) => {}
+                            Err(mpsc::error::TrySendError::Full(_)) => break "protocol",
+                            Err(mpsc::error::TrySendError::Closed(_)) => {
+                                break session_reason((&mut session).await)
                             }
-                        }
+                        },
                         Err(_) => break "protocol",
                     }
                 }
