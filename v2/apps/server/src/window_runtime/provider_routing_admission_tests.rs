@@ -493,3 +493,6 @@ async fn policy_switch_waits_only_for_work_in_flight_and_admits_the_source_first
     })
     .await;
 }
+
+#[path = "provider_routing_fenced_head_tests.rs"]
+mod fenced_head;

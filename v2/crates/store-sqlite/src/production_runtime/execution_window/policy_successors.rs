@@ -86,3 +86,67 @@ pub(super) async fn withdraw_superseded(
     }
     Ok(withdrawn)
 }
+
+/// The queued intent `?3` (request key) of conversation `?1`, owner `?2`, is
+/// a result handed back to a Deep turn (`source_admission_fences`) of a
+/// conversation that a standing provider policy matched. Closed constant SQL.
+const FENCED_HEAD: &str = "SELECT q.event_id FROM execution_window_queue q JOIN source_admission_fences f ON f.message_id=q.message_id WHERE q.conversation_id=?1 AND q.owner_id=?2 AND q.request_key=?3 AND q.state='queued' AND EXISTS(SELECT 1 FROM conversation_provider_policy_matches p WHERE p.owner_id=q.owner_id AND p.conversation_id=q.conversation_id)";
+
+impl Store {
+    /// A standing provider switch can never take a result handed back to a
+    /// Deep turn as its source: no session of the target provider issued
+    /// that call (`pending_input` refuses it), and the policy no longer lets
+    /// the turn's own provider run. Queued ahead of the switch's first
+    /// ordinary input, such a result held the whole conversation: dispatch
+    /// takes each conversation's head, every pass refused it, and every
+    /// input behind it waited for it. The switch withdraws exactly these
+    /// results when they queue behind its source (`withdraw_superseded`).
+    /// This settles one queued ahead of it the same way: withdrawn as
+    /// `input_unavailable`, its input retired with the ordinary
+    /// `source_superseded` receipt, in one transaction. Its fence still
+    /// holds here, so the retirement does not require it to fail.
+    ///
+    /// Returns the withdrawn event, or None when the intent is not exactly
+    /// such a queued, fenced result of a policy-matched conversation
+    /// (nothing is written then).
+    pub async fn withdraw_policy_superseded_result_authenticated(
+        &self,
+        browser: &str,
+        conversation: &ConversationId,
+        request_key: &str,
+    ) -> Result<Option<EventId>> {
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let owner = super::browser_owner(self, &mut tx, browser).await?;
+        crate::runtime::scope(&mut tx, &owner, conversation).await?;
+        let event: Option<String> = sqlx::query_scalar(FENCED_HEAD)
+            .bind(conversation.to_string())
+            .bind(owner.to_string())
+            .bind(request_key)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(db)?;
+        let Some(event) = event else {
+            return Ok(None);
+        };
+        let changed = sqlx::query("UPDATE execution_window_queue SET state='withdrawn',withdrawal='input_unavailable' WHERE owner_id=? AND conversation_id=? AND request_key=? AND state='queued'")
+            .bind(owner.to_string()).bind(conversation.to_string()).bind(request_key)
+            .execute(&mut *tx).await.map_err(db)?.rows_affected();
+        if changed != 1 {
+            return Err(RuntimeStoreError::Fenced);
+        }
+        // Withdrawn and retired together, or neither: a claimed, held or
+        // already run input keeps its queue intent (the transaction drops).
+        if !crate::production_runtime::superseded_source::retire_policy_superseded_queued_in(
+            &mut tx,
+            &owner,
+            conversation,
+            &event,
+        )
+        .await?
+        {
+            return Ok(None);
+        }
+        tx.commit().await.map_err(db)?;
+        Ok(Some(EventId(event.parse().map_err(db)?)))
+    }
+}
