@@ -180,8 +180,8 @@ async function conversationNavigation(label, phone) {
   await waitHash(`#conversation/${A}/files`);
   await page.waitForFunction(() => { const a = document.querySelector('.files-drawer'); return a && getComputedStyle(a).display !== 'none'; });
   assert.deepEqual(await page.$$eval('.files-drawer .files-section h3, .files-drawer .files-more-toggle, .files-drawer .files-private-toggle', n => n.map(e => e.textContent.trim())),
-    ['Chat folder', 'In this chat', 'More', 'Your folder', 'Private copies']);
-  await page.waitForFunction(() => document.querySelectorAll('.files-drawer .workspace-entry').length > 0, { timeout: 15000 });
+    ['Your folder', 'In this chat', 'More', 'Server folder', 'Private copies']);
+  await page.waitForFunction(() => document.querySelector('.files-drawer .workspace-root'), { timeout: 15000 });
   assert.ok(await page.$('#composer'), 'the chat stays mounted under Files');
   assert.deepEqual((await navState()).current, ['Files']);
   await new Promise(r => setTimeout(r, 2500));

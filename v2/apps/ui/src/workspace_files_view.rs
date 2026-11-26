@@ -23,6 +23,9 @@ pub fn WorkspaceFiles(
     let mut listing = use_signal(|| None::<WorkspaceListing>);
     let mut failure = use_signal(|| None::<String>);
     let mut selected = use_signal(|| None::<String>);
+    // The shared default workspace holds every unpinned chat's files: listed
+    // only when the owner asks, never as this chat's own.
+    let mut show_shared = use_signal(|| false);
     let now = crate::message_time_view::use_now();
     let read = conversation.clone();
     use_resource(move || {
@@ -76,6 +79,8 @@ pub fn WorkspaceFiles(
                     if list.state == WorkspaceState::Unavailable {
                         button { r#type: "button", class: "workspace-retry", onclick: move |_| reload += 1, "Try again" }
                     }
+                } else if matches!(list.root_kind, Some(WorkspaceRootKind::SharedDefault)) && !show_shared() {
+                    button { r#type: "button", class: "workspace-show-shared", onclick: move |_| show_shared.set(true), "Show files of all chats" }
                 } else {
                     nav { class: "workspace-crumbs", "aria-label": "Folder path",
                         for (index, (label, target)) in files::crumbs(list.root_name.as_deref().unwrap_or("Folder"), &list.path).into_iter().enumerate() {

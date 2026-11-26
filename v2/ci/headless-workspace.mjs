@@ -918,7 +918,9 @@ export const scenarios = [
     view = await panel();
     assert.equal(view.hash, `#conversation/${A}/files`);
     assert.deepEqual(view.current, ['Files']);
-    assert.deepEqual(view.sections, ['Chat folder', 'In this chat', 'More', 'Your folder', 'Private copies']);
+    // 2026-11-26: the owner's own folder first, then this chat's files; the
+    // server folder and the private copies wait under More.
+    assert.deepEqual(view.sections, ['Your folder', 'In this chat', 'More', 'Server folder', 'Private copies']);
     assert.equal(view.machinery, false, 'no held inputs, work slots, work window or internal names in Files');
     await page.waitForFunction(() => document.activeElement?.classList.contains('files-drawer-close'));
     // In this chat: the files the owner sent in this chat, newest first, each named and downloadable.
@@ -941,8 +943,14 @@ export const scenarios = [
     }
     await screenshot(label, 'chat-files-open');
     await noHorizontalScroll();
-    // Chat folder: the folder this chat's agent works in, read-only. Chat A
-    // works in the shared default folder, and the panel says so.
+    // Server folder, under More: the folder this chat's agent works in,
+    // read-only. Chat A works in the shared default folder: the panel says so
+    // and lists every chat's files there only when asked.
+    assert.equal(await page.$eval('.files-more', n => n.open), false, 'More starts collapsed');
+    await page.click('.files-more-toggle');
+    await page.waitForFunction(() => document.querySelector('.files-drawer .workspace-show-shared')?.offsetParent);
+    assert.equal(await page.$$eval('.files-drawer .workspace-entry', n => n.length), 0, 'the shared workspace is not listed unasked');
+    await page.click('.files-drawer .workspace-show-shared');
     await page.waitForFunction(() => document.querySelectorAll('.files-drawer .workspace-entry').length === 4, { timeout: 15000 });
     const folder = await page.evaluate(() => ({
       root: document.querySelector('.workspace-root')?.textContent, kind: document.querySelector('.workspace-root')?.dataset.rootKind,
@@ -966,10 +974,7 @@ export const scenarios = [
     await page.click('.workspace-entry:nth-child(2) button');
     await page.waitForFunction(() => { const img = document.querySelector('.workspace-preview-image'); return img?.complete && img.naturalWidth === 1; }, { timeout: 15000 });
     await noHorizontalScroll();
-    // More: your computer's folder and Private copies stay collapsed until asked for.
-    assert.equal(await page.$eval('.files-more', n => n.open), false);
-    await page.click('.files-more-toggle');
-    // Private copies stay collapsed until asked for.
+    // Private copies, also under More, stay collapsed until asked for.
     assert.equal(await page.$('.files-drawer [aria-label="Thread files"]'), null);
     await page.click('.files-private-toggle');
     await page.waitForSelector('.files-drawer [aria-label="Thread files"]');
