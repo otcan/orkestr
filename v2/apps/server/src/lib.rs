@@ -606,6 +606,7 @@ async fn guard(
     } else {
         Duration::from_secs(10)
     };
+    let keeps_cache = own_cache_control(request.uri().path());
     let mut response = match tokio::time::timeout(deadline, next.run(request)).await {
         Ok(response) => response,
         Err(_) => {
@@ -617,15 +618,31 @@ async fn guard(
             .into_response()
         }
     };
-    // A handler's own caching (thread icons, the live event stream) stands.
-    response
-        .headers_mut()
-        .entry(header::CACHE_CONTROL)
-        .or_insert("no-store".parse().unwrap());
+    if !(keeps_cache && response.headers().contains_key(header::CACHE_CONTROL)) {
+        response
+            .headers_mut()
+            .insert(header::CACHE_CONTROL, "no-store".parse().unwrap());
+    }
     response
         .headers_mut()
         .insert(header::X_CONTENT_TYPE_OPTIONS, "nosniff".parse().unwrap());
     response
+}
+/// Routes whose own `Cache-Control` stands: thread icons (cached privately
+/// for an hour, so a re-mounted avatar is not fetched again) and the live
+/// event stream (`no-transform` for buffering proxies). Every other API
+/// response is `no-store`.
+fn own_cache_control(path: &str) -> bool {
+    path.starts_with("/api/v2/thread-icons/") || path == "/api/v2/live/events"
+}
+
+#[test]
+fn only_icons_and_the_live_stream_keep_their_cache_header() {
+    assert!(own_cache_control("/api/v2/thread-icons/0123456789abcdef"));
+    assert!(own_cache_control("/api/v2/live/events"));
+    assert!(!own_cache_control("/api/v2/live"));
+    assert!(!own_cache_control("/api/v2/attachments/x"));
+    assert!(!own_cache_control("/api/v2/sidebar"));
 }
 fn encrypted_attachment_slow_path(method: &axum::http::Method, path: &str) -> bool {
     if *method != axum::http::Method::POST {
