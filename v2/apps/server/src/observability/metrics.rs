@@ -15,6 +15,8 @@ use uuid::Uuid;
 #[path = "metrics_breakdown.rs"]
 mod breakdown;
 use breakdown::{conversations, sizes};
+#[path = "metrics_live.rs"]
+pub mod live;
 
 /// Histogram upper bounds in milliseconds (`+Inf` is implicit).
 const BUCKETS_MS: [f64; 14] = [
@@ -156,6 +158,9 @@ pub struct Metrics {
     started: Instant,
     http: Mutex<BTreeMap<(String, String), Series>>,
     upstream: Mutex<BTreeMap<(String, String), Series>>,
+    /// The browser live channel (not request series: one channel is open
+    /// for minutes and its frames are not requests).
+    pub live: live::LiveMetrics,
 }
 
 impl Default for Metrics {
@@ -164,6 +169,7 @@ impl Default for Metrics {
             started: Instant::now(),
             http: Mutex::default(),
             upstream: Mutex::default(),
+            live: live::LiveMetrics::default(),
         }
     }
 }
@@ -324,6 +330,7 @@ impl Metrics {
             "routes": routes,
             "upstream": upstream,
             "conversations": conversations,
+            "live": self.live.summary(),
         })
     }
 
@@ -358,6 +365,7 @@ impl Metrics {
                 now,
             );
         }
+        self.live.prometheus(&mut out);
         out
     }
 }

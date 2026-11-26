@@ -61,6 +61,7 @@ pub mod google_registry_metadata;
 mod held_inputs;
 pub mod host_metrics;
 mod intelligence_http;
+mod live;
 pub mod live_map;
 mod local_files_http;
 mod local_files_waiting_http;
@@ -182,8 +183,15 @@ pub struct AppState {
     /// Reads a conversation's working folder for the Files panel; none: the
     /// panel says this host cannot show it.
     workspace_reader: Option<Arc<dyn workspace_files_http::reader::Reader>>,
+    /// Browser live channels (WebSocket and event-stream push).
+    live: Arc<live::Hub>,
 }
 impl AppState {
+    /// Asks every open browser live channel to close (server shutdown), so
+    /// browsers reconnect to the next process instead of waiting it out.
+    pub fn close_live_channels(&self) {
+        self.live.close_all();
+    }
     /// Trusted operator assertion after all unattended consumers use service credentials.
     pub fn with_password_rotation_ready(mut self) -> Self {
         self.password_rotation_ready = true;
@@ -451,6 +459,7 @@ impl AppState {
             deploy_drain: Arc::default(),
             release_interruptions: None,
             native_attach: None,
+            live: Arc::default(),
         })
     }
 }
@@ -608,9 +617,11 @@ async fn guard(
             .into_response()
         }
     };
+    // A handler's own caching (thread icons, the live event stream) stands.
     response
         .headers_mut()
-        .insert(header::CACHE_CONTROL, "no-store".parse().unwrap());
+        .entry(header::CACHE_CONTROL)
+        .or_insert("no-store".parse().unwrap());
     response
         .headers_mut()
         .insert(header::X_CONTENT_TYPE_OPTIONS, "nosniff".parse().unwrap());
@@ -694,7 +705,7 @@ pub fn router_with_google_catalog(
     catalog: google_registry_metadata::RegistryCatalog,
 ) -> Router {
     Router::new()
-        .route("/api/v2/health",get(|State(state): State<AppState>| async move { Json(serde_json::json!({"status":"ok","product":"orkestr-v2","contract_version":0,"fixture_mode":false,"features":native_attach_http::features(&state,&["message_author","message_revisions_v1","message_retries_v1","thread_asks","agent_timers","source_receipts_v1","root_intake_v1","fast_run_receipts_v1","provider_quotas_v1","provider_sign_in_v1","local_files_v1","local_file_writes_waiting_v1","vault_v1","held_input_lookup_v1","credentials_v1","sites_v1","app_links_v1","history_before_v1","request_metrics_v1","workspace_files_v1","run_updates_v1"]),"build":build_identity::identity(),"deployment":deployment_identity::identity()})) }))
+        .route("/api/v2/health",get(|State(state): State<AppState>| async move { Json(serde_json::json!({"status":"ok","product":"orkestr-v2","contract_version":0,"fixture_mode":false,"features":native_attach_http::features(&state,&["message_author","message_revisions_v1","message_retries_v1","thread_asks","agent_timers","source_receipts_v1","root_intake_v1","fast_run_receipts_v1","provider_quotas_v1","provider_sign_in_v1","local_files_v1","local_file_writes_waiting_v1","vault_v1","held_input_lookup_v1","credentials_v1","sites_v1","app_links_v1","history_before_v1","request_metrics_v1","workspace_files_v1","run_updates_v1","live_channel_v1"]),"build":build_identity::identity(),"deployment":deployment_identity::identity()})) }))
         .route("/api/v2/setup",get(auth::setup_status).post(auth::setup))
         .route("/api/v2/session",post(auth::session))
         .route("/api/v2/machine/session",post(auth::session))
@@ -787,6 +798,7 @@ pub fn router_with_google_catalog(
         .merge(sites_http::router())
         .merge(app_links_http::router())
         .merge(workspace_files_http::router())
+        .merge(live::router())
         // Labels each matched request with its route template for logs and metrics.
         .route_layer(middleware::from_fn(observability::record_route))
         .fallback(|| async { Error(StatusCode::NOT_FOUND,"not_found","Endpoint not found") })

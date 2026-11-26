@@ -247,6 +247,10 @@ pub async fn events(
             ),
             e => e.into(),
         })?;
+    // Committed changes wake the stream (the browser live channel's feed)
+    // instead of a store read every 100 ms; a quiet stream still re-reads
+    // and re-checks its session every second.
+    let mut changes = s.store.changes().subscribe();
     let stream = async_stream::stream! {
         loop {
             for envelope in batch.drain(..) {
@@ -255,7 +259,10 @@ pub async fn events(
                     Ok(event) => yield Ok::<_,Infallible>(event), Err(_) => return,
                 }
             }
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            let _ = tokio::time::timeout(Duration::from_secs(1), changes.changed()).await;
+            changes.borrow_and_update();
+            // Lets the commit that woke the stream become visible to readers.
+            tokio::time::sleep(Duration::from_millis(50)).await;
             // Recheck authentication during long-lived streams, not just at connection time.
             if owner(&s,&headers).await.is_err() { yield Ok(Event::default().event("session_expired").data("{}")); return; }
             match s.store.events(&owner_id,&conversation,after,100).await {

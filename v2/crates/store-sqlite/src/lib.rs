@@ -21,6 +21,8 @@ pub use conversation_resources::codex_default::{
 pub use conversation_resources::{
     DesktopCaller, DesktopFence, PreparedAcquire, ResourceError, V1LeaseGrant,
 };
+mod change_feed;
+pub use change_feed::ChangeFeed;
 mod conversation_export;
 pub mod conversation_posts;
 pub use conversation_posts::{PostListing, PostReceipt};
@@ -130,6 +132,9 @@ pub struct Store {
     deep_burst_quiet_ms: i64,
     /// Server defaults of the agent timers' rolling 24-hour create cap.
     agent_timer_daily: orkestr_v2_contracts::AgentTimerDailyCaps,
+    /// Commit revision for the browser live channel (hooks on every pooled
+    /// connection; shared by every handle of the same pool).
+    changes: ChangeFeed,
 }
 fn db(_: impl std::fmt::Display) -> StoreError {
     StoreError::Unavailable
@@ -185,8 +190,14 @@ impl Store {
         } else {
             options
         };
+        let changes = ChangeFeed::default();
+        let hooks = changes.clone();
         let pool = SqlitePoolOptions::new()
             .max_connections(6)
+            .after_connect(move |connection, _| {
+                let hooks = hooks.clone();
+                Box::pin(async move { hooks.install(connection).await })
+            })
             .connect_with(options.clone())
             .await
             .map_err(db)?;
@@ -204,6 +215,7 @@ impl Store {
             production_checkpoint: None,
             deep_burst_quiet_ms: 0,
             agent_timer_daily: Default::default(),
+            changes,
         })
     }
     /// Set the Deep burst quiet window (ms, clamped to
@@ -227,6 +239,10 @@ impl Store {
     }
     pub async fn close(&self) {
         self.pool.close().await;
+    }
+    /// Commit notifications for the browser live channel.
+    pub fn changes(&self) -> &ChangeFeed {
+        &self.changes
     }
     /// Whether the single local owner exists (first-run setup is complete).
     pub async fn owner_configured(&self) -> Result<bool> {

@@ -37,6 +37,7 @@ async fn actual_store_upgrade_holds_unverifiable_old_claims_and_preserves_histor
         production_checkpoint: None,
         deep_burst_quiet_ms: 0,
         agent_timer_daily: Default::default(),
+        changes: Default::default(),
     };
     let historical_guard =
         crate::production_runtime::historical_guard_fixture::HistoricalGuardFixture::install(
