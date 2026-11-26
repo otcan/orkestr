@@ -363,6 +363,70 @@ async fn a_result_the_window_queue_drops_as_superseded_is_retired_not_stranded()
     close(f).await;
 }
 
+// A Stop of a busy Deep run (here a release cut) holds every input queued
+// before it, including that run's own host results waiting for its turn to
+// end. The same Stop cancelled their source run, so their fence fails for
+// good. Withdrawn from the window queue, such a result is retired once
+// instead of staying queued and held forever. A person's follow-up held by
+// the same Stop is not a source continuation and keeps its hold.
+#[tokio::test]
+async fn a_result_held_by_the_stop_of_its_own_source_run_is_retired_when_withdrawn() {
+    let (f, source, _, query) = fixture().await;
+    let stale = hand_back(&f, &query, &result(1)).await;
+    let follow_up = f
+        .store
+        .admit(
+            &f.owner,
+            &f.conversation,
+            &MessageInput {
+                client_message_id: "follow-up-before-the-cut".into(),
+                text: "Synthetic follow-up".into(),
+            },
+        )
+        .await
+        .unwrap()
+        .receipt;
+    stopped_for_release(&f, &source).await;
+    let held = |receipt: &Receipt| {
+        format!(
+            "SELECT count(*) FROM production_held_inputs WHERE event_id='{}'",
+            receipt.event_id.0
+        )
+    };
+    assert_eq!(count(&f, &held(&stale)).await, 1);
+    assert_eq!(count(&f, &held(&follow_up)).await, 1);
+    let request = window_request(&stale, &result(1));
+    assert!(matches!(
+        f.store
+            .inspect_execution_window_request_authenticated(&f.token, &f.conversation, &request)
+            .await,
+        Err(RuntimeStoreError::Fenced)
+    ));
+    for _ in 0..2 {
+        f.store
+            .withdraw_queued_execution_window_authenticated(
+                &f.token,
+                &f.conversation,
+                &request.request_key,
+                QueuedWindowWithdrawal::InputUnavailable,
+            )
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        inbox(&f, &stale).await,
+        ("retired".into(), None, Some("source_superseded".into()))
+    );
+    assert_eq!(inbox(&f, &follow_up).await, ("queued".into(), None, None));
+    assert_eq!(count(&f, &held(&follow_up)).await, 1);
+    assert_eq!(
+        count(&f, "SELECT count(*) FROM owner_input_retirements").await,
+        1
+    );
+    assert_eq!(count(&f, "SELECT count(*) FROM production_runs").await, 1);
+    close(f).await;
+}
+
 #[tokio::test]
 async fn a_withdrawn_result_whose_fence_still_holds_stays_queued() {
     let (f, _, _, query) = fixture().await;
