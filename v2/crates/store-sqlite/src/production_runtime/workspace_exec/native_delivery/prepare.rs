@@ -14,7 +14,7 @@ impl Store {
         let state = if success { "completed" } else { "failed" };
         let checked_workspace = launch.profile.workspace.check_before_writer(self).await?;
         let store = &*checked_workspace;
-        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = store.begin_writer().await?;
         let row = authority::live(store, &mut tx, credential, launch).await?;
         if launch.parent.run.role != Role::Worker || !launch.spawn_spent.load(Ordering::Acquire) {
             return Err(RuntimeStoreError::Fenced);

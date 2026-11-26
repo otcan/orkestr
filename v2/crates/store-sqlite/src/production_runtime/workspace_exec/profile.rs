@@ -29,7 +29,7 @@ impl Store {
         self.worker_credential(credential)?;
         let checked_workspace = workspace.check_before_writer(self).await?;
         let store = &*checked_workspace;
-        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = store.begin_writer().await?;
         store.workspace_grant_in(&mut tx, workspace).await?;
         let (project, generation, conversation) = workspace.exec_identity();
         let existing = sqlx::query("SELECT * FROM workspace_exec_profiles WHERE project_id=?")
@@ -89,7 +89,7 @@ impl Store {
         self.worker_credential(credential)?;
         let checked_workspace = profile.workspace.check_before_writer(self).await?;
         let store = &*checked_workspace;
-        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = store.begin_writer().await?;
         store
             .workspace_grant_in(&mut tx, &profile.workspace)
             .await?;

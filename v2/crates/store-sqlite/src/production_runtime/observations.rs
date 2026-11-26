@@ -31,7 +31,7 @@ impl Store {
         let store = workspace.as_deref().unwrap_or(self);
         #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
         let store = self;
-        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = store.begin_writer().await?;
         // Authenticate principal and exact issued historical envelope BEFORE
         // receipt lookup, but defer current expiry/incarnation checks for replay.
         fenced_at(

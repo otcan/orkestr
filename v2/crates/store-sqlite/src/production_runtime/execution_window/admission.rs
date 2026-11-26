@@ -38,7 +38,7 @@ impl Store {
         if !input.is_valid() || capacity == 0 {
             return Err(RuntimeStoreError::InvalidInput);
         }
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = self.begin_writer().await?;
         let owner = browser_owner(self, &mut tx, credential).await?;
         crate::runtime::scope(&mut tx, &owner, conversation).await?;
         let digest = crate::digest(&serde_json::to_string(input).map_err(db)?);
@@ -134,7 +134,7 @@ impl Store {
         let Some(window) = input.window_id.filter(|_| input.is_valid()) else {
             return Err(RuntimeStoreError::InvalidInput);
         };
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = self.begin_writer().await?;
         let owner = browser_owner(self, &mut tx, credential).await?;
         crate::runtime::scope(&mut tx, &owner, conversation).await?;
         let digest = crate::digest(&serde_json::to_string(input).map_err(db)?);

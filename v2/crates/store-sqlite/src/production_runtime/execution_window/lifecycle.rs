@@ -10,7 +10,7 @@ impl Store {
     ) -> Result<ExecutionWindowStatus> {
         self.worker_credential(credential)?;
         let c = self.context()?;
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = self.begin_writer().await?;
         if target == "reconciliation_required" {
             c.authenticate(&mut tx).await?;
         } else {
@@ -67,7 +67,7 @@ impl Store {
             return Err(RuntimeStoreError::InvalidInput);
         }
         let c = self.context()?;
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = self.begin_writer().await?;
         c.validate(&mut tx).await?;
         let w = window_in(&mut tx, c, window, generation).await?;
         if w.get::<Option<String>, _>("boot_id").as_deref() != Some(boot)
@@ -147,7 +147,7 @@ impl Store {
     ) -> Result<(Store, ExecutionWindowRetirement)> {
         self.worker_credential(credential)?;
         let c = self.context()?;
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = self.begin_writer().await?;
         c.authenticate(&mut tx).await?;
         let w = window_in(&mut tx, c, window, generation).await?;
         if w.get::<Option<String>, _>("boot_id").as_deref() != Some(boot)
@@ -218,7 +218,7 @@ impl Store {
         window: Uuid,
         generation: u64,
     ) -> Result<ExecutionWindowStatus> {
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = self.begin_writer().await?;
         let owner = browser_owner(self, &mut tx, credential).await?;
         let w = sqlx::query("SELECT * FROM execution_windows WHERE id=? AND owner_id=? AND conversation_id=? AND generation=?")
             .bind(window.to_string()).bind(owner.to_string()).bind(conversation.to_string())

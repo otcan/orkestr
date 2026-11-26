@@ -88,7 +88,7 @@ impl Store {
             }
         }
         for id in decided {
-            let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+            let mut tx = self.begin_writer().await?;
             context.validate(&mut tx).await?;
             let settled = match ask_row(&mut tx, &id).await {
                 Ok(row) => settle(&mut tx, &row).await,
@@ -125,7 +125,7 @@ impl Store {
 
     async fn queue_thread_ask(&self, owner: &OwnerId, id: &str) -> Result<bool> {
         let context = self.context()?;
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = self.begin_writer().await?;
         context.validate(&mut tx).await?;
         let row = ask_row(&mut tx, id)
             .await
@@ -179,7 +179,7 @@ impl Store {
         queue_window: bool,
     ) -> Result<bool> {
         let context = self.context()?;
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = self.begin_writer().await?;
         context.validate(&mut tx).await?;
         let bad = |_| RuntimeStoreError::Unavailable;
         let row = ask_row(&mut tx, id).await.map_err(bad)?;

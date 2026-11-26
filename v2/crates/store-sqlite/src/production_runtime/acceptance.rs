@@ -78,7 +78,7 @@ impl Store {
         if !input.is_valid() || conversation.0.is_nil() {
             return Err(RuntimeStoreError::InvalidInput);
         }
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = self.begin_writer().await?;
         if let Principal::Owner(Some(credential)) = principal {
             let authorized: i64 = sqlx::query_scalar("SELECT count(*) FROM auth_sessions WHERE token_hash=? AND owner_id=? AND expires_at>unixepoch()")
                 .bind(crate::digest(credential)).bind(owner.to_string())

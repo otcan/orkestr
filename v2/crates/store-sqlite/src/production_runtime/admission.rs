@@ -75,7 +75,7 @@ impl Store {
             expected_generation,
             request_key,
         );
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = self.begin_writer().await?;
         c.authenticate(&mut tx).await?;
         // Authenticate scope before exposing any replay receipt. Old context cannot
         // attach another namespace's run even when all caller-supplied IDs match.

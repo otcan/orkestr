@@ -19,7 +19,7 @@ impl Store {
             .check_workspace_before_writer(&c.owner, conversation, Some(installation.inner.clone()))
             .await?;
         let store = &*checked;
-        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = store.begin_writer().await?;
         c.validate(&mut tx).await?;
         let owned: i64 =
             sqlx::query_scalar("SELECT count(*) FROM conversations WHERE id=? AND owner_id=?")
@@ -101,7 +101,7 @@ impl Store {
         installation.inner.check()?;
         let checked = grant.check_before_writer(self).await?;
         let store = &*checked;
-        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = store.begin_writer().await?;
         store.workspace_grant_in(&mut tx, grant).await?;
         for row in sqlx::query("PRAGMA database_list")
             .fetch_all(&mut *tx)
@@ -144,7 +144,7 @@ impl Store {
     }
     pub async fn revoke_workspace(&self, credential: &str, grant: &WorkspaceGrant) -> Result<()> {
         self.worker_credential(credential)?;
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = self.begin_writer().await?;
         // Revocation remains possible after a filesystem replacement.
         let c = self.context()?;
         c.validate(&mut tx).await?;
@@ -169,7 +169,7 @@ impl Store {
         self.worker_credential(credential)?;
         let checked = grant.check_before_writer(self).await?;
         let store = &*checked;
-        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = store.begin_writer().await?;
         store.workspace_grant_in(&mut tx, grant).await?;
         let row = sqlx::query("SELECT * FROM session_bindings WHERE id=? AND owner_id=?")
             .bind(binding.session_id.to_string())

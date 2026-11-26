@@ -4,9 +4,14 @@ use crate::production_runtime::fence_reason::{because, fenced};
 #[path = "setup_attestation.rs"]
 mod setup_attestation;
 pub(crate) use setup_attestation::SetupAttestation;
+#[path = "writer_handoff.rs"]
+mod writer_handoff;
 use std::{
     ops::Deref,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        OnceLock,
+    },
     time::{Duration, Instant},
 };
 
@@ -21,6 +26,15 @@ pub(crate) struct WorkspaceCheck {
     project: Option<(String, i64, String)>,
     installation: Option<Arc<Installation>>,
     deadline: Option<Instant>,
+    /// The handoff restarted once this operation first held Core's writer
+    /// (writer_handoff.rs). Shared by every proof of the same operation.
+    rearmed: Arc<OnceLock<Instant>>,
+    /// When the complete Root check behind this evidence began. Derived
+    /// proofs keep it, so the evidence age never resets.
+    evidence_at: Instant,
+    /// Lent to an inner operation (a borrowed proof). Its handoff then also
+    /// covers the outer operation's Root exchange and is never restarted.
+    lent: AtomicBool,
     physical_deadline: Instant,
     alive: AtomicBool,
     effect: Arc<AtomicBool>,
@@ -138,6 +152,9 @@ impl WorkspacePreflight {
             project: self.proof.project.clone(),
             installation: self.proof.installation.clone(),
             deadline: self.proof.deadline,
+            rearmed: self.proof.rearmed.clone(),
+            evidence_at: self.proof.evidence_at,
+            lent: AtomicBool::new(self.proof.lent.load(Ordering::SeqCst)),
             physical_deadline: self.proof.physical_deadline,
             retained: self.proof.retained,
             alive: AtomicBool::new(true),
@@ -176,7 +193,7 @@ impl WorkspaceCheck {
         #[cfg(not(test))]
         let handoff_now = Instant::now();
         let expired = self
-            .deadline
+            .handoff_deadline()
             .is_some_and(|deadline| handoff_now >= deadline);
         #[cfg(test)]
         let expired = expired || self.forced_handoff_expiry.load(Ordering::SeqCst);
@@ -234,6 +251,7 @@ impl Store {
             if proof.effect.load(Ordering::SeqCst) {
                 return Err(fenced("workspace_effect_used"));
             }
+            proof.lent.store(true, Ordering::SeqCst);
             return Ok(WorkspacePreflight {
                 store: self.clone(),
                 proof: proof.clone(),
@@ -307,6 +325,7 @@ impl Store {
             .as_ref()
             .map(|installation| installation.retained_stamp())
             .transpose()?;
+        let evidence_at = Instant::now();
         if let Some(installation) = &installation {
             let retained = installation.clone();
             // No inherited Tokio Handle, or blocking-pool shutdown wait after
@@ -345,6 +364,9 @@ impl Store {
                 .as_ref()
                 .filter(|i| i.root_attested())
                 .map(|_| Instant::now() + HANDOFF),
+            rearmed: Arc::new(OnceLock::new()),
+            evidence_at,
+            lent: AtomicBool::new(false),
             physical_deadline: deadline,
             installation,
             alive: AtomicBool::new(true),

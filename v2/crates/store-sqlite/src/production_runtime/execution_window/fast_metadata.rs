@@ -49,7 +49,7 @@ impl Store {
         if binding.role != Role::Fast || binding.parent_session_id.is_some() {
             return Err(RuntimeStoreError::Fenced);
         }
-        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = store.begin_writer().await?;
         c.validate(&mut tx).await?;
         #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
         if let Some(workspace) = workspace {

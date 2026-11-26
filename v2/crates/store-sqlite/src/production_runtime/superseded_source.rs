@@ -29,7 +29,7 @@ impl Store {
             return Err(RuntimeStoreError::Unauthorized);
         }
         let claim_generation = i64::try_from(claim.claim_generation).map_err(db)?;
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = self.begin_writer().await?;
         c.validate(&mut tx).await?;
         crate::runtime::scope(&mut tx, &c.owner, &claim.conversation_id).await?;
         // This claim, still held by the same consumer and claim generation,

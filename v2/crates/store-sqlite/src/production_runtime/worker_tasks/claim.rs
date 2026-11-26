@@ -28,7 +28,7 @@ impl Store {
         let store = &*workspace;
         #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
         let store = self;
-        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = store.begin_writer().await?;
         store.worker_parent_current_in(&mut tx, parent).await?;
         let row = sqlx::query("SELECT * FROM worker_tasks WHERE parent_run_id=? AND owner_id=? AND context_id=? AND incarnation_id=? AND state='queued' ORDER BY ordinal LIMIT 1")
             .bind(parent.to_string()).bind(context.owner.to_string()).bind(&context.id).bind(&context.incarnation)
@@ -94,7 +94,7 @@ impl Store {
         let store = &*workspace;
         #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
         let store = self;
-        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = store.begin_writer().await?;
         // Revocation may already have durably cleared the claim. Authenticate
         // the current principal before reporting any historical claim state.
         context.validate(&mut tx).await?;

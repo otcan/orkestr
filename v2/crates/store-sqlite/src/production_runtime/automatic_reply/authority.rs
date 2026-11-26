@@ -15,7 +15,7 @@ impl Store {
         }
         self.worker_credential(credential)?;
         let c = self.context()?;
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = self.begin_writer().await?;
         c.validate(&mut tx).await?;
         let scope: i64 =
             sqlx::query_scalar("SELECT count(*) FROM conversations WHERE id=? AND owner_id=?")
@@ -71,7 +71,7 @@ impl Store {
         {
             return Err(RuntimeStoreError::InvalidInput);
         }
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = self.begin_writer().await?;
         let owner = owner_in(self, &mut tx, credential, conversation).await?;
         let valid:i64=sqlx::query_scalar("SELECT count(*) FROM automatic_reply_routes WHERE id=? AND owner_id=? AND conversation_id=?").bind(request.route_id.to_string()).bind(owner.to_string()).bind(conversation.to_string()).fetch_one(&mut *tx).await.map_err(db)?;
         if valid != 1 {

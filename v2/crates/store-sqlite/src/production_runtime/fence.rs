@@ -49,7 +49,7 @@ impl Store {
                 #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
                 let store = self;
                 let result = async {
-                    let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+                    let mut tx = store.begin_writer().await?;
                     let validation = async {
                         let row = store.production_authorized_run(&mut tx, admission).await?;
                         if admission.run.purpose != purpose

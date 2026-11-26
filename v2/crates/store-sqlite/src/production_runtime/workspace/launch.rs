@@ -14,7 +14,7 @@ impl Store {
         }
         let checked = grant.check_before_writer(self).await?;
         let store = &*checked;
-        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = store.begin_writer().await?;
         store.workspace_grant_in(&mut tx, grant).await?;
         store.validate_metadata(&mut tx, metadata).await?;
         if metadata.binding.conversation_id != grant.conversation {
@@ -72,7 +72,7 @@ impl Store {
         self.worker_credential(credential)?;
         let checked = reservation.grant.check_before_writer(self).await?;
         let store = &*checked;
-        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = store.begin_writer().await?;
         store
             .workspace_grant_in(&mut tx, &reservation.grant)
             .await?;
@@ -119,7 +119,7 @@ impl Store {
             let r = &launch.reservation;
             let checked = r.grant.check_before_writer(self).await?;
             let store = &*checked;
-            let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+            let mut tx = store.begin_writer().await?;
             store.workspace_grant_in(&mut tx, &r.grant).await?;
             store.validate_metadata(&mut tx, metadata).await?;
             if metadata.binding != *r.binding || metadata.workspace_identity() != r.metadata_key {

@@ -158,7 +158,7 @@ impl Store {
             let store = &*workspace;
             #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
             let store = self;
-            let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+            let mut tx = store.begin_writer().await?;
             let row = live(store, &mut tx, credential, launch).await?;
             if row.get::<&str, _>("state") != "delivery_unknown" {
                 return Err(RuntimeStoreError::Fenced);

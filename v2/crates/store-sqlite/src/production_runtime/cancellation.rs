@@ -73,7 +73,7 @@ impl Store {
         if !valid(key) {
             return Err(RuntimeStoreError::InvalidInput);
         }
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = self.begin_writer().await?;
         if let Some(credential) = credential {
             let authorized: i64 = sqlx::query_scalar("SELECT count(*) FROM auth_sessions WHERE token_hash=? AND owner_id=? AND expires_at>unixepoch()")
                 .bind(crate::digest(credential)).bind(owner.to_string())

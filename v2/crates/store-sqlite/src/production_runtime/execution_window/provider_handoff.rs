@@ -117,7 +117,7 @@ impl Store {
         if !request.is_valid() || policy.is_some_and(|proof| !proof.valid(true)) {
             return Err(RuntimeStoreError::InvalidInput);
         }
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = self.begin_writer().await?;
         let owner = if policy.is_some() {
             browser_owner(self, &mut tx, browser).await?
         } else {

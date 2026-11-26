@@ -285,3 +285,81 @@ async fn readiness_confirmation_keeps_its_fresh_root_check() {
         .unwrap();
     assert!(checks(&check) > before);
 }
+
+// The handoff restarts once the operation holds Core's writer, for every
+// operation (writer_handoff.rs), and a setup fence whose attestation lapses
+// while it queues repeats once instead of revoking the setup.
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_fence_whose_attestation_lapses_while_it_queues_repeats_with_a_fresh_check() {
+    let f = setup().await;
+    let (metadata, check) = prepared(&f).await;
+    assert_eq!(fence(&f, &metadata), (true, true));
+    let before = checks(&check);
+    // The writer stays busy for longer than the attestation has left, and its
+    // evidence is already too old to restart the handoff under the writer.
+    let burst = core_writer_burst(&f, 2, Duration::from_millis(150), || {});
+    metadata
+        .setup_workspace
+        .expire_soon_for_test(Duration::from_millis(50));
+    let (ok, called, output) = observed_fence(&f, &metadata);
+    burst.join().unwrap();
+    assert!(
+        ok && called,
+        "an attestation that lapsed while the fence queued revoked the setup: {output}"
+    );
+    assert_eq!(
+        checks(&check) - before,
+        1,
+        "the repeat took one complete fresh Root check"
+    );
+    assert_eq!(fence(&f, &metadata), (true, true));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_one_shot_operation_queued_behind_a_writer_burst_still_runs() {
+    let f = setup().await;
+    let (metadata, _) = prepared(&f).await;
+    assert_eq!(fence(&f, &metadata), (true, true));
+    let confirmation = confirmation(&metadata);
+    // Readiness confirmation takes its own fresh Root check, then queues for
+    // the writer behind three busy windows, like an observation or a lease
+    // renewal of a running turn.
+    let burst = core_writer_burst(&f, 3, Duration::from_millis(150), || {});
+    let started = Instant::now();
+    let confirmed = f
+        .handle
+        .confirm_metadata_session(metadata, confirmation)
+        .await;
+    let waited = started.elapsed();
+    burst.join().unwrap();
+    assert!(
+        waited >= Duration::from_millis(100),
+        "the operation did not queue behind the burst ({waited:?})"
+    );
+    assert!(
+        confirmed.is_ok(),
+        "an operation failed only because it queued for Core's writer"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_project_change_while_a_one_shot_operation_queues_still_fences() {
+    let f = setup().await;
+    let (metadata, _) = prepared(&f).await;
+    assert_eq!(fence(&f, &metadata), (true, true));
+    let confirmation = confirmation(&metadata);
+    let project = f.root.with_extension("project");
+    let burst = core_writer_burst(&f, 1, Duration::from_millis(300), move || {
+        std::fs::write(project.join("written-while-queued"), b"output").unwrap();
+    });
+    let confirmed = f
+        .handle
+        .confirm_metadata_session(metadata, confirmation)
+        .await;
+    burst.join().unwrap();
+    assert!(
+        confirmed.is_err(),
+        "a change made while the operation queued was accepted"
+    );
+}

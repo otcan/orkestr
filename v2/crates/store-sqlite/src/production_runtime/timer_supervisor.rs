@@ -27,7 +27,7 @@ impl Store {
             return Err(RuntimeStoreError::Unauthorized);
         }
         let token_hash = crate::digest(credential);
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = self.begin_writer().await?;
         let owner: String = sqlx::query_scalar(
             "SELECT owner_id FROM auth_sessions WHERE token_hash=? AND expires_at>unixepoch()",
         )
@@ -91,7 +91,7 @@ impl Store {
         if c.namespace != NAMESPACE || c.key != KEY {
             return Err(RuntimeStoreError::Fenced);
         }
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = self.begin_writer().await?;
         c.validate(&mut tx).await?;
         empty_provider_context(&mut tx, &c.id).await?;
         let expiry: i64 = sqlx::query_scalar("UPDATE auth_sessions SET expires_at=max(expires_at,unixepoch()+43200) WHERE token_hash=? AND owner_id=? AND expires_at>unixepoch() RETURNING expires_at")
@@ -107,7 +107,7 @@ impl Store {
         if c.namespace != NAMESPACE || c.key != KEY {
             return Err(RuntimeStoreError::Fenced);
         }
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = self.begin_writer().await?;
         c.validate(&mut tx).await?;
         empty_provider_context(&mut tx, &c.id).await?;
         sqlx::query("UPDATE production_supervisors SET lease_deadline_ms=0 WHERE context_id=? AND incarnation_id=? AND generation=?")

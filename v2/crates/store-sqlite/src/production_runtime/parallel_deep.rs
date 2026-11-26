@@ -134,7 +134,7 @@ impl Store {
         if c.provider != ProviderKind::Codex {
             return Err(RuntimeStoreError::Fenced);
         }
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = self.begin_writer().await?;
         c.validate(&mut tx).await?;
         let window = c
             .window_scope(&mut tx)
@@ -206,7 +206,7 @@ impl Store {
         let store = &*workspace;
         #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
         let store = self;
-        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = store.begin_writer().await?;
         own_slot(&mut tx, &c.id, &c.incarnation, &binding.session_id).await?;
         store.validate_metadata(&mut tx, &grant).await?;
         tx.commit().await.map_err(db)?;
@@ -234,7 +234,7 @@ impl Store {
         if c.provider != ProviderKind::Codex {
             return Err(RuntimeStoreError::Fenced);
         }
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = self.begin_writer().await?;
         c.validate(&mut tx).await?;
         let window = c
             .window_scope(&mut tx)
@@ -341,7 +341,7 @@ impl Store {
     ) -> Result<()> {
         self.worker_credential(credential)?;
         let c = self.context()?;
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = self.begin_writer().await?;
         c.validate(&mut tx).await?;
         own_slot(&mut tx, &c.id, &c.incarnation, session).await?;
         let changed = sqlx::query("UPDATE session_bindings SET state='retired' WHERE id=? AND role='deep' AND deep_slot>0 AND state IN ('starting','ready') AND NOT EXISTS(SELECT 1 FROM production_runs r WHERE r.session_id=session_bindings.id) AND NOT EXISTS(SELECT 1 FROM reasoning_inbox i WHERE i.claimant_session_id=session_bindings.id AND i.state='claimed')")
@@ -360,7 +360,7 @@ impl Store {
     pub async fn retire_parallel_deep_slot(&self, credential: &str, run: &RunId) -> Result<()> {
         self.worker_credential(credential)?;
         let c = self.context()?;
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = self.begin_writer().await?;
         c.validate(&mut tx).await?;
         let window = c
             .window_scope(&mut tx)

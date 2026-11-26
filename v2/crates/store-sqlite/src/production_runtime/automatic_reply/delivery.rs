@@ -49,7 +49,7 @@ impl Store {
         }
         let result = {
             let operation = async {
-                let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+                let mut tx = self.begin_writer().await?;
                 current(self, &mut tx, credential, delivery).await?;
                 let result = action(&delivery.reservation.bytes[offset..offset + offered]);
                 if result.as_ref().is_ok_and(|n| *n > offered) {
@@ -94,7 +94,7 @@ impl Store {
         if delivery.poisoned || delivery.offset != delivery.reservation.bytes.len() {
             return Err(RuntimeStoreError::Fenced);
         }
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = self.begin_writer().await?;
         current(self, &mut tx, credential, &delivery).await?;
         tx.commit().await.map_err(db)?;
         let mut receipt = delivery.reservation.receipt;

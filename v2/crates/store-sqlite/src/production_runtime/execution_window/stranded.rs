@@ -181,7 +181,7 @@ impl Store {
             return Err(RuntimeStoreError::Unauthorized);
         }
         let conversation = &expected.conversation_id;
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = self.begin_writer().await?;
         let owner = browser_owner(self, &mut tx, credential).await?;
         crate::runtime::scope(&mut tx, &owner, conversation).await?;
         let plan = match plan_in(

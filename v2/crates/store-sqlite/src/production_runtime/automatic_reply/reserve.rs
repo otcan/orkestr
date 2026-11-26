@@ -13,7 +13,7 @@ impl Store {
         if input.is_nil() || !text(key, 128) || output.is_empty() || output.len() > 65536 {
             return Err(RuntimeStoreError::InvalidInput);
         }
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = self.begin_writer().await?;
         producer_in(self, &mut tx, credential, producer).await?;
         let revision = input_in(&mut tx, producer, input).await?;
         let digest = sha(output);
@@ -71,7 +71,7 @@ impl Store {
         credential: &str,
         mut reservation: AutomaticReplyReservation,
     ) -> Result<AutomaticReplyConsumption> {
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = self.begin_writer().await?;
         producer_in(self, &mut tx, credential, &reservation.producer).await?;
         let revision =
             input_in(&mut tx, &reservation.producer, reservation.receipt.input_id).await?;

@@ -133,7 +133,7 @@ impl Store {
         let store = &*workspace;
         #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
         let store = self;
-        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = store.begin_writer().await?;
         current(store, &mut tx, credential, &parent.parent, source).await?;
         let capability = store
             .native_worker_capability(&mut tx, parent, &availability)

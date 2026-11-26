@@ -52,7 +52,7 @@ impl Store {
                     .check_before_writer(self)
                     .await?;
                 let store = &*checked_workspace;
-                let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+                let mut tx = store.begin_writer().await?;
                 current(store, &mut tx, credential, delivery).await?;
                 store.workspace_effect_once()?;
                 let result = action();
@@ -108,7 +108,7 @@ impl Store {
             .check_before_writer(self)
             .await?;
         let store = &*checked_workspace;
-        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = store.begin_writer().await?;
         current(store, &mut tx, credential, &delivery).await?;
         sqlx::query("UPDATE workspace_exec_results SET state='delivered' WHERE delegation_id=? AND state='delivery_unknown'")
             .bind(delivery.delegation_id().to_string()).execute(&mut *tx).await.map_err(db)?;

@@ -272,7 +272,7 @@ impl Store {
         if proof.source_message_id != claim.message_id || !proof.valid(false) {
             return Err(RuntimeStoreError::InvalidInput);
         }
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = self.begin_writer().await?;
         self.check_context_in(&mut tx, &claim.owner_id).await?;
         crate::runtime::scope(&mut tx, &claim.owner_id, &claim.conversation_id).await?;
         let changed=sqlx::query("UPDATE reasoning_inbox SET state='queued',claimant_session_id=NULL,claim_deadline_ms=NULL WHERE conversation_id=? AND message_id=? AND event_id=? AND sequence=? AND state='claimed' AND claimant_session_id=? AND claim_generation=? AND admitted_run_id IS NULL AND admitted_fixture_run_id IS NULL")

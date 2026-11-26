@@ -31,7 +31,7 @@ impl Store {
                 id.to_owned()
             }
         };
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = self.begin_writer().await?;
         context.validate(&mut tx).await?;
         // Caller time is never used to expire/revive authority. Store-clock
         // predecessor CAS already fenced these rows and erased locators atomically.

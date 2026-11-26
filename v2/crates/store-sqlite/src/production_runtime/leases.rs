@@ -33,7 +33,7 @@ impl Store {
     /// Expired contexts require predecessor-CAS takeover, never revival here.
     pub async fn heartbeat_supervisor(&self) -> Result<i64> {
         let context = self.context()?;
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = self.begin_writer().await?;
         context.validate(&mut tx).await?;
         let deadline = now(&mut tx)
             .await?
@@ -144,7 +144,7 @@ impl Store {
         #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
         let store = self;
         *stage = RenewalStage::Writer;
-        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = store.begin_writer().await?;
         *stage = RenewalStage::Checks;
         context.validate(&mut tx).await?;
         let row =
