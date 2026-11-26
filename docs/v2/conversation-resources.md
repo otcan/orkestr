@@ -125,6 +125,20 @@ another holder (409) ends the V2 row as `lost` (`409 desktop_lease_lost`).
 A V1 lease that V2 fails to record is released at V1 immediately. Ended rows
 are immutable; one active V2 row per slug.
 
+V2 waits up to 20 s for V1's heartbeat and release (45 s for acquire). A
+release that still times out answers `503 desktop_broker_unavailable` and
+keeps the row active for a retry. Two rules keep such a row from blocking a
+desk once V1 has let it go:
+
+- Every acquire first ends all of the owner's active rows past their
+  V2-observed expiry, on every desk (`lost`, `expired`), not only on the
+  desk asked for.
+- When the conversation's own active row blocks its acquire
+  (`desktop_lease_held`), V2 reads V1's current lease of that desk. If V1 no
+  longer holds exactly that lease (same V1 lease id, thread and fencing
+  version), the row ends as `lost` (`v1_lease_gone`) and the acquire goes
+  ahead. If V1 still holds it, or cannot be read, the refusal stands.
+
 ## V1 worker sub-threads
 
 When a parent thread moves to V2, its V1 workers (`threadKind: worker`,

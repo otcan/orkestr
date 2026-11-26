@@ -272,3 +272,136 @@ async fn conversations_cannot_share_a_thread_or_a_desktop() {
     );
     case.finish().await;
 }
+
+/// 2026-11-26: a pa-3 row whose release V2 never saw stayed active for 21
+/// minutes, because only an acquire of pa-3 itself swept expired rows.
+#[tokio::test]
+async fn an_acquire_on_any_desk_ends_expired_rows_on_every_desk() {
+    let case = Case::new().await;
+    let (t, o, c) = (&case.token, &case.owner, &case.conversation);
+    let other = case.conversation("dance-portfolio").await;
+    let owner = DesktopCaller::Owner {
+        credential: t,
+        owner: o,
+    };
+    case.store
+        .bind_desktops(t, o, c, &bind(0, "v1-a", &["pa-3"]))
+        .await
+        .unwrap();
+    case.store
+        .bind_desktops(t, o, &other, &bind(0, "v1-b", &["pa-4"]))
+        .await
+        .unwrap();
+    let a = case
+        .store
+        .prepare_desktop_acquire(owner, c, "pa-3")
+        .await
+        .unwrap();
+    case.store
+        .record_desktop_acquired(owner, c, &a, "pa-3", &grant(TOKEN_A, 1), 600_000)
+        .await
+        .unwrap();
+    // Not expired yet: an acquire of another desk leaves it alone.
+    case.store
+        .prepare_desktop_acquire(owner, &other, "pa-4")
+        .await
+        .unwrap();
+    assert_eq!(
+        case.count("SELECT count(*) FROM desktop_leases WHERE state='active'")
+            .await,
+        1
+    );
+    sqlx::query("UPDATE desktop_leases SET expires_at_ms=1 WHERE state='active'")
+        .execute(&case.store.pool)
+        .await
+        .unwrap();
+    case.store
+        .prepare_desktop_acquire(owner, &other, "pa-4")
+        .await
+        .unwrap();
+    assert_eq!(
+        case.count(
+            "SELECT count(*) FROM desktop_leases WHERE desktop_slug='pa-3' AND state='lost' AND end_reason='expired'"
+        )
+        .await,
+        1
+    );
+    case.finish().await;
+}
+
+/// The server ends a conversation's own row only when V1 no longer holds that
+/// exact lease; a newer lease of the same conversation is never ended.
+#[tokio::test]
+async fn an_unheld_row_ends_only_for_its_own_lease_and_version() {
+    let case = Case::new().await;
+    let (t, o, c) = (&case.token, &case.owner, &case.conversation);
+    let owner = DesktopCaller::Owner {
+        credential: t,
+        owner: o,
+    };
+    case.store
+        .bind_desktops(t, o, c, &bind(0, "v1-thread", &["sales-nav"]))
+        .await
+        .unwrap();
+    assert_eq!(
+        case.store
+            .held_desktop_lease(owner, c, "sales-nav")
+            .await
+            .unwrap(),
+        None
+    );
+    let a = case
+        .store
+        .prepare_desktop_acquire(owner, c, "sales-nav")
+        .await
+        .unwrap();
+    case.store
+        .record_desktop_acquired(owner, c, &a, "sales-nav", &grant(TOKEN_A, 3), 600_000)
+        .await
+        .unwrap();
+    assert_eq!(
+        case.store
+            .prepare_desktop_acquire(owner, c, "sales-nav")
+            .await
+            .unwrap_err(),
+        ResourceError::Conflict("desktop_lease_held")
+    );
+    let held = case
+        .store
+        .held_desktop_lease(owner, c, "sales-nav")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (held.fencing_version, held.state),
+        (3, DesktopLeaseState::Active)
+    );
+    // Another version or lease id: nothing ends.
+    for (lease, version) in [
+        (held.v1_lease_id.as_str(), 4),
+        ("sales-nav:owner:v1-thread:9", 3),
+    ] {
+        assert!(!case
+            .store
+            .end_unheld_desktop_lease(owner, c, "sales-nav", lease, version)
+            .await
+            .unwrap());
+    }
+    assert!(case
+        .store
+        .end_unheld_desktop_lease(owner, c, "sales-nav", &held.v1_lease_id, 3)
+        .await
+        .unwrap());
+    assert_eq!(
+        case.count(
+            "SELECT count(*) FROM desktop_leases WHERE state='lost' AND end_reason='v1_lease_gone'"
+        )
+        .await,
+        1
+    );
+    case.store
+        .prepare_desktop_acquire(owner, c, "sales-nav")
+        .await
+        .unwrap();
+    case.finish().await;
+}
