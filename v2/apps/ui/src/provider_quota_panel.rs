@@ -37,6 +37,7 @@ pub fn ProviderQuotaPanel(
         }
     });
     use_future(move || async move {
+        let mut since = None;
         loop {
             let source = include_str!("provider_quota.mjs")
                 .replace("export function", "function")
@@ -58,7 +59,8 @@ pub fn ProviderQuotaPanel(
             } else {
                 cards.set(Vec::new());
             }
-            crate::host_metrics_fetch::sleep(30_000).await;
+            let wake = crate::live::wait("/api/v2/provider-quotas", since, 30_000).await;
+            since = Some(wake.version);
             if !mounted() || !session_scope.read().is_current(generation) {
                 return;
             }

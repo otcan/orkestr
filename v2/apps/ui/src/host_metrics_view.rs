@@ -1,7 +1,7 @@
 //! Host metrics details: charts over 15 m, 1 h, 24 h or 7 d and the health
 //! of the listed services. Reading only; refreshes while mounted.
 use crate::host_metrics_chart::{Axis, CoreHeat, Line, LineChart, Unit};
-use crate::host_metrics_fetch::{clock, sleep, start, Reply};
+use crate::host_metrics_fetch::{clock, start, Reply};
 use dioxus::prelude::*;
 use orkestr_v2_contracts::{HostMetricsHistory, HostMetricsRange, ServiceState};
 use orkestr_v2_ui::{
@@ -44,6 +44,7 @@ pub fn HostMetricsView(
         }
         let path = format!("/api/v2/host-metrics/history?range={}", selected.label());
         let mut etag: Option<String> = None;
+        let mut since = None;
         loop {
             let eval = start(&path, etag.as_deref());
             channel.set(Some(eval));
@@ -79,7 +80,8 @@ pub fn HostMetricsView(
                 }
                 _ => notice.set(Notice::Unavailable),
             }
-            sleep(history_refresh_ms(selected)).await;
+            let wake = crate::live::wait(&path, since, history_refresh_ms(selected) as u32).await;
+            since = Some(wake.version);
             if !mounted() || *range.peek() != selected {
                 return;
             }

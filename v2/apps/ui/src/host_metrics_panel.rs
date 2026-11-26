@@ -1,8 +1,9 @@
 //! Always-visible host summary: CPU, RAM and `/` disk with sparklines and a
 //! collecting / live / stale / disconnected state. One small revalidating GET
-//! every 10 s; selecting it opens the owner-wide host resources view.
+//! per new sample (pushed by the live channel; every 10 s without it);
+//! selecting it opens the owner-wide host resources view.
 use crate::host_metrics_chart::Sparkline;
-use crate::host_metrics_fetch::{clock, sleep, start, Reply};
+use crate::host_metrics_fetch::{clock, start, Reply};
 use dioxus::prelude::*;
 use orkestr_v2_contracts::HostMetricsSummary;
 use orkestr_v2_ui::{
@@ -39,6 +40,7 @@ pub fn HostMetricsPanel(
     });
     use_future(move || async move {
         let mut etag: Option<String> = None;
+        let mut since = None;
         loop {
             let eval = start("/api/v2/host-metrics", etag.as_deref());
             channel.set(Some(eval));
@@ -80,7 +82,10 @@ pub fn HostMetricsPanel(
                 }
                 _ => failed.set(true),
             }
-            sleep(SUMMARY_REFRESH_MS).await;
+            // Each new server sample is pushed as a change.
+            let wake =
+                crate::live::wait("/api/v2/host-metrics", since, SUMMARY_REFRESH_MS as u32).await;
+            since = Some(wake.version);
             if !mounted() || !session_scope.read().is_current(owner) {
                 return;
             }

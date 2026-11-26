@@ -40,6 +40,7 @@ mod host_metrics_poll;
 mod host_metrics_view;
 mod host_overview;
 mod intelligence_view;
+mod live;
 mod live_map_view;
 mod local_files_view;
 mod local_setup;
@@ -131,6 +132,8 @@ pub struct GlobalViews {
 pub struct V1Link(pub (String, String));
 #[component]
 fn App() -> Element {
+    // The page-wide push channel every poller waits on (connects on sign-in).
+    use_hook(live::install);
     let mut csrf = use_signal(String::new);
     let mut global = use_signal(String::new);
     let mut current = use_signal(String::new);
@@ -386,6 +389,7 @@ fn App() -> Element {
                 workspace::Workspace { key: "{session_scope.read().generation()}-{refresh}", current, csrf: csrf(), session_scope, execution, drafts, held_inputs, onexpired: expired }
             }
             if !csrf().is_empty() { outbox_view::ReplyGestures {} }
+            if !csrf().is_empty() { LiveChannel { key: "live-{session_scope.read().generation()}", generation: session_scope.read().generation() } }
             if !csrf().is_empty() && !current().is_empty() && !global().is_empty() {
                 outbox_driver::OutboxDriver { key: "outbox-{session_scope.read().generation()}-{global}", global: global(), csrf: csrf(), session_scope, onexpired: expired }
             }
@@ -394,6 +398,15 @@ fn App() -> Element {
             }
         }
     }
+}
+
+/// Signed in: the push channel connects now (again after a new sign-in,
+/// which remounts this with the new session generation).
+#[component]
+fn LiveChannel(generation: u64) -> Element {
+    let _ = generation;
+    use_hook(live::start);
+    rsx! {}
 }
 
 mod message_files_view;

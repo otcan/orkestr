@@ -5,6 +5,10 @@ use orkestr_v2_ui::{session_scope::SessionScope, Draft, Projection};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
+/// Catch-up interval of an open chat against a server without the live
+/// channel (the old event stream's idle period).
+const CATCH_UP_MS: u32 = 25_000;
+
 #[component]
 pub fn Auth(onlogin: EventHandler<transport::BrowserSession>) -> Element {
     let mut username = use_signal(String::new);
@@ -135,8 +139,12 @@ pub fn Conversation(
         let id = stream_id.clone();
         let csrf = stream_csrf.clone();
         async move {
-            use orkestr_v2_ui::live_stream::{backoff_ms, classify, Connection, Next};
+            use orkestr_v2_ui::live_stream::{backoff_ms, Connection};
             let mut cursor = 0;
+            // The history path the live channel watches, and its version.
+            let mut watched: Option<(String, u64)> = None;
+            // The live channel is down (waits end on its fallback timer).
+            let mut channel_down = false;
             let mut resync = true;
             // Re-read history after the cursor before the next stream read.
             let mut catch_up = false;
@@ -186,101 +194,47 @@ pub fn Conversation(
                             }
                             resync = false;
                             catch_up = false;
-                            connection.set(Connection::Live);
+                            if !channel_down {
+                                connection.set(Connection::Live);
+                            }
                         }
                         Err(error) if error.status == 401 => {
                             onexpired.call(());
                             return;
                         }
+                        // A cursor the server no longer accepts: reload.
+                        Err(error) if !resync && matches!(error.status, 400 | 409) => {
+                            resync = true;
+                            status.set("Reloading history…".into());
+                            continue;
+                        }
                         Err(error) => failed = Some(error.message),
                     }
                 }
                 if failed.is_none() {
-                    let result = transport::event(&id, cursor).await;
+                    // Wait until the history after the cursor changes (the
+                    // live channel says so), the channel falls back to its
+                    // slow poll, or Retry; then catch up from the cursor.
+                    let path = format!("/api/v2/conversations/{id}?after={cursor}&limit=100");
+                    let since = watched
+                        .as_ref()
+                        .filter(|(watched, _)| *watched == path)
+                        .map(|(_, version)| *version);
+                    let wake = crate::live::wait_or_recovered(&path, since, CATCH_UP_MS).await;
                     if !session_scope.read().is_current(generation) {
                         projection.set(Projection::default());
                         return;
                     }
-                    match result {
-                        Err(error) => failed = Some(error.message),
-                        Ok(item) => match classify(&item) {
-                            Next::Expired => {
-                                onexpired.call(());
-                                return;
-                            }
-                            Next::Resync => {
-                                resync = true;
-                                status.set("Reloading history…".into());
-                                transport::sleep(250).await;
-                                continue;
-                            }
-                            Next::CatchUp => {
-                                catch_up = true;
-                                continue;
-                            }
-                            Next::Failure => {
-                                failed = Some(if item.status >= 400 {
-                                    format!("Connection lost (HTTP {}). Reconnecting…", item.status)
-                                } else {
-                                    "Connection lost. Reconnecting…".into()
-                                })
-                            }
-                            Next::Apply => {
-                                connection.set(Connection::Live);
-                                let previous = projection.read().clone();
-                                let sequence = item.body.as_ref().and_then(|event| {
-                                    orkestr_v2_ui::replay_sequence(
-                                        &previous,
-                                        &item.event,
-                                        item.id.as_deref(),
-                                        event,
-                                    )
-                                    .ok()
-                                });
-                                match sequence {
-                                    None => {
-                                        resync = true;
-                                        status
-                                            .set("History changed unexpectedly. Reloading…".into());
-                                    }
-                                    Some(sequence) if sequence > cursor => {
-                                        let result = transport::snapshot(
-                                            &id, &csrf, cursor, previous, sequence,
-                                        )
-                                        .await;
-                                        if !session_scope.read().is_current(generation) {
-                                            projection.set(Projection::default());
-                                            return;
-                                        }
-                                        match result {
-                                            Ok(snapshot) if snapshot.watermark >= sequence => {
-                                                let before = cursor;
-                                                cursor = snapshot.watermark;
-                                                projection.set(snapshot);
-                                                if let Some(event) = item.body.as_ref() {
-                                                    execution.write().acceptances.observe(event);
-                                                    status.set(
-                                                        orkestr_v2_ui::replay_notice(event).into(),
-                                                    );
-                                                }
-                                                advanced(cursor, before);
-                                            }
-                                            Ok(_) => {
-                                                resync = true;
-                                                status.set("Snapshot has not reached journal event; resync required.".into());
-                                            }
-                                            Err(error) if error.status == 401 => {
-                                                onexpired.call(());
-                                                return;
-                                            }
-                                            Err(error) => failed = Some(error.message),
-                                        }
-                                    }
-                                    Some(_) => {}
-                                }
-                            }
-                        },
+                    watched = Some((path, wake.version));
+                    channel_down = wake.degraded();
+                    if !channel_down {
+                        connection.set(Connection::Live);
+                    } else if connection.peek().bar().is_none() {
+                        connection.set(Connection::Reconnecting { failures: 1 });
                     }
+                    // Back after an outage with nothing new: no read needed.
+                    catch_up = wake.reason != "recovered";
+                    continue;
                 }
                 if let Some(message) = failed {
                     // Back off, then catch up from the last applied cursor.

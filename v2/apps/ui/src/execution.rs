@@ -268,6 +268,26 @@ impl Execution {
     pub fn control_error(&self) -> Option<&str> {
         self.control_error.as_deref()
     }
+    /// The live channel watches this status and reported no change, so the
+    /// last answer is as current as a new read. Refreshed at half the stale
+    /// limit, not every tick, so readers re-render rarely.
+    pub fn confirm(&mut self, generation: u64, now_ms: u64) -> bool {
+        let due = self
+            .received_ms
+            .is_some_and(|received| now_ms >= received && now_ms - received > Self::STALE_MS / 2);
+        if generation != self.generation || !self.connected || !due {
+            return false;
+        }
+        self.received_ms = Some(now_ms);
+        true
+    }
+    /// Whether [`Execution::confirm`] would refresh the status now.
+    pub fn confirmable(&self, now_ms: u64) -> bool {
+        self.connected
+            && self.received_ms.is_some_and(|received| {
+                now_ms >= received && now_ms - received > Self::STALE_MS / 2
+            })
+    }
     pub fn fresh(&self, now_ms: u64) -> bool {
         self.connected
             && self
