@@ -117,15 +117,25 @@ async fn receipt_in(
 /// input: it stayed queued for good, with no run and no receipt (about 130
 /// such host results on 2026-11-12). Called in that withdrawal transaction,
 /// this retires it with the same receipt as a superseded claim, and only an
-/// input that is still queued, unclaimed, unheld, outside every window and
-/// without any run, whose fence really fails. `Ok(false)` changes nothing.
+/// input that is still queued, unclaimed, outside every window and without
+/// any run, whose fence really fails.
+///
+/// It must also be unheld, with one exception: a Stop boundary cut on its
+/// own source run. Stopping a busy Deep run (an owner Stop, a release cut, a
+/// window deadline or a shutdown) holds every input queued before it,
+/// including the run's own host results that were waiting for its turn to
+/// end. The same Stop cancelled their source run, so their fence fails for
+/// good and the hold can never be released into a run: they used to stay
+/// queued and held forever (a release cut of one busy chat left more than a
+/// hundred). Any other hold (another run's Stop, a retirement, a timer)
+/// still refuses. `Ok(false)` changes nothing.
 pub(crate) async fn retire_superseded_queued_in(
     tx: &mut SqliteConnection,
     owner: &OwnerId,
     conversation: &ConversationId,
     event: &str,
 ) -> Result<bool> {
-    let row = sqlx::query("SELECT i.sequence,i.message_id,i.event_id FROM reasoning_inbox i JOIN messages m ON m.id=i.message_id JOIN source_admission_fences f ON f.message_id=m.id WHERE i.conversation_id=? AND i.event_id=? AND i.state='queued' AND i.claimant_session_id IS NULL AND i.admitted_run_id IS NULL AND i.admitted_fixture_run_id IS NULL AND m.owner_id=? AND m.conversation_id=i.conversation_id AND NOT EXISTS(SELECT 1 FROM ordinary_input_holds h WHERE h.event_id=i.event_id) AND NOT EXISTS(SELECT 1 FROM execution_window_inputs wi WHERE wi.event_id=i.event_id) AND NOT EXISTS(SELECT 1 FROM production_runs r WHERE r.event_id=i.event_id OR r.message_id=i.message_id) AND NOT EXISTS(SELECT 1 FROM fixture_runs r WHERE r.event_id=i.event_id OR r.message_id=i.message_id)")
+    let row = sqlx::query("SELECT i.sequence,i.message_id,i.event_id FROM reasoning_inbox i JOIN messages m ON m.id=i.message_id JOIN source_admission_fences f ON f.message_id=m.id WHERE i.conversation_id=? AND i.event_id=? AND i.state='queued' AND i.claimant_session_id IS NULL AND i.admitted_run_id IS NULL AND i.admitted_fixture_run_id IS NULL AND m.owner_id=? AND m.conversation_id=i.conversation_id AND (NOT EXISTS(SELECT 1 FROM ordinary_input_holds h WHERE h.event_id=i.event_id) OR (EXISTS(SELECT 1 FROM production_held_inputs p JOIN production_stop_boundaries b ON b.event_id=p.boundary_event_id WHERE p.event_id=i.event_id AND p.conversation_id=i.conversation_id AND b.run_id=f.source_run_id) AND NOT EXISTS(SELECT 1 FROM owner_input_retirements x WHERE x.event_id=i.event_id) AND NOT EXISTS(SELECT 1 FROM dormant_timer_inputs t WHERE t.event_id=i.event_id))) AND NOT EXISTS(SELECT 1 FROM execution_window_inputs wi WHERE wi.event_id=i.event_id) AND NOT EXISTS(SELECT 1 FROM production_runs r WHERE r.event_id=i.event_id OR r.message_id=i.message_id) AND NOT EXISTS(SELECT 1 FROM fixture_runs r WHERE r.event_id=i.event_id OR r.message_id=i.message_id)")
         .bind(conversation.to_string()).bind(event).bind(owner.to_string())
         .fetch_optional(&mut *tx).await.map_err(db)?;
     let Some(row) = row else {
