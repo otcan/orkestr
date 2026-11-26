@@ -2,7 +2,7 @@
 import time
 import sys
 
-from . import continuation_guard
+from . import continuation_guard, queued_replay
 from .execution_mode import freeze
 from .participants import compose
 
@@ -134,14 +134,19 @@ def window(worker, data):
             data["previous_window"] = current
             data["window_request"] = worker.client.window_request(data["intake"], data["keys"]["message"], data["keys"]["window"], current)
             worker.ledger.save(data)
+        if data.get("phase") == "waiting_for_window_dispatch" and not queued_replay.due(worker, data):
+            return False
         status, reply = worker.client.request("POST", "/window", body=data["window_request"], allowed=(200, 201, 202, 409))
         if status == 202:
             # Durably queued in Core (capacity, or a follow-up that would get
             # under ten minutes of work time): Core's dispatcher opens the
             # window later, possibly as a successor. Replays of the same
-            # frozen request report the queue row until it is dispatched.
+            # frozen request report the queue row until it is dispatched,
+            # paced once the wait gets long (queued_replay.py).
             if not worker.window_queued(data, reply):
+                queued_replay.waited(worker, data)
                 return False
+            queued_replay.forget(worker, data)
         elif status == 409:
             # A definite refusal is not authority to change the frozen request.
             # Busy windows may clear; stale tuples require operator review.
@@ -174,5 +179,6 @@ def window(worker, data):
                 return False
             raise Refused("window_refused")
         if status != 202:
+            queued_replay.forget(worker, data)
             worker.window_admitted(data, reply)
     return True

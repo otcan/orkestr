@@ -77,6 +77,24 @@ class QueuedWindowTests(Case):
         self.assertEqual(posts, [frozen, frozen])
         self.assertEqual(self.ledger.messages()[-1]["text"], "deep result")
 
+    def test_a_long_queued_wait_paces_its_replays_and_still_sees_the_dispatch(self):
+        from v2.compat.v1_runtime import queued_replay
+        self.peer.queue_state = "queued"
+        self.worker.step(self.data)
+        for _ in range(20):
+            self.worker.step(self.ledger.next_input())
+        posts = [body for route, body in self.peer.mutations if route == "/window"]
+        self.assertEqual(len(posts), queued_replay.FAST_REPLAYS,
+                         "after the first replays, a queued request is not replayed every pass")
+        frozen = self.data["window_request"]
+        self.assertTrue(all(body == frozen for body in posts))
+        # Once its pause is over, the next replay reports the dispatch.
+        self.worker._queued_replays[frozen["request_key"]]["next"] = 0
+        self.peer.queue_state = "dispatched"
+        self.worker.step(self.ledger.next_input())
+        self.assertEqual(self.ledger.messages()[-1]["text"], "deep result")
+        self.assertNotIn(frozen["request_key"], self.worker._queued_replays)
+
     def test_withdrawn_queue_row_refuses(self):
         self.peer.queue_state = "withdrawn"
         with self.assertRaisesRegex(Refused, "window_withdrawn"):
