@@ -26,7 +26,8 @@ pub struct SitesCatalog {
 
 /// Reads `/api/v2/sites` for the workspace: at once, when the live channel
 /// reports a change (every minute without it; not for an older server
-/// without the route, nor a session it refuses) and on each `refresh`. A failure never signs the owner out: a service session may
+/// without the route, nor a session it refuses) and on each `refresh`.
+/// A failure never signs the owner out: a service session may
 /// use the app without seeing sites.
 pub fn use_sites_catalog(session_scope: Signal<SessionScope>) -> SitesCatalog {
     let mut catalog = use_signal(Catalog::default);

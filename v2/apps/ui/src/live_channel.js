@@ -36,6 +36,7 @@ if (!g.orkestrLive) g.orkestrLive = (() => {
     let state = "connecting";
     let mode = typeof g.WebSocket === "function" ? "websocket" : "sse";
     let transport = null, connectedOnce = false, dropped = false, attempts = 0;
+    let wsWorked = false, wsFailures = 0;
     let retryTimer = null, syncTimer = null, lastFrame = 0, unhealthySince = now();
     let sent = new Set();
     const counts = {fallback_polls: 0, reconnects: 0};
@@ -175,6 +176,7 @@ if (!g.orkestrLive) g.orkestrLive = (() => {
         if (!f || typeof f.t !== "string") return;
         if (f.t === "hello") {
             conn.hello = true;
+            if (conn.mode === "websocket") { wsWorked = true; wsFailures = 0; }
             clearTimeout(conn.helloTimer);
             conn.catchup = dropped;
             dropped = false;
@@ -289,7 +291,14 @@ if (!g.orkestrLive) g.orkestrLive = (() => {
         // A healthy channel that went away: catch up on the next one.
         if (conn.hello && why !== "bye") dropped = true;
         // A planned close (lifetime): a new channel at once, not a reconnect.
-        if (why === "bye") return retry(0, true);
+        // An event stream tries the WebSocket again unless it is ruled out.
+        if (why === "bye") {
+            if (conn.mode === "sse" && typeof g.WebSocket === "function" && (wsWorked || wsFailures < 3)) {
+                if (wsWorked) wsFailures = 0;
+                mode = "websocket";
+            }
+            return retry(0, true);
+        }
         if (why === "unsupported") {
             setState(connectedOnce ? "degraded" : "off");
             return retry(T.offRetryMs);
@@ -298,9 +307,17 @@ if (!g.orkestrLive) g.orkestrLive = (() => {
             setState("degraded");
             return retry(60000);
         }
-        // A refused, stalled or broken transport: try the other one next.
-        const other = conn.mode === "websocket" ? "sse" : typeof g.WebSocket === "function" ? "websocket" : "sse";
-        if (why !== "closed" && why !== "shutdown" && why !== "replaced") mode = other;
+        // Which transport next. A WebSocket that never opened here, or keeps
+        // being refused, or stalls after opening (a proxy holding frames),
+        // gives way to the event stream; a WebSocket refused while the
+        // server restarts is tried again. An event stream that does not
+        // open or stalls gives way to the WebSocket unless that is ruled out.
+        if (conn.mode === "websocket") {
+            if (!conn.hello) wsFailures += 1;
+            if ((conn.hello && why === "stalled") || (!conn.hello && (!wsWorked || wsFailures >= 3))) mode = "sse";
+        } else if (typeof g.WebSocket === "function" && wsFailures < 3 && (!conn.hello || why === "stalled")) {
+            mode = "websocket";
+        }
         setState("degraded");
         const delay = T.backoffMs[Math.min(attempts, T.backoffMs.length - 1)] * (0.8 + Math.random() * 0.4);
         attempts += 1;

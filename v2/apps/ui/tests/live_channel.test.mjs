@@ -212,3 +212,34 @@ test('refused paths poll on their own interval; aborted and invalid waits end', 
     await until(() => p.sockets.length === 2, 'reconnected');
     assert.equal(p.sockets[1].url.searchParams.get('resume'), null);
 });
+
+test('a WebSocket that worked is kept across a server restart; an event stream retries it on its lifetime', async () => {
+    const p = page();
+    await install(null, p.g);
+    const live = p.g.orkestrLive;
+    live.start();
+    p.sockets[0].push(p.hello('websocket'));
+    // The server restarts: goodbye, then the next attempt is refused.
+    p.sockets[0].push({t: 'bye', reason: 'shutdown'});
+    assert.equal(live.status().state, 'degraded');
+    await until(() => p.sockets.length === 2, 'second WebSocket attempt');
+    assert.equal(p.sockets[1].url.searchParams.get('resume'), '1');
+    p.sockets[1].onclose();
+    await until(() => p.sockets.length === 3, 'the WebSocket is tried again, not the event stream');
+    assert.equal(p.streams.length, 0);
+    p.sockets[2].push(p.hello('websocket'));
+    assert.equal(live.status().state, 'live');
+    assert.equal(live.status().transport, 'websocket');
+
+    // A page whose WebSocket never opened uses the event stream, and tries
+    // the WebSocket again when the stream reaches its lifetime.
+    const q = page({websocket: 'refuse'});
+    await install(null, q.g);
+    q.g.orkestrLive.start();
+    await until(() => q.streams.length === 1, 'event stream after a refused upgrade');
+    q.streams[0].push(q.hello('sse'));
+    await until(() => q.g.orkestrLive.status().state === 'live', 'live over SSE');
+    const sockets = q.sockets.length;
+    q.streams[0].push({t: 'bye', reason: 'lifetime'});
+    await until(() => q.sockets.length === sockets + 1, 'WebSocket retried after the stream lifetime');
+});
