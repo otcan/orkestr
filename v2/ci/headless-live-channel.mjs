@@ -42,9 +42,16 @@ try {
   stage = 'live';
   // The WebSocket upgrade is refused (404), so the page uses the event stream.
   await page.waitForFunction(() => document.documentElement.dataset.live === 'live', { timeout: 10000 });
-  const open = state.liveChannel.opens.at(-1);
-  assert.ok(open.paths.includes(SIDEBAR), `sidebar watched: ${JSON.stringify(open.paths)}`);
-  assert.ok(open.paths.some(p => p.endsWith('/intelligence')), 'conversation reads watched too');
+  // Pollers register as they mount; the event stream is reopened with the
+  // grown watch set (a WebSocket would just send a watch frame).
+  const watching = () => state.liveChannel.opens.at(-1)?.paths ?? [];
+  const deadline = Date.now() + 10000;
+  while (!(watching().includes(SIDEBAR) && watching().some(p => p.endsWith('/intelligence')))) {
+    assert.ok(Date.now() < deadline, `sidebar and chat reads watched: ${JSON.stringify(watching())}`);
+    await sleep(100);
+  }
+  await page.waitForFunction(() => document.documentElement.dataset.live === 'live', { timeout: 10000 });
+  await sleep(1000);
   // Healthy and quiet: no sidebar poll for longer than two old intervals.
   const quietFrom = sidebarReads();
   await sleep(9000);
