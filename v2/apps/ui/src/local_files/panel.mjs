@@ -7,12 +7,16 @@
 // The folder handle may be remembered in this browser (IndexedDB) so the
 // owner can reconnect with one click; nothing is connected without a click.
 // Its full controls (state in words, folder_state.mjs; connect, reconnect,
-// disconnect) live in the conversation's Files panel (`root`, ORK-809), its
-// activity log next to them (`logRoot`). The composer has one chip
-// (`chipRoot`): the state, and Connect or Reconnect in one click; while a
-// folder is connected it links to the Files panel (`filesHref`).
+// disconnect), the connected folder's own files and the activity log live at
+// the top of the conversation's Files panel (`root`, `logRoot`; ORK-809). The
+// composer has one chip (`chipRoot`): the state, and Connect or Reconnect in
+// one click; while a folder is connected it links to the Files panel
+// (`filesHref`). When the browser refuses (a blocked picker, a refused
+// permission) the chip says why at once, beside the composer, and offers a
+// fresh pick instead of repeating a Reconnect the browser keeps refusing.
 import {encryptedUploadClient} from '../attachments/encrypted_upload.mjs';
 import {setTitleMark} from '../title_marks.mjs';
+import {listFolder} from './folder.mjs';
 import {DENIED, folderState} from './folder_state.mjs';
 import {createRelay} from './relay.mjs';
 
@@ -44,6 +48,25 @@ async function remembered(indexedDB, key, value) {
 }
 
 const sized = bytes => (Number.isSafeInteger(bytes) ? ` (${bytes.toLocaleString('en')} bytes)` : '');
+const DISCONNECTED = 'Folder disconnected. The thread can no longer reach it.';
+/** Entries of the connected folder shown in Files; the rest are counted. */
+export const FOLDER_FILES_SHOWN = 100;
+
+/**
+ * Why the folder picker did not give a folder, in words the owner can act
+ * on, with the browser's error name. '' when the owner cancelled.
+ */
+export function pickerFailure(error) {
+  const name = typeof error?.name === 'string' && /^[A-Za-z]{1,40}$/.test(error.name) ? error.name : 'Error';
+  if (name === 'AbortError') return '';
+  if (name === 'SecurityError' || name === 'NotAllowedError') {
+    return `The browser blocked folder access (${name}). Allow file editing for this site in the browser's site settings. On a work computer, its browser policy may block folder access.`;
+  }
+  return `The browser could not open the folder picker (${name}). Reload the page and try again.`;
+}
+
+const sizeLabel = bytes => (!Number.isSafeInteger(bytes) ? '' : bytes < 1024 ? `${bytes} B`
+  : bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / (1024 * 1024)).toFixed(1)} MB`);
 // A finished write reads "written"; a failed one "not written" and its code.
 // Other requests keep their outcome ("done", an error code, "expired").
 function outcomeText({operation, outcome}) {
@@ -73,7 +96,8 @@ export function mountLocalFiles({conversation, csrf, root, logRoot = null, chipR
   if (typeof picker !== 'function') {
     const unsupported = folderState({supported: false});
     root.dataset.folderState = unsupported.state;
-    root.replaceChildren(stateNode(unsupported), make('span', {class: 'local-folder-note', text: 'Local folders need Chrome or Edge on a computer.'}));
+    root.replaceChildren(stateNode(unsupported), make('span', {class: 'local-folder-note',
+      text: 'Local folders need Chrome or Edge on a computer. On a work computer, its browser policy may turn folder access off.'}));
     logRoot?.replaceChildren();
     // Phones and other browsers: no chip in the composer at all.
     if (chipRoot) { chipRoot.replaceChildren(); chipRoot.hidden = true; }
@@ -103,11 +127,12 @@ export function mountLocalFiles({conversation, csrf, root, logRoot = null, chipR
       ...(fetcher ? {fetcher} : {}), onChange: () => render(), ...relayOptions});
     void relay.start({takeover});
     render();
+    void showFiles();
   }
   async function connect() {
     let folder;
     try { folder = await picker({id: 'orkestr-local-folder', mode: 'readwrite'}); }
-    catch (error) { message = error?.name === 'AbortError' ? '' : 'The browser did not open the folder.'; render(); return; }
+    catch (error) { message = pickerFailure(error); render(); return; }
     if (!live || !folder || folder.kind !== 'directory') return;
     await grantWrite(folder);
     saved = {handle: folder, name: folder.name};
@@ -135,18 +160,54 @@ export function mountLocalFiles({conversation, csrf, root, logRoot = null, chipR
     await current?.disconnect();
     saved = null;
     await remembered(indexedDB, key, null);
-    message = 'Folder disconnected. The thread can no longer reach it.';
+    message = DISCONNECTED;
+    files.replaceChildren();
     render();
   }
 
-  // Polls report every two seconds. The controls and the activity log are
-  // drawn separately, and each only when it changed, so a button the owner
-  // is about to press is never replaced by a log update.
+  // The connected folder's own files, top level, read in this browser from
+  // the folder the owner granted: nothing is sent anywhere. Read at connect,
+  // after each write the chat made, and on Refresh.
+  let listing = 0;
+  async function showFiles() {
+    const folder = handle, turn = ++listing;
+    if (!folder || typeof folder.entries !== 'function') { files.replaceChildren(); return; }
+    let nodes;
+    try {
+      const {entries, truncated} = await listFolder(folder, '');
+      nodes = filesNodes(folder.name || 'Folder', entries, truncated);
+    } catch (error) {
+      nodes = [make('p', {class: 'local-folder-note', role: 'status', text: `The folder could not be listed here (${error?.code ?? 'browser_error'}).`})];
+    }
+    if (live && turn === listing && handle === folder) files.replaceChildren(...nodes);
+  }
+  function filesNodes(name, entries, truncated) {
+    const sorted = [...entries].sort((a, b) => (a.kind === b.kind ? 0 : a.kind === 'directory' ? -1 : 1));
+    const list = make('ul', {class: 'local-folder-files-list', 'aria-label': `Files in ${name}`});
+    for (const entry of sorted.slice(0, FOLDER_FILES_SHOWN)) {
+      const folder = entry.kind === 'directory';
+      list.append(make('li', {class: 'local-folder-file', 'data-kind': folder ? 'dir' : 'file'},
+        make('span', {class: 'local-folder-file-name', text: folder ? `${entry.name}/` : entry.name}),
+        make('span', {class: 'local-folder-file-size', text: folder ? '' : sizeLabel(entry.size)})));
+    }
+    const more = sorted.length - Math.min(sorted.length, FOLDER_FILES_SHOWN);
+    return [
+      make('h4', {class: 'local-folder-files-title', text: `Files in \u201c${name}\u201d`}),
+      make('button', {type: 'button', class: 'local-folder-refresh', onclick: () => void showFiles(), text: 'Refresh'}),
+      sorted.length ? list : make('p', {class: 'local-folder-note', text: 'This folder is empty.'}),
+      ...(more || truncated ? [make('p', {class: 'local-folder-note', text: `${more ? `${more} more not shown here` : 'More not shown here'}; the chat can still list them.`})] : []),
+    ];
+  }
+
+  // Polls report every two seconds. The controls, the folder's files and the
+  // activity log are drawn separately, and each only when it changed, so a
+  // button the owner is about to press is never replaced by a log update.
   const controls = make('div', {class: 'local-folder-controls'}), log = make('div', {class: 'local-folder-log'});
-  root.replaceChildren(controls);
+  const files = make('div', {class: 'local-folder-files'});
+  root.replaceChildren(controls, files);
   (logRoot ?? root).append(log);
   if (chipRoot) chipRoot.hidden = false;
-  let drawnControls = '', drawnLog = '';
+  let drawnControls = '', drawnLog = '', newestWrite = null;
   function render() {
     if (!live) return;
     const view = relay?.snapshot();
@@ -158,12 +219,10 @@ export function mountLocalFiles({conversation, csrf, root, logRoot = null, chipR
       const state = folderState({view, saved, message, writable: writeAccess});
       root.dataset.folderState = state.state;
       controls.replaceChildren(stateNode(state), ...controlNodes(view, connected));
-      // Files keeps this folder under "More"; a connected folder opens it, so
-      // its state and Disconnect are where the composer chip leads.
-      if (connected) root.closest?.('details')?.setAttribute('open', '');
+      if (!connected && !handle) files.replaceChildren();
       if (chipRoot) {
         chipRoot.dataset.folderState = state.state;
-        chipRoot.replaceChildren(chipNode(state, view));
+        chipRoot.replaceChildren(chipNode(state, view), ...chipNote(connected));
       }
     }
     const working = view?.pending ?? [];
@@ -171,6 +230,9 @@ export function mountLocalFiles({conversation, csrf, root, logRoot = null, chipR
     if (logState !== drawnLog) {
       drawnLog = logState;
       log.replaceChildren(...logNodes(working, view?.activity ?? []));
+      // A write the chat made may have added a file: read the folder again.
+      const written = (view?.activity ?? []).find(a => a.operation === 'write' && a.outcome === 'done')?.id ?? null;
+      if (written !== newestWrite) { newestWrite = written; if (written) void showFiles(); }
     }
   }
   function controlNodes(view, connected) {
@@ -185,14 +247,20 @@ export function mountLocalFiles({conversation, csrf, root, logRoot = null, chipR
       if (saved?.handle) nodes.push(make('button', {type: 'button', class: 'local-folder-reconnect', onclick: () => void reconnect(), text: `Reconnect \u201c${saved.name}\u201d`}));
       nodes.push(make('button', {type: 'button', class: 'local-folder-connect', onclick: () => void connect(), text: saved?.handle ? 'Choose another folder\u2026' : 'Connect folder\u2026'}));
     }
-    if (message && message !== DENIED) nodes.push(make('span', {class: 'local-folder-note', role: 'status', text: message}));
+    // Every refusal is said in words, here and at the composer chip.
+    if (message) nodes.push(make('span', {class: `local-folder-note${failed() ? ' local-folder-failed' : ''}`, role: 'status', text: message}));
     return nodes;
   }
+  // The browser refused the last Connect or Reconnect (not a Disconnect).
+  const failed = () => Boolean(message) && message !== DISCONNECTED;
   // The composer's one folder item: what holds, and the one click it needs.
+  // After the browser refused a Reconnect, the chip offers a fresh pick.
   function chipNode(state, view) {
     const name = view?.folder ?? saved?.name ?? 'Folder';
-    if (state.state === 'none' || (state.state === 'permission' && !saved?.handle)) {
-      return make('button', {type: 'button', class: 'local-folder-chip', 'data-state': state.state, title: 'Let this chat read and change files in a folder on this computer', onclick: () => void connect(), text: 'Connect folder\u2026'});
+    const reconnectable = saved?.handle && message !== DENIED;
+    if (state.state === 'none' || (state.state === 'permission' && !reconnectable)) {
+      return make('button', {type: 'button', class: 'local-folder-chip', 'data-state': state.state, title: failed() ? message : 'Let this chat read and change files in a folder on this computer',
+        onclick: () => void connect(), text: saved?.handle ? 'Choose folder\u2026' : 'Connect folder\u2026'});
     }
     if (state.state === 'permission') {
       return make('button', {type: 'button', class: 'local-folder-chip', 'data-state': state.state, title: state.text, onclick: () => void reconnect(), text: `Reconnect \u201c${name}\u201d`});
@@ -200,6 +268,11 @@ export function mountLocalFiles({conversation, csrf, root, logRoot = null, chipR
     const text = state.state === 'ready' ? `${MARK}${name}` : state.state === 'connecting' ? `Connecting \u201c${name}\u201d\u2026` : 'Folder offline';
     const props = {class: 'local-folder-chip', 'data-state': state.state, title: state.text, text};
     return filesHref ? make('a', {...props, href: filesHref, 'aria-label': `${state.text}. Open Files.`}) : make('span', props);
+  }
+  // Why the last click did not connect, beside the chip, until the next try.
+  function chipNote(connected) {
+    if (connected || !failed()) return [];
+    return [make('span', {class: 'local-folder-chip-note', role: 'status', text: message})];
   }
   // Folder activity in the Files panel: what is in progress, then every
   // recent outcome, newest first: a write says written or not written (with

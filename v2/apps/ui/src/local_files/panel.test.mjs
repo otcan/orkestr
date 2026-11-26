@@ -5,7 +5,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash, randomUUID} from 'node:crypto';
 import {DENIED, folderState} from './folder_state.mjs';
-import {mountLocalFiles} from './panel.mjs';
+import {FOLDER_FILES_SHOWN, mountLocalFiles, pickerFailure} from './panel.mjs';
 import {setTitleMark} from '../title_marks.mjs';
 import {fakeDirectory} from '../../../../ci/local-files-fake-directory.mjs';
 
@@ -279,4 +279,103 @@ test('where folders are unavailable the composer shows no chip at all', () => {
   mountLocalFiles({conversation: CONVERSATION, csrf: 'synthetic-csrf', root, chipRoot}, {picker: null, document: fakeDocument(), uploader: {}});
   assert.deepEqual([chipRoot.children.length, chipRoot.hidden], [0, true]);
   assert.match(root.text(), /need Chrome or Edge/, 'the Files panel says why');
+});
+
+// 2026-11-26: the owner's Connect did nothing visible. A refusal by the
+// browser (a blocked picker, a refused permission) is now said at the chip,
+// beside the composer, and in Files, and the chip offers a fresh pick.
+const refused = name => async () => { throw Object.assign(new Error(`synthetic ${name}`), {name}); };
+const chipOf = chipRoot => chipRoot.find(n => n.attrs.class === 'local-folder-chip');
+const chipNoteOf = chipRoot => chipRoot.find(n => n.attrs.class === 'local-folder-chip-note');
+
+test('pickerFailure names the browser refusal; a cancel says nothing', () => {
+  assert.equal(pickerFailure({name: 'AbortError'}), '');
+  assert.match(pickerFailure({name: 'NotAllowedError'}), /^The browser blocked folder access \(NotAllowedError\)\. Allow file editing for this site/);
+  assert.match(pickerFailure({name: 'SecurityError'}), /work computer, its browser policy may block folder access/);
+  assert.match(pickerFailure(new TypeError('x')), /could not open the folder picker \(TypeError\)/);
+  assert.match(pickerFailure({name: '<b>odd</b>'}), /\(Error\)/, 'only a plain error name is shown');
+  assert.match(pickerFailure(null), /\(Error\)/);
+});
+
+test('a blocked picker is said at the chip and in Files; Connect stays offered', async () => {
+  const document = fakeDocument(), root = new Node('div'), chipRoot = new Node('span'), api = server();
+  const panel = mountLocalFiles({conversation: CONVERSATION, csrf: 'synthetic-csrf', root, chipRoot, filesHref: '#files'}, {
+    picker: refused('NotAllowedError'), indexedDB: null, document, uploader: {}, fetcher: api.fetcher});
+  assert.equal(chipNoteOf(chipRoot), undefined, 'no note before a click');
+  await chipOf(chipRoot).onclick();
+  await settle();
+  assert.equal(chipOf(chipRoot).textContent, 'Connect folder…');
+  assert.match(chipNoteOf(chipRoot).textContent, /blocked folder access \(NotAllowedError\)/);
+  assert.equal(chipNoteOf(chipRoot).attrs.role, 'status');
+  assert.match(chipOf(chipRoot).attrs.title, /blocked folder access/);
+  assert.match(root.text(), /blocked folder access \(NotAllowedError\)/, 'the Files panel says it too');
+  assert.ok(root.find(n => n.attrs.class === 'local-folder-note local-folder-failed'));
+  assert.equal(root.dataset.folderState, 'none');
+  assert.equal(api.polls, 0);
+  panel.close();
+});
+
+test('cancelling the picker leaves no note', async () => {
+  const root = new Node('div'), chipRoot = new Node('span');
+  const panel = mountLocalFiles({conversation: CONVERSATION, csrf: 'synthetic-csrf', root, chipRoot}, {
+    picker: refused('AbortError'), indexedDB: null, document: fakeDocument(), uploader: {}, fetcher: server().fetcher});
+  await chipOf(chipRoot).onclick();
+  await settle();
+  assert.equal(chipNoteOf(chipRoot), undefined);
+  assert.equal(chipRoot.children.length, 1);
+  panel.close();
+});
+
+test('a refused Reconnect is said at the chip, which then offers a fresh pick that connects', async () => {
+  const saved = {handle: handle('Remembered', 'denied'), name: 'Remembered'};
+  const document = fakeDocument(), root = new Node('div'), chipRoot = new Node('span'), api = server();
+  const panel = mountLocalFiles({conversation: CONVERSATION, csrf: 'synthetic-csrf', root, chipRoot}, {
+    picker: async () => handle('Picked'), indexedDB: memoryIndexedDB({[`conversation:${CONVERSATION}`]: saved}), document, uploader: {},
+    fetcher: api.fetcher, relayOptions: {pollMs: 5}});
+  await until(() => chipOf(chipRoot)?.textContent === 'Reconnect “Remembered”', 'reconnect offered');
+  await chipOf(chipRoot).onclick();
+  await until(() => chipOf(chipRoot)?.textContent === 'Choose folder…', 'a fresh pick after the refusal');
+  assert.equal(chipNoteOf(chipRoot).textContent, DENIED);
+  assert.ok(root.text().includes(DENIED), 'Files says it too');
+  assert.equal(api.polls, 0);
+  await chipOf(chipRoot).onclick();
+  await until(() => chipRoot.dataset.folderState === 'ready', 'ready after the fresh pick');
+  assert.equal(chipNoteOf(chipRoot), undefined, 'the note goes once connected');
+  assert.equal(chipOf(chipRoot).textContent, '● Picked');
+  panel.close();
+});
+
+test('the connected folder lists its own files in Files, folders first, and again after a write', async t => {
+  const document = fakeDocument(), root = new Node('div'), queue = writeQueue();
+  const folder = fakeDirectory({'b.txt': 'bb', docs: {'plan.md': '# Plan'}, 'a.txt': 'alpha'}, {name: 'Synthetic folder'});
+  const picker = async options => { if (options.mode === 'readwrite') folder.fake.permissions.readwrite = 'granted'; return folder; };
+  const panel = mountLocalFiles({conversation: CONVERSATION, csrf: 'synthetic-csrf', root}, {
+    picker, indexedDB: null, document, uploader: {}, fetcher: queue.fetcher, relayOptions: {pollMs: 5}});
+  t.after(() => panel.close());
+  assert.equal(root.find(n => n.attrs.class === 'local-folder-files-list'), undefined, 'nothing listed before Connect');
+  await root.button('Connect folder…').onclick();
+  const rows = () => (root.find(n => n.attrs.class === 'local-folder-files-list')?.children ?? []).map(li => [li.attrs['data-kind'], ...li.children.map(c => c.textContent)]);
+  await until(() => rows().length === 3, 'listed');
+  assert.deepEqual(rows(), [['dir', 'docs/', ''], ['file', 'a.txt', '5 B'], ['file', 'b.txt', '2 B']]);
+  assert.ok(root.find(n => n.tag === 'h4' && n.textContent === 'Files in “Synthetic folder”'));
+  assert.ok(root.button('Refresh'));
+  const written = queue.add('c.txt', 'synthetic');
+  await until(() => queue.results.has(written), 'written');
+  await until(() => rows().some(r => r[1] === 'c.txt'), 'listed again after the write');
+  await root.button('Disconnect folder').onclick();
+  await until(() => root.dataset.folderState === 'none', 'none');
+  assert.equal(root.find(n => n.attrs.class === 'local-folder-files-list'), undefined, 'disconnect clears the list');
+});
+
+test('a big folder shows the first entries and counts the rest', async t => {
+  const tree = Object.fromEntries(Array.from({length: FOLDER_FILES_SHOWN + 3}, (_, i) => [`f${String(i).padStart(3, '0')}.txt`, 'x']));
+  const folder = fakeDirectory(tree, {name: 'Big', readwrite: 'granted'});
+  const root = new Node('div');
+  const panel = mountLocalFiles({conversation: CONVERSATION, csrf: 'synthetic-csrf', root}, {
+    picker: async () => folder, indexedDB: null, document: fakeDocument(), uploader: {}, fetcher: server().fetcher, relayOptions: {pollMs: 5}});
+  t.after(() => panel.close());
+  await root.button('Connect folder…').onclick();
+  await until(() => root.find(n => n.attrs.class === 'local-folder-files-list'), 'listed');
+  assert.equal(root.find(n => n.attrs.class === 'local-folder-files-list').children.length, FOLDER_FILES_SHOWN);
+  assert.ok(root.text().includes('3 more not shown here; the chat can still list them.'));
 });

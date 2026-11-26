@@ -367,12 +367,14 @@ pub fn Conversation(
                     h2 { id: "{drawer_id}-title", "Files" }
                     button { r#type: "button", id: "{close_id}", class: "files-drawer-close", "aria-label": "Close Files", onclick: move |_| close_files(), "Close" }
                 }
-                // 1. The folder this chat's agent works in on the host, read-only.
-                section { class: "files-section files-workspace", "aria-labelledby": "files-workspace-{id}",
-                    h3 { id: "files-workspace-{id}", "Chat folder" }
-                    if files_open {
-                        crate::workspace_files_view::WorkspaceFiles { key: "workspace-{id}-{generation}", conversation: id.clone(), session_scope, onexpired }
-                    }
+                // 1. The owner's folder on this computer: its state, Connect or
+                // Disconnect, its own files and what the chat did in it. Always
+                // mounted, so the composer's folder chip keeps working while
+                // Files is closed.
+                section { class: "files-section files-folder", "aria-labelledby": "files-folder-{id}",
+                    h3 { id: "files-folder-{id}", "Your folder" }
+                    p { class: "files-drawer-note", "A folder on this computer that this chat can read and change while this tab stays open on the chat. Disconnect stops it at once." }
+                    crate::local_files_view::LocalFolder { key: "local-folder-{id}-{generation}", conversation: id.clone(), csrf: csrf.clone(), session_scope, chip_root: Some(chip_id.clone()), files_href: Some(files_href.clone()) }
                 }
                 // 2. Every file of this chat, newest first.
                 section { class: "files-section files-in-chat", "aria-labelledby": "files-in-chat-{id}",
@@ -381,15 +383,15 @@ pub fn Conversation(
                         crate::chat_files_view::ChatFiles { conversation: id.clone(), files: chat_files(), session_scope }
                     }
                 }
-                // 3. More, collapsed: the owner's own computer folder and the
-                // private locker. The folder stays mounted, so the composer's
-                // folder chip keeps working while this is closed.
+                // 3. More, collapsed: the folder this chat's agent works in on
+                // the server (read-only) and the private locker.
                 details { class: "files-more",
                     summary { class: "files-more-toggle", "More" }
-                    section { class: "files-section files-folder", "aria-labelledby": "files-folder-{id}",
-                        h3 { id: "files-folder-{id}", "Your folder" }
-                        p { class: "files-drawer-note", "A folder on this computer that this chat can work in while this tab stays open on the chat. Disconnect stops it at once." }
-                        crate::local_files_view::LocalFolder { key: "local-folder-{id}-{generation}", conversation: id.clone(), csrf: csrf.clone(), session_scope, chip_root: Some(chip_id.clone()), files_href: Some(files_href.clone()) }
+                    section { class: "files-section files-workspace", "aria-labelledby": "files-workspace-{id}",
+                        h3 { id: "files-workspace-{id}", "Server folder" }
+                        if files_open {
+                            crate::workspace_files_view::WorkspaceFiles { key: "workspace-{id}-{generation}", conversation: id.clone(), session_scope, onexpired }
+                        }
                     }
                     section { class: "files-section files-private",
                         button { r#type: "button", class: "files-private-toggle", "aria-expanded": "{private_open}", "aria-controls": "files-private-{id}",

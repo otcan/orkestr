@@ -96,6 +96,9 @@ try {
   assert.deepEqual(await page.evaluate(() => window.__pickerCalls), [{id: 'orkestr-local-folder', mode: 'readwrite'}], 'the picker asks once for read and write');
   assert.ok((await page.title()).startsWith('● '), 'the tab title shows the connection');
   assert.equal(lf.folder, 'Synthetic folder');
+  // Files shows the connected folder's own files, read in the browser.
+  await page.waitForFunction(() => [...document.querySelectorAll('.files-drawer .local-folder-file-name')].map(n => n.textContent).join() === 'docs/,a.txt');
+  assert.equal(await page.$eval('.files-drawer .local-folder-files-title', n => n.textContent), 'Files in “Synthetic folder”');
   await screenshots(page, 'connected');
 
   // The thread's requests, as the server queues them.

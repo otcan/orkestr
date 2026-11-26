@@ -8,7 +8,7 @@
 //                their own, ORK-810; read-only if the browser allowed only that)
 //   offline      this tab's folder worker cannot serve it right now
 // Pure: it reads the relay snapshot and never touches the folder.
-export const DENIED = 'The browser did not allow access to the folder. Connect it again.';
+export const DENIED = 'The browser did not allow access to the folder. Choose it again; if the browser asked nothing, allow file editing for this site in its site settings.';
 
 export function folderState({supported = true, view = null, saved = null, message = '', writable = true} = {}) {
   if (!supported) return {state: 'unsupported', text: 'Folder access unavailable in this browser'};

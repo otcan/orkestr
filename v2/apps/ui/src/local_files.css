@@ -7,3 +7,13 @@
 .local-folder-live { color:var(--accent-text); background:var(--accent-soft); border-radius:1rem; padding:.3rem .7rem; font-weight:600; overflow-wrap:anywhere; }
 .local-folder-activity { margin:.2rem 0; padding-left:1.1rem; color:var(--muted); overflow-wrap:anywhere; }
 .local-folder-written { color:var(--text); }
+.local-folder-failed { color:var(--warn-text); }
+/* The connected folder's own files (top level), read in this browser. */
+.local-folder-files { flex-basis:100%; min-width:0; display:flex; flex-wrap:wrap; align-items:center; gap:.4rem; }
+.local-folder-files:empty { display:none; }
+.local-folder-files-title { margin:0; font-size:.8rem; }
+.local-folder-files-list { flex-basis:100%; list-style:none; margin:0; padding:0; max-height:16rem; overflow:auto; border:1px solid var(--border); border-radius:.5rem; }
+.local-folder-file { display:flex; justify-content:space-between; gap:.5rem; padding:.25rem .55rem; border-bottom:1px solid var(--border); overflow-wrap:anywhere; }
+.local-folder-file:last-child { border-bottom:0; }
+.local-folder-file[data-kind=dir] .local-folder-file-name { font-weight:600; }
+.local-folder-file-size { color:var(--muted); white-space:nowrap; }
