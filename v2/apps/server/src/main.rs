@@ -312,6 +312,9 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     // An open SSE connection must not delay the owned execution fence/cleanup.
     // Stop accepting HTTP and stop the supervisor before waiting for HTTP drain.
     let _ = shutdown.send(true);
+    // Open browser live channels say goodbye now; browsers reconnect to the
+    // next process instead of holding this one's drain.
+    beta_state.close_live_channels();
     // Kills a running `du` so the stop never waits for a disk scan.
     host_metrics.shutdown().await;
     if let Some(restricted) = restricted {
