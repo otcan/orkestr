@@ -1,6 +1,6 @@
 use orkestr_v2_contracts::{MessageReceipt, MessageReceiptKind};
 use orkestr_v2_ui::message_time::{
-    berlin_offset_minutes, full, parse, receipt_label, receipt_mark, short,
+    berlin_offset_minutes, full, parse, receipt_label, receipt_mark, short, times_after,
 };
 
 #[test]
@@ -75,4 +75,15 @@ fn receipts_are_labelled_without_inventing_delivery() {
         receipt_label(&r(MessageReceiptKind::SuppressedByV1)),
         "Not sent (no reply)"
     );
+}
+
+#[test]
+fn times_are_read_from_the_oldest_shown_row_not_from_the_start() {
+    // Nothing on screen yet: no read (it used to read from sequence 0).
+    assert_eq!(times_after(None), None);
+    // A long chat showing its newest rows reads just before the oldest one.
+    assert_eq!(times_after(Some(8794)), Some(8793));
+    // A chat whose first message is on screen reads from the start.
+    assert_eq!(times_after(Some(1)), Some(0));
+    assert_eq!(times_after(Some(0)), Some(0));
 }

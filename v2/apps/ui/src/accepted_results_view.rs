@@ -60,7 +60,7 @@ pub fn AcceptedReplies(
     let read_ticket = use_hook(|| Rc::new(Cell::new(0_u64)));
     let mut notice = use_signal(String::new);
     let mut busy = use_signal(|| false);
-    let mut window_start = use_signal(|| 0_i64);
+    let mut window_start = use_signal(|| None::<i64>);
     let now = crate::message_time_view::use_now();
     let times = crate::message_time_view::use_message_times(id.clone(), window_start);
     // Answer texts (ORK-797): read in batches, kept for the page, never polled.
@@ -299,12 +299,12 @@ pub fn AcceptedReplies(
             }
         }
     }));
-    // Times start just before the oldest row on screen.
-    let first = rows
-        .as_ref()
-        .ok()
-        .and_then(|r| r.first().map(|row| row.sequence() - 1))
-        .unwrap_or(0);
+    // Times start just before the oldest row on screen (none while empty).
+    let first = orkestr_v2_ui::message_time::times_after(
+        rows.as_ref()
+            .ok()
+            .and_then(|r| r.first().map(|row| row.sequence())),
+    );
     if *window_start.peek() != first {
         window_start.set(first);
     }
