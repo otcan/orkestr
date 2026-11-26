@@ -293,6 +293,13 @@ struct StreamGuard {
     reason: Option<Reason>,
 }
 
+impl StreamGuard {
+    /// The stream ended on its own: its session's reason is the close reason.
+    async fn finish(&mut self) {
+        self.reason = Some(session_reason((&mut self.session).await));
+    }
+}
+
 impl Drop for StreamGuard {
     fn drop(&mut self) {
         self.session.abort();
@@ -328,7 +335,7 @@ async fn events(
             live.frame(frame.kind());
             yield Ok(Event::default().event(frame.kind()).data(frame.json()));
         }
-        guard.reason = Some(session_reason((&mut guard.session).await));
+        guard.finish().await;
     };
     let mut response = Sse::new(stream).into_response();
     let headers = response.headers_mut();
