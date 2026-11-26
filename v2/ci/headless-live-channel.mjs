@@ -14,7 +14,7 @@ const SIDEBAR = '/api/v2/sidebar?include_hidden=true';
 // Short but ordered: stall 1.5 s < sidebar legacy 4 s < fallback 6 s.
 const TUNING = { stallMs: 1500, helloMs: 1500, fallbackMs: 6000, backoffScale: 0.2, graceMs: 2000 };
 const state = createState();
-state.live = createLive();
+state.liveChannel = createLive();
 let name = 'Synthetic live chat';
 state.sidebarEntries = (entry, now) => [entry(`v2:${A}`, name, now - 60000, { read_marker: 1 })];
 const reads = [];
@@ -42,7 +42,7 @@ try {
   stage = 'live';
   // The WebSocket upgrade is refused (404), so the page uses the event stream.
   await page.waitForFunction(() => document.documentElement.dataset.live === 'live', { timeout: 10000 });
-  const open = state.live.opens.at(-1);
+  const open = state.liveChannel.opens.at(-1);
   assert.ok(open.paths.includes(SIDEBAR), `sidebar watched: ${JSON.stringify(open.paths)}`);
   assert.ok(open.paths.some(p => p.endsWith('/intelligence')), 'conversation reads watched too');
   // Healthy and quiet: no sidebar poll for longer than two old intervals.
@@ -60,7 +60,7 @@ try {
   assert.ok(Date.now() - pushedAt < 3000);
 
   stage = 'stall';
-  state.live.stalled = true;
+  state.liveChannel.stalled = true;
   const stalledAt = Date.now();
   await page.waitForFunction(() => document.documentElement.dataset.live === 'degraded', { timeout: 6000 });
   assert.ok(Date.now() - stalledAt < TUNING.stallMs + 2500, 'a missing heartbeat is noticed');
@@ -73,18 +73,18 @@ try {
   const fallbackGap = reads.at(-1) - Math.max(lastLive, stalledAt);
   assert.ok(fallbackGap >= TUNING.fallbackMs - 1000, `fallback read after ${fallbackGap} ms, not the 4 s poll`);
   assert.equal(await liveState(), 'degraded');
-  assert.ok(state.live.opens.length >= 2, 'the page keeps trying to reconnect');
+  assert.ok(state.liveChannel.opens.length >= 2, 'the page keeps trying to reconnect');
 
   stage = 'recover';
-  state.live.stalled = false;
+  state.liveChannel.stalled = false;
   await page.waitForFunction(() => document.documentElement.dataset.live === 'live', { timeout: 15000 });
-  assert.ok(state.live.opens.some(o => o.resume === '1'), 'reconnects say so');
-  assert.ok(state.live.opens.some(o => o.fallback_polls >= 1), 'fallback polls are reported to the server');
+  assert.ok(state.liveChannel.opens.some(o => o.resume === '1'), 'reconnects say so');
+  assert.ok(state.liveChannel.opens.some(o => o.fallback_polls >= 1), 'fallback polls are reported to the server');
   assert.equal(await page.$('.connection-bar'), null, 'no reconnect bar once live again');
   assert.deepEqual(errors, [], 'Browser rendering errors');
-  console.log(`PASS: live channel (${state.live.opens.length} opens; fallback read after ${fallbackGap} ms; ${sidebarReads()} sidebar reads in total)`);
+  console.log(`PASS: live channel (${state.liveChannel.opens.length} opens; fallback read after ${fallbackGap} ms; ${sidebarReads()} sidebar reads in total)`);
 } catch (error) {
-  console.error(JSON.stringify({ stage, error: error.message, requests: state.requests.slice(-30), opens: state.live.opens, pageErrors: errors,
+  console.error(JSON.stringify({ stage, error: error.message, requests: state.requests.slice(-30), opens: state.liveChannel.opens, pageErrors: errors,
     live: await page?.evaluate(() => document.documentElement.dataset.live).catch(() => null) }));
   throw error;
 } finally {
