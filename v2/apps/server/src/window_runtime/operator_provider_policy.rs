@@ -115,6 +115,27 @@ impl Controller {
         {
             return Ok(None);
         }
+        // A result handed back to a Deep turn of the current provider can
+        // never be this switch's source (Core refuses it), and the policy no
+        // longer lets that provider run. At the head of the queue it held
+        // every input behind it, every pass. It is settled exactly like the
+        // superseded results the switch withdraws behind its source, and the
+        // next input in line makes the switch.
+        if let Some(event) = self
+            .store
+            .withdraw_policy_superseded_result_authenticated(
+                browser,
+                conversation,
+                &input.request_key,
+            )
+            .await
+            .map_err(|_| "provider policy superseded result refused")?
+        {
+            eprintln!("ALERT orkestr-v2-server window_queue_withdrawn conversation={conversation} event={event} cause=provider_policy_superseded");
+            self.queue.remember(browser);
+            self.queue.wake();
+            return Ok(None);
+        }
         let summary = self
             .store
             .provider_policy_history(owner, conversation, &input.input_message_id)
