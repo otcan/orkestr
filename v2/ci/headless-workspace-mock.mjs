@@ -1,6 +1,7 @@
 // Synthetic same-origin API for rendering the configured beta workspace in CI.
 // Fake IDs and text only; no provider, credential or real server is involved.
 import { createServer } from 'node:http';
+import { liveChannelMock } from './headless-live-channel-mock.mjs';
 import { readFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 import { trackerApi } from './headless-tracker-mock.mjs';
@@ -660,8 +661,10 @@ async function providerSignIn(req, res, path, state) {
 export async function startMock(bundle, state = createState()) {
   const encrypted = await encryptedUploadMock(state);
   const localFiles = localFilesMock(state);
+  const live = liveChannelMock(state);
   const server = createServer(async (req, res) => {
     const url = new URL(req.url, 'http://127.0.0.1');
+    if (live(req, res, url)) return;
     if (await encrypted(req,res,url.pathname)) return;
     if (await localFiles(req,res,url.pathname)) return;
     if (url.pathname.startsWith('/api/')) return api(state, req, res, url);

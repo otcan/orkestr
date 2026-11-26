@@ -23,8 +23,10 @@ fn start(input: Value) -> document::Eval {
     eval
 }
 
-/// Sidebar refresh interval: live activity and new replies appear within it.
+/// Sidebar refresh interval against a server without the live channel; with
+/// it, the list is read when it changes.
 const POLL_MS: u32 = 4000;
+const SIDEBAR: &str = "/api/v2/sidebar?include_hidden=true";
 
 /// Messaging-style list of native conversations and linked V1 chats, newest
 /// activity first, sub-chats grouped under their parent. Selecting a row is
@@ -62,6 +64,10 @@ pub fn ConversationSidebar(
         std::collections::BTreeMap::<String, orkestr_v2_ui::conversation_status::RowStatus>::new,
     );
     let slots = use_signal(|| None::<orkestr_v2_ui::conversation_status::Slots>);
+    // Relative times advance with the browser clock between reads; `skew`
+    // is the browser's lead over the server's read time.
+    let clock = crate::message_time_view::use_now();
+    let mut skew = use_signal(|| 0_i64);
     use_drop(move || {
         mounted.set(false);
         if let Some(channel) = waiting() {
@@ -93,24 +99,25 @@ pub fn ConversationSidebar(
     use_future(move || {
         let csrf_for_marks = csrf_for_marks.clone();
         async move {
+            let mut since = None;
             loop {
                 if !mounted() || !session_scope.read().is_current(owner) {
                     return;
                 }
                 let revision = *tick.peek();
-                let result = crate::transport::request::<SidebarPage>(
-                    "GET",
-                    "/api/v2/sidebar?include_hidden=true",
-                    Value::Null,
-                    "",
-                    "",
-                )
-                .await;
+                let result =
+                    crate::transport::request::<SidebarPage>("GET", SIDEBAR, Value::Null, "", "")
+                        .await;
                 if !mounted() || !session_scope.read().is_current(owner) {
                     return;
                 }
                 match result {
                     Ok(value) if sidebar::valid(&value) => {
+                        if let Ok(browser) =
+                            document::eval("return Date.now();").join::<f64>().await
+                        {
+                            skew.set(browser as i64 - value.observed_at_ms);
+                        }
                         onloaded.call(value.entries.clone());
                         let mark = value
                             .entries
@@ -145,16 +152,24 @@ pub fn ConversationSidebar(
                 if *tick.peek() != revision {
                     continue;
                 }
-                let channel = document::eval(&format!(
-                    "let timer; await Promise.race([new Promise(r => {{ timer=setTimeout(r,{POLL_MS}); }}), dioxus.recv()]); clearTimeout(timer); return null;"
-                ));
-                waiting.set(Some(channel));
-                let _ = channel.join::<Value>().await;
-                waiting.set(None);
+                // Read again when the live channel reports a change, or at
+                // once on a manual refresh (any message ends the wait).
+                loop {
+                    let channel = crate::live::waiting(SIDEBAR, since, POLL_MS);
+                    waiting.set(Some(channel));
+                    let wake = channel.join::<crate::live::Wake>().await;
+                    waiting.set(None);
+                    let Ok(wake) = wake else { break };
+                    since = Some(wake.version);
+                    if wake.reason != "timeout" || *tick.peek() != revision {
+                        break;
+                    }
+                }
             }
         }
     });
-    let now = page.read().as_ref().map_or(0, |p| p.observed_at_ms);
+    let observed = page.read().as_ref().map_or(0, |p| p.observed_at_ms);
+    let now = observed.max(clock() - skew());
     let v1_note = page.read().as_ref().and_then(|p| match p.v1_status {
         SidebarV1Status::Unavailable => Some("V1 chats are unavailable right now."),
         SidebarV1Status::MapOnly => Some("V1 chats from the live map only."),

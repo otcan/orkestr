@@ -29,7 +29,8 @@ fn start(conversations: &[String]) -> document::Eval {
     eval
 }
 
-/// Polls badges for the listed conversations every ten seconds while mounted.
+/// Reads badges for the listed conversations while mounted: again when the
+/// live channel reports a change (every ten seconds without it).
 #[component]
 pub fn StatusPoll(
     ids: Vec<String>,
@@ -50,6 +51,9 @@ pub fn StatusPoll(
     use_future(move || {
         let ids = ids.clone();
         async move {
+            // The batch path the request reads (conversation_status_request.mjs).
+            let path = format!("/api/v2/conversation-status?ids={}", ids.join(","));
+            let mut since = None;
             loop {
                 if ids.is_empty() {
                     return;
@@ -93,8 +97,7 @@ pub fn StatusPoll(
                     }
                     statuses.set(next);
                 }
-                let _ =
-                    document::eval("await new Promise(r=>setTimeout(r,10000));return null;").await;
+                since = Some(crate::live::wait(&path, since, 10_000).await.version);
                 if !mounted() || !session_scope.read().is_current(owner) {
                     return;
                 }

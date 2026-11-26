@@ -55,7 +55,14 @@ pub fn ExecutionPoll(
                 clock.set(received);
             }
             match message["kind"].as_str() {
-                Some("tick") => {}
+                // The live channel watches this status: still current.
+                Some("tick") => {
+                    if message["live"].as_bool() == Some(true)
+                        && execution.peek().confirmable(received)
+                    {
+                        execution.write().confirm(selection_generation, received);
+                    }
+                }
                 Some("response") => match message["status"].as_u64() {
                     Some(200) => {
                         let status =

@@ -24,9 +24,10 @@ pub struct SitesCatalog {
     pub refresh: Signal<u64>,
 }
 
-/// Reads `/api/v2/sites` for the workspace: at once, every minute (not for
-/// an older server without the route, nor a session it refuses) and on each
-/// `refresh`. A failure never signs the owner out: a service session may
+/// Reads `/api/v2/sites` for the workspace: at once, when the live channel
+/// reports a change (every minute without it; not for an older server
+/// without the route, nor a session it refuses) and on each `refresh`.
+/// A failure never signs the owner out: a service session may
 /// use the app without seeing sites.
 pub fn use_sites_catalog(session_scope: Signal<SessionScope>) -> SitesCatalog {
     let mut catalog = use_signal(Catalog::default);
@@ -34,8 +35,15 @@ pub fn use_sites_catalog(session_scope: Signal<SessionScope>) -> SitesCatalog {
     let mut tick = use_signal(|| 0_u64);
     let mut asked = use_signal(|| 0_u64);
     use_future(move || async move {
+        // Read again when the live channel reports a change (each minute
+        // without it).
+        let mut since = None;
         loop {
-            crate::transport::sleep(POLL_MS).await;
+            since = Some(
+                crate::live::wait("/api/v2/sites", since, POLL_MS)
+                    .await
+                    .version,
+            );
             tick += 1;
         }
     });

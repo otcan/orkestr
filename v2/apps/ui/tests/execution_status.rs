@@ -279,3 +279,24 @@ fn failed_run_has_a_visible_owner_notice_and_other_phases_none() {
         .unwrap()
         .starts_with("This reply failed: provider usage limit reached."));
 }
+#[test]
+fn a_watched_status_stays_fresh_without_new_reads() {
+    let mut state = Execution::default();
+    let status = wire();
+    let generation = state.select(&status.conversation_id.to_string(), "");
+    state.apply_status(generation, 1_000, status).unwrap();
+    // Not yet due: half the stale limit has not passed.
+    assert!(!state.confirmable(1_000 + Execution::STALE_MS / 2));
+    assert!(!state.confirm(generation, 1_000 + Execution::STALE_MS / 2));
+    let later = 1_000 + Execution::STALE_MS / 2 + 1;
+    assert!(state.confirmable(later));
+    // A stale selection never refreshes the current one.
+    assert!(!state.confirm(generation + 1, later));
+    assert!(state.confirm(generation, later));
+    assert!(state.fresh(later + Execution::STALE_MS));
+    assert!(!state.fresh(later + Execution::STALE_MS + 1));
+    // A disconnected status is not confirmed.
+    state.disconnected();
+    assert!(!state.confirmable(later + Execution::STALE_MS));
+    assert!(!state.confirm(generation, later + Execution::STALE_MS));
+}

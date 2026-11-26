@@ -5,11 +5,13 @@ use orkestr_v2_contracts::{ConversationPost, ConversationPosts};
 use orkestr_v2_ui::session_scope::SessionScope;
 use serde_json::Value;
 
-/// Same cadence as the conversation's execution poll.
+/// Read interval against a server without the live channel (the execution
+/// poll's old cadence); with it, posts are read when they change.
 const POLL_MS: u32 = 3000;
 const PAGE: u16 = 50;
 
-/// The newest posts of a conversation, oldest first, refreshed every 3 s.
+/// The newest posts of a conversation, oldest first, read again when the
+/// live channel reports a change.
 /// A server without the route or a failed read keeps the last good list.
 pub fn use_conversation_posts(
     id: String,
@@ -21,6 +23,7 @@ pub fn use_conversation_posts(
         let id = id.clone();
         async move {
             let path = format!("/api/v2/conversations/{id}/posts?limit={PAGE}");
+            let mut since = None;
             loop {
                 if !session_scope.read().is_current(generation) {
                     return;
@@ -41,7 +44,7 @@ pub fn use_conversation_posts(
                         posts.set(page.posts);
                     }
                 }
-                crate::transport::sleep(POLL_MS).await;
+                since = Some(crate::live::wait(&path, since, POLL_MS).await.version);
             }
         }
     });

@@ -51,6 +51,7 @@ pub fn LiveMapView(session_scope: Signal<SessionScope>, onexpired: EventHandler<
         }
     });
     use_future(move || async move {
+        let mut since = None;
         loop {
             let eval = start();
             channel.set(Some(eval));
@@ -81,8 +82,11 @@ pub fn LiveMapView(session_scope: Signal<SessionScope>, onexpired: EventHandler<
                 }
                 _ => notice.set(Notice::Unavailable),
             }
-            let wait = format!("await new Promise(r=>setTimeout(r,{REFRESH_MS}));return null;");
-            let _ = document::eval(&wait).await;
+            since = Some(
+                crate::live::wait("/api/v2/live-map", since, REFRESH_MS as u32)
+                    .await
+                    .version,
+            );
             if !mounted() || !session_scope.read().is_current(owner) {
                 return;
             }

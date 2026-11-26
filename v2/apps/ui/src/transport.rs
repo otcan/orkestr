@@ -165,19 +165,6 @@ pub async fn opening(id: &str, csrf: &str) -> Result<Projection, Failure> {
     snapshot(id, csrf, 0, Projection::default(), 0).await
 }
 
-use orkestr_v2_ui::StreamItem;
-
-pub async fn event(id: &str, cursor: i64) -> Result<StreamItem, Failure> {
-    let eval = document::eval(include_str!("stream.js"));
-    eval.send(json!({"path":format!("/api/v2/conversations/{id}/events"),"cursor":cursor}))
-        .map_err(|_| Failure::from("Stream bridge unavailable".to_string()))?;
-    let raw: Value = eval
-        .join()
-        .await
-        .map_err(|_| Failure::from("Connection lost. Reconnecting…".to_string()))?;
-    Ok(orkestr_v2_ui::decode_stream(raw))
-}
-
 /// Waits up to `ms` (with jitter), returning early when the tab becomes
 /// visible, the window regains focus, the browser comes back online, or the
 /// owner presses Retry.
@@ -186,7 +173,8 @@ pub async fn wait_for_wake(ms: u32) {
         .await;
 }
 
-/// Wakes a stream that is waiting to reconnect (the Retry button).
+/// Wakes a reconnect that is waiting, and every reader waiting on the live
+/// channel (the Retry button).
 pub fn retry_stream() {
     let _ = document::eval(&format!(
         "window.dispatchEvent(new Event({:?})); return null;",

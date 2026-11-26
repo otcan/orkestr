@@ -28,10 +28,3 @@ pub async fn clock() -> (i64, i64) {
         .await
         .unwrap_or((0, 0))
 }
-
-pub async fn sleep(ms: u64) {
-    let _ = document::eval(&format!(
-        "await new Promise(r=>setTimeout(r,{ms}));return null;"
-    ))
-    .await;
-}

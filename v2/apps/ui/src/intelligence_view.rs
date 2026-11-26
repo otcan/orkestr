@@ -35,6 +35,8 @@ pub fn IntelligencePanel(
     use_future(move || {
         let id = read_id.clone();
         async move {
+            let path = format!("/api/v2/conversations/{id}/intelligence");
+            let mut since = None;
             loop {
                 if !mounted() || !session_scope.read().is_current(owner) {
                     return;
@@ -59,8 +61,12 @@ pub fn IntelligencePanel(
                     Ok(reply) if reply.status == 200 => {
                         match serde_json::from_str::<IntelligenceCapabilities>(&reply.text) {
                             Ok(value) if value.valid(&id) => {
-                                capabilities.set(Some(value));
-                                notice.set(String::new());
+                                if capabilities.peek().as_ref() != Some(&value) {
+                                    capabilities.set(Some(value));
+                                }
+                                if !notice.peek().is_empty() {
+                                    notice.set(String::new());
+                                }
                             }
                             _ => {
                                 capabilities.set(None);
@@ -75,7 +81,8 @@ pub fn IntelligencePanel(
                         );
                     }
                 }
-                crate::transport::delay().await;
+                // Read again when the server says the capabilities changed.
+                since = Some(crate::live::wait(&path, since, 1500).await.version);
             }
         }
     });

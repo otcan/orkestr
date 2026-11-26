@@ -1,5 +1,6 @@
-//! A polled, ETag-revalidated host metrics read bound to a signal.
-use crate::host_metrics_fetch::{clock, sleep, start, Reply};
+//! An ETag-revalidated host metrics read bound to a signal, read again when
+//! the live channel reports a new sample (every `every_ms` without it).
+use crate::host_metrics_fetch::{clock, start, Reply};
 use dioxus::prelude::*;
 use orkestr_v2_ui::session_scope::SessionScope;
 use serde::de::DeserializeOwned;
@@ -38,6 +39,7 @@ pub fn use_polled<T: DeserializeOwned + Clone + 'static>(
     });
     use_future(move || async move {
         let mut etag: Option<String> = None;
+        let mut since = None;
         loop {
             let eval = start(path, etag.as_deref());
             channel.set(Some(eval));
@@ -75,7 +77,11 @@ pub fn use_polled<T: DeserializeOwned + Clone + 'static>(
                 }
                 _ => failed.set(true),
             }
-            sleep(every_ms).await;
+            since = Some(
+                crate::live::wait(path, since, every_ms as u32)
+                    .await
+                    .version,
+            );
             if !mounted() || !session_scope.read().is_current(owner) {
                 return;
             }
