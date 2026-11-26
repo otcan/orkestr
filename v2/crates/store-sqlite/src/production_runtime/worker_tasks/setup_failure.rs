@@ -17,7 +17,7 @@ impl Store {
     ) -> Result<()> {
         self.worker_credential(credential)?;
         let c = self.context()?;
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = self.begin_writer().await?;
         c.validate(&mut tx).await?;
         let row = sqlx::query("SELECT t.*,p.state AS parent_state,p.session_id AS parent_session FROM worker_tasks t JOIN production_runs p ON p.id=t.parent_run_id WHERE t.id=? AND t.owner_id=? AND t.context_id=? AND t.incarnation_id=?")
             .bind(task.to_string()).bind(c.owner.to_string()).bind(&c.id).bind(&c.incarnation)

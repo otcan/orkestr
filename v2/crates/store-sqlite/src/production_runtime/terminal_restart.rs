@@ -190,7 +190,7 @@ impl Store {
             let mut rolled_back = false;
             let result = async {
                 diagnostics.enter(Phase::BeginWriter);
-                let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+                let mut tx = self.begin_writer().await?;
                 diagnostics.enter(Phase::AuthenticateOwner);
                 let token_hash = crate::digest(credential);
                 let owner: String = sqlx::query_scalar(

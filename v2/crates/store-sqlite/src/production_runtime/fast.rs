@@ -35,7 +35,7 @@ impl Store {
         {
             return Err(RuntimeStoreError::InvalidInput);
         }
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = self.begin_writer().await?;
         c.authenticate(&mut tx).await?;
         let source = sqlx::query("SELECT e.conversation_id,e.sequence FROM events e JOIN messages m ON m.id=e.message_id WHERE e.id=? AND e.message_id=? AND e.owner_id=? AND m.owner_id=? AND e.conversation_id=m.conversation_id AND e.kind='message_accepted' AND m.actor_kind='owner'")
             .bind(input.source_event_id.to_string()).bind(input.source_message_id.to_string())

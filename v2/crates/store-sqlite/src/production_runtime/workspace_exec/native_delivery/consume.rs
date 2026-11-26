@@ -74,7 +74,7 @@ impl Store {
             .check_before_writer(self)
             .await?;
         let store = &*checked_workspace;
-        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = store.begin_writer().await?;
         let row = current(store, &mut tx, credential, &reservation).await?;
         if matches!(
             row.get::<&str, _>("state"),

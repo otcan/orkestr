@@ -14,7 +14,7 @@ impl Store {
     ) -> Result<BoundSessionMetadata> {
         self.worker_credential(credential)?;
         let c = self.context()?;
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = self.begin_writer().await?;
         c.validate(&mut tx).await?;
         let terminal: String = sqlx::query_scalar("SELECT o.event_id FROM production_observations o JOIN production_runs r ON r.id=o.run_id WHERE r.id=? AND r.owner_id=? AND r.conversation_id=? AND o.kind='stopped' AND o.receipt_state='cancelled'")
             .bind(prior_run.to_string()).bind(c.owner.to_string()).bind(binding.conversation_id.to_string())

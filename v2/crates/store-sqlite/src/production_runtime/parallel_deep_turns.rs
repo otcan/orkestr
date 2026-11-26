@@ -202,7 +202,7 @@ impl Store {
     ) -> Result<()> {
         self.worker_credential(credential)?;
         let c = self.context()?;
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = self.begin_writer().await?;
         c.validate(&mut tx).await?;
         let window = c
             .window_scope(&mut tx)
@@ -269,7 +269,7 @@ impl Store {
     pub async fn defer_parallel_deep_input(&self, credential: &str, run: &RunId) -> Result<bool> {
         self.worker_credential(credential)?;
         let c = self.context()?;
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = self.begin_writer().await?;
         c.validate(&mut tx).await?;
         let row = sqlx::query("SELECT r.*,(SELECT t.terminal_kind FROM production_terminal_evidence t WHERE t.run_id=r.id) AS terminal FROM production_runs r JOIN production_parallel_deep_slots p ON p.session_id=r.session_id WHERE r.id=? AND r.owner_id=? AND r.context_id=? AND r.incarnation_id=? AND r.role='deep' AND r.deep_slot>0 AND p.context_id=r.context_id AND p.incarnation_id=r.incarnation_id")
             .bind(run.to_string()).bind(c.owner.to_string()).bind(&c.id).bind(&c.incarnation)

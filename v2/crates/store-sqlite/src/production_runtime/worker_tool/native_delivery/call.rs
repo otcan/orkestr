@@ -73,7 +73,7 @@ impl Store {
         let store = &*workspace;
         #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
         let store = self;
-        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = store.begin_writer().await?;
         execution(store, &mut tx, credential, &parent.parent).await?;
         if parent.parent.run.role != Role::Worker
             || parent.parent.run.native_session_id.as_deref() != Some(call.thread_id.as_str())

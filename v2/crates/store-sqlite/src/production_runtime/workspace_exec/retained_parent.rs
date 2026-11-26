@@ -18,7 +18,7 @@ impl Store {
     ) -> Result<WorkspaceExecParent> {
         let checked_workspace = profile.workspace.check_before_writer(self).await?;
         let store = &*checked_workspace;
-        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = store.begin_writer().await?;
         profile.validate(store, &mut tx).await?;
         execution(store, &mut tx, credential, consumed.provider()).await?;
         let c = store.context()?;
@@ -76,7 +76,7 @@ impl Store {
         let provider = self.renewal_provider(renewal)?;
         let checked_workspace = profile.workspace.check_before_writer(self).await?;
         let store = &*checked_workspace;
-        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = store.begin_writer().await?;
         profile.validate(store, &mut tx).await?;
         execution(store, &mut tx, credential, provider).await?;
         let row = store.production_authorized_run(&mut tx, provider).await?;

@@ -161,7 +161,7 @@ impl Store {
             #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
             setup_workspace: Default::default(),
         };
-        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = store.begin_writer().await?;
         store.validate_metadata(&mut tx, &grant).await?;
         tx.commit().await.map_err(db)?;
         Ok(grant)
@@ -192,7 +192,7 @@ impl Store {
             #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
             setup_workspace: Default::default(),
         };
-        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = store.begin_writer().await?;
         store.validate_metadata(&mut tx, &grant).await?;
         tx.commit().await.map_err(db)?;
         Ok(grant)
@@ -249,49 +249,61 @@ impl Store {
         };
         let result = {
             let operation = async {
-                #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
-                let workspace = {
+                let mut action = Some(action);
+                // At most one repeat, only for an attestation that lapsed while
+                // this fence queued for the writer (setup_attestation.rs).
+                for _attempt in 0..2 {
+                    #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+                    let workspace = {
+                        let started = Instant::now();
+                        events.capture(
+                            Stage::WorkspacePreflight,
+                            started,
+                            self.check_binding_for_setup(&grant.binding, &grant.setup_workspace)
+                                .await,
+                        )?
+                    };
+                    #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+                    let store = &*workspace;
+                    #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+                    let store = self;
                     let started = Instant::now();
+                    let mut tx =
+                        events.capture(Stage::Begin, started, store.begin_writer().await)?;
+                    // The handoff starts here, not before the fence queued for
+                    // Core's single writer (ORK-770, setup_attestation.rs).
+                    #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+                    let workspace =
+                        self.under_writer(workspace, &grant.binding, &grant.setup_workspace);
+                    #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+                    let store = &*workspace;
+                    let started = Instant::now();
+                    let validated = store.validate_metadata(&mut tx, grant).await;
+                    #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+                    if _attempt == 0
+                        && workspace.lapsed_while_queueing(&validated, &grant.setup_workspace)
+                    {
+                        // Nothing ran. Release the writer before the fresh Root check.
+                        tx.rollback().await.map_err(db)?;
+                        continue;
+                    }
                     events.capture(
-                        Stage::WorkspacePreflight,
+                        if grant.resume.is_some() {
+                            Stage::ValidateResumeGrant
+                        } else {
+                            Stage::ValidateFreshGrant
+                        },
                         started,
-                        self.check_binding_for_setup(&grant.binding, &grant.setup_workspace)
-                            .await,
-                    )?
-                };
-                #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
-                let store = &*workspace;
-                #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
-                let store = self;
-                let started = Instant::now();
-                let mut tx = events.capture(
-                    Stage::Begin,
-                    started,
-                    store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db),
-                )?;
-                // The handoff starts here, not before the fence queued for
-                // Core's single writer (ORK-770, setup_attestation.rs).
-                #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
-                let workspace =
-                    self.under_writer(workspace, &grant.binding, &grant.setup_workspace);
-                #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
-                let store = &*workspace;
-                let started = Instant::now();
-                events.capture(
-                    if grant.resume.is_some() {
-                        Stage::ValidateResumeGrant
-                    } else {
-                        Stage::ValidateFreshGrant
-                    },
-                    started,
-                    store.validate_metadata(&mut tx, grant).await,
-                )?;
-                #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
-                store.workspace_effect_once()?;
-                let result = action();
-                let started = Instant::now();
-                events.capture(Stage::Commit, started, tx.commit().await.map_err(db))?;
-                Ok(result)
+                        validated,
+                    )?;
+                    #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+                    store.workspace_effect_once()?;
+                    let result = action.take().ok_or(RuntimeStoreError::Fenced)?();
+                    let started = Instant::now();
+                    events.capture(Stage::Commit, started, tx.commit().await.map_err(db))?;
+                    return Ok(result);
+                }
+                Err(RuntimeStoreError::Fenced)
             };
             match handle {
                 Ok(h) => tokio::task::block_in_place(|| h.block_on(operation)),
@@ -326,7 +338,7 @@ impl Store {
         {
             return Err(RuntimeStoreError::Conflict);
         }
-        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = store.begin_writer().await?;
         store.validate_metadata(&mut tx, &grant).await?;
         let ready = store
             .confirm_native_session_in(&mut tx, evidence, grant.parent_run.is_some())

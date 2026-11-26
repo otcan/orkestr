@@ -42,7 +42,7 @@ impl Store {
         let store = &*workspace;
         #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
         let store = self;
-        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = store.begin_writer().await?;
         let result = store
             .delegate_worker_in(&mut tx, credential, parent_run_id, input)
             .await?;

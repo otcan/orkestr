@@ -18,7 +18,7 @@ impl Store {
         if conversation.0.is_nil() || message.0.is_nil() || !request.is_valid() {
             return Err(RuntimeStoreError::InvalidInput);
         }
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = self.begin_writer().await?;
         let owner: String = sqlx::query_scalar(
             "SELECT owner_id FROM auth_sessions WHERE token_hash=? AND expires_at>unixepoch()",
         )

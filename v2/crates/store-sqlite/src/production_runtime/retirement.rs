@@ -8,7 +8,7 @@ impl Store {
     /// Returns the number of newly blocked runs; repeating retirement is harmless.
     pub async fn retire_revoked_supervisor(&self) -> Result<u64> {
         let c = self.context()?;
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = self.begin_writer().await?;
         let live: i64 = sqlx::query_scalar("SELECT count(*) FROM auth_sessions WHERE token_hash=? AND owner_id=? AND expires_at>unixepoch()")
             .bind(&c.token_hash).bind(c.owner.to_string()).fetch_one(&mut *tx).await.map_err(db)?;
         if live != 0 {

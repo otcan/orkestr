@@ -32,7 +32,7 @@ impl Store {
         let store = &*workspace;
         #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
         let store = self;
-        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = store.begin_writer().await?;
         context.authenticate(&mut tx).await?;
         let row =
             sqlx::query("SELECT * FROM production_runs WHERE id=? AND owner_id=? AND context_id=?")

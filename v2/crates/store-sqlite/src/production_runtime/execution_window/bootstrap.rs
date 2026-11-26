@@ -50,7 +50,7 @@ impl Store {
         {
             return Err(RuntimeStoreError::InvalidInput);
         }
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = self.begin_writer().await?;
         let owner = browser_owner(self, &mut tx, browser_credential).await?;
         crate::runtime::scope(&mut tx, &owner, conversation).await?;
         let history: i64 = sqlx::query_scalar("SELECT (SELECT count(*) FROM production_supervisors WHERE owner_id=? AND provider_kind=? AND namespace=? AND supervisor_key=?) + (SELECT count(*) FROM execution_windows WHERE owner_id=? AND conversation_id=?) + (SELECT count(*) FROM production_runs WHERE owner_id=? AND conversation_id=?) + (SELECT count(*) FROM session_bindings WHERE owner_id=? AND conversation_id=?)")
@@ -166,7 +166,7 @@ impl Store {
         {
             return Err(RuntimeStoreError::InvalidInput);
         }
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = self.begin_writer().await?;
         let owner = browser_owner(self, &mut tx, browser_credential).await?;
         crate::runtime::scope(&mut tx, &owner, conversation).await?;
         let floor = native_reset::floor(&mut tx, &owner, conversation).await?;

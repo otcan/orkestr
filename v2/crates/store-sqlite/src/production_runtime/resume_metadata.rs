@@ -34,7 +34,7 @@ impl Store {
         #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
         let store = self;
         let c = store.context()?;
-        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = store.begin_writer().await?;
         c.validate(&mut tx).await?;
         let terminal: String = sqlx::query_scalar("SELECT event_id FROM production_acceptances WHERE run_id=? AND owner_id=? AND conversation_id=?")
             .bind(prior_run.to_string()).bind(c.owner.to_string()).bind(binding.conversation_id.to_string())
@@ -219,7 +219,7 @@ impl Store {
         let store = &*workspace;
         #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
         let store = self;
-        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = store.begin_writer().await?;
         store.validate_resume_metadata(&mut tx, &grant).await?;
         let link = grant.resume.as_ref().ok_or(RuntimeStoreError::Fenced)?;
         let digest = crate::runtime::ledger::hash(

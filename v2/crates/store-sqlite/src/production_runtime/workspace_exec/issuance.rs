@@ -15,7 +15,7 @@ impl Store {
     ) -> Result<WorkspaceExecAdmission> {
         let checked_workspace = profile.workspace.check_before_writer(self).await?;
         let store = &*checked_workspace;
-        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = store.begin_writer().await?;
         let result = store
             .delegate_workspace_exec_in_transaction(
                 &mut tx,
@@ -107,7 +107,7 @@ impl Store {
     ) -> Result<WorkspaceExecConsumption> {
         let checked_workspace = grant.profile.workspace.check_before_writer(self).await?;
         let store = &*checked_workspace;
-        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = store.begin_writer().await?;
         grant.profile.validate(store, &mut tx).await?;
         execution(store, &mut tx, credential, &grant.parent).await?;
         let row = load(

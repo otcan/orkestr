@@ -26,7 +26,7 @@ impl Store {
         &self,
         input: NativeSessionConfirmation,
     ) -> Result<Binding> {
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = self.begin_writer().await?;
         let binding = self
             .confirm_native_session_in(&mut tx, input, false)
             .await?;

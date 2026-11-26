@@ -114,7 +114,7 @@ impl Store {
         {
             return Err(RuntimeStoreError::InvalidInput);
         }
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = self.begin_writer().await?;
         if idle_owner {
             let mut public = self.clone();
             public.authority = None;
@@ -259,7 +259,7 @@ impl Store {
     ) -> Result<Store> {
         self.window_issuance_credential(credential)?;
         let c = self.context()?;
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = self.begin_writer().await?;
         c.validate(&mut tx).await?;
         let row = window_in(&mut tx, c, grant.window, grant.generation).await?;
         if row.get::<&str, _>("state") != "opening"

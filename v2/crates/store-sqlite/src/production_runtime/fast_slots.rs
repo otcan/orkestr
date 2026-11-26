@@ -18,7 +18,7 @@ impl Store {
         if c.provider != ProviderKind::Codex {
             return Err(RuntimeStoreError::Fenced);
         }
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = self.begin_writer().await?;
         c.validate(&mut tx).await?;
         let window = c
             .window_scope(&mut tx)
@@ -92,7 +92,7 @@ impl Store {
     pub async fn retire_bounded_fast_slot(&self, credential: &str, run: &RunId) -> Result<()> {
         self.worker_credential(credential)?;
         let c = self.context()?;
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = self.begin_writer().await?;
         c.validate(&mut tx).await?;
         let window = c
             .window_scope(&mut tx)

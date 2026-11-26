@@ -52,7 +52,7 @@ impl Store {
                 let store = &*workspace;
                 #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
                 let store = self;
-                let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+                let mut tx = store.begin_writer().await?;
                 current(store, &mut tx, credential, delivery).await?;
                 #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
                 store.workspace_effect_once()?;
@@ -109,7 +109,7 @@ impl Store {
         let store = &*workspace;
         #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
         let store = self;
-        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = store.begin_writer().await?;
         current(store, &mut tx, credential, &delivery).await?;
         sqlx::query("UPDATE worker_tool_results SET state='delivered' WHERE delegation_id=? AND state='delivery_unknown'")
             .bind(delivery.delegation_id().to_string()).execute(&mut *tx).await.map_err(db)?;

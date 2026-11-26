@@ -29,6 +29,14 @@
 //! whole setup failed as `setup_incomplete`. The proof that runs under the
 //! writer is derived from the same attested evidence with the same local
 //! checks, so the time spent queueing no longer counts against the handoff.
+//!
+//! The attestation can also lapse during that wait (a fence that began just
+//! before its 5 s ran out). There is then no evidence young enough to derive
+//! from, and the proof expires as before. Nothing ran under it, so the fence
+//! rolls back and repeats once with a complete fresh Root check
+//! (`lapsed_while_queueing`) instead of revoking the whole setup. Every
+//! other operation restarts its handoff under the writer through
+//! `Store::begin_writer` (writer_handoff.rs).
 use super::*;
 use std::sync::Mutex;
 
@@ -76,6 +84,22 @@ impl SetupAttestation {
             }
         }
     }
+
+    /// The last moments of an attestation: its evidence is already too old to
+    /// restart a handoff under the writer, and it lapses after `remaining`.
+    #[cfg(test)]
+    pub(crate) fn expire_soon_for_test(&self, remaining: Duration) {
+        if let Ok(mut slot) = self.0.lock() {
+            if let Some(attested) = slot.as_mut() {
+                let mut evidence = attested.evidence.rederive();
+                evidence.evidence_at = Instant::now()
+                    .checked_sub(SETUP_ATTESTATION)
+                    .expect("monotonic clock older than the attestation");
+                attested.evidence = Arc::new(evidence);
+                attested.until = Instant::now() + remaining;
+            }
+        }
+    }
 }
 
 impl WorkspaceCheck {
@@ -89,6 +113,9 @@ impl WorkspaceCheck {
             project: self.project.clone(),
             installation: self.installation.clone(),
             deadline: self.deadline.map(|_| now + HANDOFF),
+            rearmed: Arc::new(OnceLock::new()),
+            evidence_at: self.evidence_at,
+            lent: AtomicBool::new(false),
             physical_deadline: now + PHYSICAL_BUDGET,
             alive: AtomicBool::new(true),
             effect: Arc::new(AtomicBool::new(false)),
@@ -124,6 +151,42 @@ impl WorkspacePreflight {
         };
         preflight.workspace_check_current()?;
         Ok(preflight)
+    }
+
+    /// Whether this fence's proof expired only because the setup's
+    /// attestation lapsed while the fence queued for Core's writer, so
+    /// `under_writer` had no evidence to restart the handoff from. Nothing
+    /// ran under this proof. After rolling back, the caller may repeat the
+    /// fence once: it then takes the complete fresh Root check, exactly like
+    /// the first fence of a setup, instead of revoking the whole setup.
+    /// A local difference never repeats: it fences exactly as before.
+    pub(in crate::production_runtime) fn lapsed_while_queueing(
+        &self,
+        validated: &Result<()>,
+        attestation: &SetupAttestation,
+    ) -> bool {
+        let unchanged = || {
+            self.proof
+                .installation
+                .as_ref()
+                .is_some_and(|installation| {
+                    installation.check_retained().is_ok()
+                        && installation.retained_stamp().ok() == self.proof.retained
+                })
+        };
+        let lapsed = matches!(validated, Err(RuntimeStoreError::Fenced))
+            && self.owns
+            && self.proof.alive.load(Ordering::SeqCst)
+            && !self.proof.effect.load(Ordering::SeqCst)
+            && self.proof.handoff_expired.load(Ordering::SeqCst)
+            && attestation.current().is_none()
+            && unchanged();
+        if lapsed {
+            attestation.clear();
+            // This attempt's code is not the repeated fence's answer.
+            let _ = crate::production_runtime::fence_reason::take();
+        }
+        lapsed
     }
 }
 

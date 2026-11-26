@@ -24,7 +24,7 @@ impl Store {
         }
         let checked_workspace = launch.profile.workspace.check_before_writer(self).await?;
         let store = &*checked_workspace;
-        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = store.begin_writer().await?;
         let row = authority::live(store, &mut tx, credential, launch).await?;
         if !launch.spawn_spent.load(Ordering::Acquire) {
             return Err(RuntimeStoreError::Conflict);
@@ -61,7 +61,7 @@ impl Store {
             None
         };
         let store = checked_workspace.as_deref().unwrap_or(self);
-        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = store.begin_writer().await?;
         authority::credential(store, credential)?;
         let parent_row = store.production_authorized_run(&mut tx, control).await?;
         if control.run.purpose != AdmissionPurpose::CancellationAcknowledgement

@@ -32,7 +32,7 @@ impl Store {
         #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
         let store = self;
         let c = store.context()?;
-        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = store.begin_writer().await?;
         c.validate(&mut tx).await?;
         let d=sqlx::query("SELECT * FROM worker_provider_delegations WHERE id=? AND owner_id=? AND context_id=? AND incarnation_id=?")
             .bind(delegation.id().to_string()).bind(c.owner.to_string()).bind(&c.id).bind(&c.incarnation)

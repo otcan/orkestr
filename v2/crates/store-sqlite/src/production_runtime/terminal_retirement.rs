@@ -21,7 +21,7 @@ impl Store {
         {
             return Err(RuntimeStoreError::Unauthorized);
         }
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = self.begin_writer().await?;
         c.authenticate(&mut tx).await?;
         // Deliberately permit repeated retirement after our own deadline became
         // zero, but never accept another incarnation or credential as ours.

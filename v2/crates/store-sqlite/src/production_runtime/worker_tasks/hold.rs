@@ -25,7 +25,7 @@ impl Store {
         let (store, physical_current) = (workspace.as_deref().unwrap_or(self), workspace.is_some());
         #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
         let (store, physical_current) = (self, true);
-        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = store.begin_writer().await?;
         let rows = sqlx::query("SELECT * FROM worker_tasks WHERE owner_id=? AND context_id=? AND incarnation_id=? AND parent_run_id=? AND state IN ('queued','claimed') ORDER BY ordinal LIMIT 33")
             .bind(context.owner.to_string()).bind(&context.id).bind(&context.incarnation)
             .bind(parent.to_string()).fetch_all(&mut *tx).await.map_err(db)?;

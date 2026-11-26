@@ -37,7 +37,7 @@ impl Store {
         if source_namespace.is_nil() || !text(identity, 512) {
             return Err(RuntimeStoreError::InvalidInput);
         }
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = self.begin_writer().await?;
         producer_in(self, &mut tx, credential, producer).await?;
         let old=sqlx::query("SELECT * FROM automatic_reply_inputs WHERE owner_id=? AND source_namespace=? AND source_identity=?")
             .bind(producer.context.owner.to_string()).bind(source_namespace.to_string()).bind(identity).fetch_optional(&mut *tx).await.map_err(db)?;
@@ -78,7 +78,7 @@ impl Store {
         if !valid(provenance) {
             return Err(RuntimeStoreError::InvalidInput);
         }
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = self.begin_writer().await?;
         let owner = owner_in(self, &mut tx, credential, conversation).await?;
         if let Some(at) = &provenance.observed_at {
             // Require canonical whole-second UTC and a real calendar instant.
@@ -128,7 +128,7 @@ impl Store {
         input: Uuid,
         reason: AutomaticReplyHoldReason,
     ) -> Result<()> {
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = self.begin_writer().await?;
         let owner = owner_in(self, &mut tx, credential, conversation).await?;
         let row=sqlx::query("SELECT held,hold_reason FROM automatic_reply_inputs WHERE id=? AND owner_id=? AND conversation_id=?")
             .bind(input.to_string()).bind(owner.to_string()).bind(conversation.to_string()).fetch_optional(&mut *tx).await.map_err(db)?.ok_or(RuntimeStoreError::Fenced)?;

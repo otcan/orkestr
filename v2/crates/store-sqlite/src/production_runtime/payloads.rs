@@ -71,7 +71,7 @@ impl Store {
         conversation: &ConversationId,
         id: &PayloadId,
     ) -> Result<()> {
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = self.begin_writer().await?;
         crate::runtime::scope(&mut tx, owner, conversation).await?;
         if let Some(context) = &self.authority {
             if context.owner != *owner {

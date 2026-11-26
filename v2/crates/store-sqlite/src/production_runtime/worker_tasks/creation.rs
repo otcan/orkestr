@@ -34,7 +34,7 @@ impl Store {
         let store = &*workspace;
         #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
         let store = self;
-        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = store.begin_writer().await?;
         store
             .task_browser_in(&mut tx, credential, conversation)
             .await?;
@@ -134,7 +134,7 @@ impl Store {
         task: &TaskId,
     ) -> Result<()> {
         let context = self.context()?;
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = self.begin_writer().await?;
         self.task_browser_in(&mut tx, credential, conversation)
             .await?;
         let state: String = sqlx::query_scalar(
@@ -169,7 +169,7 @@ impl Store {
         task: &TaskId,
     ) -> Result<()> {
         let context = self.context()?;
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = self.begin_writer().await?;
         self.task_browser_in(&mut tx, credential, conversation)
             .await?;
         let count: i64 = sqlx::query_scalar(

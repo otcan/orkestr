@@ -47,7 +47,7 @@ impl Store {
         {
             return Err(RuntimeStoreError::InvalidInput);
         }
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = self.begin_writer().await?;
         let owner = browser_owner(self, &mut tx, browser_credential).await?;
         crate::runtime::scope(&mut tx, &owner, conversation).await?;
         let row = retired_row_in(

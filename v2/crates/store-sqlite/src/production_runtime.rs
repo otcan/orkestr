@@ -85,6 +85,7 @@ pub use running_renewal::{
 mod metadata;
 #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
 mod workspace;
+mod writer;
 #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
 pub(crate) use workspace::Registry as WorkspaceRegistry;
 #[cfg(all(target_os = "linux", target_pointer_width = "64"))]

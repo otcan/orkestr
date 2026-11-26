@@ -27,7 +27,7 @@ impl Store {
         if !request.is_valid() {
             return Err(RuntimeStoreError::InvalidInput);
         }
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = self.begin_writer().await?;
         let owner = browser_owner(self, &mut tx, browser).await?;
         crate::runtime::scope(&mut tx, &owner, conversation).await?;
         let digest = crate::digest(&serde_json::to_string(request).map_err(db)?);

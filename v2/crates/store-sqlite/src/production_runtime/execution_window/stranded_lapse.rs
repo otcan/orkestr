@@ -29,7 +29,7 @@ impl Store {
         if window.is_nil() || generation == 0 || generation >= 9_007_199_254_740_992 {
             return Err(RuntimeStoreError::InvalidInput);
         }
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = self.begin_writer().await?;
         let owner = browser_owner(self, &mut tx, credential).await?;
         crate::runtime::scope(&mut tx, &owner, conversation).await?;
         let w = sqlx::query("SELECT * FROM execution_windows WHERE id=? AND owner_id=? AND conversation_id=? AND generation=?")

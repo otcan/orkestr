@@ -32,7 +32,7 @@ impl Store {
         let store = &*workspace;
         #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
         let store = self;
-        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = store.begin_writer().await?;
         store.validate_metadata(&mut tx, &grant).await?;
         // Resume consumes the existing one-use reservation without claiming a
         // fresh observation. The exact immutable native identity must be retained.
@@ -88,7 +88,7 @@ impl Store {
         let store = &*workspace;
         #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
         let store = self;
-        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = store.begin_writer().await?;
         let run = store.production_authorized_run(&mut tx, provider).await?;
         if store.context()?.provider != ProviderKind::Claude
             || provider.run.purpose != AdmissionPurpose::Execution
