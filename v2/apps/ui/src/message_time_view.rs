@@ -63,26 +63,54 @@ pub fn MessageTime(
     }
 }
 
-/// Times of native messages from `start` on (pages of 200), refreshed every
-/// 15 s so receipts recorded later appear. Nothing is read while `start` is
-/// `None` (no row on screen yet), and older rows coming on screen are read
-/// at once instead of at the next refresh.
+/// Read interval against a server without the live channel (the old
+/// refresh); with it, message times are read when they change.
+const TIMES_REFRESH_MS: u32 = 15_000;
+
+/// Times of native messages from `start` on (pages of 200). After the first
+/// read the chat waits on the live channel for the last page read, where new
+/// messages and their receipts land, and then reads only from that page on;
+/// the whole window is read again every few reads and when older rows come
+/// on screen (which also ends the wait at once). Nothing is read while
+/// `start` is `None` (no row on screen yet).
 pub fn use_message_times(
     id: String,
     start: Signal<Option<i64>>,
 ) -> Signal<BTreeMap<i64, orkestr_v2_contracts::MessageTime>> {
     let mut times = use_signal(BTreeMap::new);
+    let mut waiting = use_signal(|| None::<document::Eval>);
+    // A moved window ends the wait: older rows need their times now.
+    use_effect(move || {
+        let _ = start();
+        if let Some(channel) = waiting.peek().as_ref() {
+            let _ = channel.send(serde_json::json!({"start": true}));
+        }
+    });
+    use_drop(move || {
+        if let Some(channel) = waiting.peek().as_ref() {
+            let _ = channel.send(serde_json::json!({"stop": true}));
+        }
+    });
     use_future(move || {
         let id = id.clone();
         async move {
+            let mut read_from = None::<i64>;
+            let mut tail = 0_i64;
+            let mut reads = 0_u32;
+            let mut watched = None::<(String, Option<u64>)>;
             loop {
                 let Some(from) = *start.peek() else {
                     crate::transport::sleep(250).await;
                     continue;
                 };
-                let mut after = from;
+                let mut after = message_time::times_read_from(from, read_from, tail, reads);
+                if after == from {
+                    read_from = Some(from);
+                }
+                reads = reads.wrapping_add(1);
                 let mut next = BTreeMap::new();
                 for _ in 0..5 {
+                    tail = after;
                     let path =
                         format!("/api/v2/conversations/{id}/message-times?after={after}&limit=200");
                     let Ok(page) = crate::transport::request::<MessageTimesPage>(
@@ -110,12 +138,24 @@ pub fn use_message_times(
                 if !next.is_empty() {
                     times.write().extend(next);
                 }
-                for _ in 0..15 {
-                    crate::transport::sleep(1_000).await;
-                    if start.peek().is_some_and(|now| now < from) {
-                        break;
-                    }
+                let path =
+                    format!("/api/v2/conversations/{id}/message-times?after={tail}&limit=200");
+                let since = match &watched {
+                    Some((watched, since)) if *watched == path => *since,
+                    _ => None,
+                };
+                let channel = crate::live::waiting(&path, since, TIMES_REFRESH_MS);
+                waiting.set(Some(channel));
+                // Older rows that came on screen during the read: no wait.
+                if start
+                    .peek()
+                    .is_some_and(|now| read_from.is_none_or(|read| now < read))
+                {
+                    let _ = channel.send(serde_json::json!({"start": true}));
                 }
+                let wake = channel.join::<crate::live::Wake>().await;
+                waiting.set(None);
+                watched = Some((path, wake.ok().map(|wake| wake.version)));
             }
         }
     });

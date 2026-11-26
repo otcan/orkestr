@@ -197,3 +197,20 @@ pub fn receipt_label(receipt: &MessageReceipt) -> &'static str {
 pub fn times_after(oldest_shown: Option<i64>) -> Option<i64> {
     oldest_shown.map(|sequence| (sequence - 1).max(0))
 }
+
+/// Every this many reads of a chat's message times reads the whole window
+/// again (a receipt recorded late for an older row); the reads in between
+/// start at the last page, where new messages and their receipts land.
+pub const TIMES_FULL_EVERY: u32 = 8;
+
+/// Where the next read of message times starts. `start`: just before the
+/// oldest row on screen; `read_from`: where the last whole-window read
+/// started; `tail`: the `after` of the last page read; `reads`: reads so far.
+/// The whole window when nothing was read yet, when older rows came on
+/// screen, or on every [`TIMES_FULL_EVERY`]th read; otherwise the last page.
+pub fn times_read_from(start: i64, read_from: Option<i64>, tail: i64, reads: u32) -> i64 {
+    match read_from {
+        Some(read) if start >= read && !reads.is_multiple_of(TIMES_FULL_EVERY) => tail.max(start),
+        _ => start,
+    }
+}

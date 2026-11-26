@@ -1,6 +1,7 @@
 use orkestr_v2_contracts::{MessageReceipt, MessageReceiptKind};
 use orkestr_v2_ui::message_time::{
     berlin_offset_minutes, full, parse, receipt_label, receipt_mark, short, times_after,
+    times_read_from, TIMES_FULL_EVERY,
 };
 
 #[test]
@@ -86,4 +87,25 @@ fn times_are_read_from_the_oldest_shown_row_not_from_the_start() {
     // A chat whose first message is on screen reads from the start.
     assert_eq!(times_after(Some(1)), Some(0));
     assert_eq!(times_after(Some(0)), Some(0));
+}
+
+#[test]
+fn later_reads_start_at_the_last_page_and_the_window_is_read_again_regularly() {
+    // First read: the whole window.
+    assert_eq!(times_read_from(2513, None, 0, 0), 2513);
+    // Next reads: from the last page on (where new messages land).
+    assert_eq!(times_read_from(2513, Some(2513), 3913, 1), 3913);
+    assert_eq!(
+        times_read_from(2513, Some(2513), 3913, TIMES_FULL_EVERY - 1),
+        3913
+    );
+    // Every TIMES_FULL_EVERY reads: the whole window again (late receipts).
+    assert_eq!(
+        times_read_from(2513, Some(2513), 3913, TIMES_FULL_EVERY),
+        2513
+    );
+    // Older rows came on screen: the whole window from the new start.
+    assert_eq!(times_read_from(2400, Some(2513), 3913, 3), 2400);
+    // The window moved past the last page: start at the window.
+    assert_eq!(times_read_from(4000, Some(2513), 3913, 3), 4000);
 }
