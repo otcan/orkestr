@@ -23,6 +23,9 @@ pub(crate) const MAX_PATH_LEN: usize = 2048;
 /// Largest answer that is fingerprinted; larger ones count as unreadable.
 const BODY_MAX: usize = 4 * 1024 * 1024;
 const VOLATILE: [&str; 3] = ["observed_at_ms", "queue_age_ms", "generated_at_ms"];
+/// The sidebar badges (conversation status) do not show process CPU and
+/// memory samples, so a new sample there is not a change either.
+const BADGE_SAMPLES: [&str; 1] = ["resources"];
 
 /// Read-only routes under `/api/v2/conversations/{id}` a channel may watch.
 const CONVERSATION_ROUTES: [&str; 14] = [
@@ -114,19 +117,19 @@ fn digest(bytes: &[u8]) -> String {
         .collect()
 }
 
-fn strip(value: &mut serde_json::Value) -> bool {
+fn strip(value: &mut serde_json::Value, keys: &[&str]) -> bool {
     match value {
         serde_json::Value::Object(map) => {
             let mut removed = false;
-            for key in VOLATILE {
-                removed |= map.remove(key).is_some();
+            for key in keys {
+                removed |= map.remove(*key).is_some();
             }
             for child in map.values_mut() {
-                removed |= strip(child);
+                removed |= strip(child, keys);
             }
             removed
         }
-        serde_json::Value::Array(items) => items.iter_mut().fold(false, |r, v| strip(v) | r),
+        serde_json::Value::Array(items) => items.iter_mut().fold(false, |r, v| strip(v, keys) | r),
         _ => false,
     }
 }
@@ -136,7 +139,11 @@ fn strip(value: &mut serde_json::Value) -> bool {
 pub(crate) fn fingerprint(path: &str, status: StatusCode, body: &[u8]) -> Answer {
     if status == StatusCode::OK && !path.starts_with("/api/v2/host-metrics") {
         if let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(body) {
-            if strip(&mut value) {
+            let mut keys = VOLATILE.to_vec();
+            if path.starts_with("/api/v2/conversation-status") {
+                keys.extend(BADGE_SAMPLES);
+            }
+            if strip(&mut value, &keys) {
                 let canonical = serde_json::to_vec(&value).unwrap_or_default();
                 return Answer {
                     fp: format!("~{}", digest(&canonical)),
@@ -258,6 +265,29 @@ mod tests {
         );
         assert!(a.exact && b.exact);
         assert_ne!(a.fp, b.fp);
+        // Badges ignore process samples; the execution status itself does not.
+        let badge = |cpu: u32| {
+            format!(
+                r#"{{"rows":[{{"execution":{{"body":{{"phase":"running","resources":{{"cpu_capacity_permille":{cpu},"observed_at_ms":1}}}}}}}}]}}"#
+            )
+        };
+        let busy = fingerprint(
+            "/api/v2/conversation-status?ids=x",
+            StatusCode::OK,
+            badge(10).as_bytes(),
+        );
+        let idle = fingerprint(
+            "/api/v2/conversation-status?ids=x",
+            StatusCode::OK,
+            badge(900).as_bytes(),
+        );
+        assert_eq!(busy, idle);
+        let id = "00000000-0000-4000-8000-000000000001";
+        let execution = format!("/api/v2/conversations/{id}/execution");
+        assert_ne!(
+            fingerprint(&execution, StatusCode::OK, badge(10).as_bytes()),
+            fingerprint(&execution, StatusCode::OK, badge(900).as_bytes())
+        );
         let failed = fingerprint("/api/v2/sidebar", StatusCode::UNAUTHORIZED, b"{}");
         assert!(failed.fp.starts_with("401:") && !failed.exact);
     }

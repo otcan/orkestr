@@ -23,8 +23,9 @@ const DEBOUNCE: Duration = Duration::from_millis(150);
 const SETTLE: Duration = Duration::from_secs(1);
 /// A path is read at most once per this multiple of its last read time...
 const COST_FACTOR: u32 = 40;
-/// ...but never more often than this, and never less often than the floor.
-const MIN_INTERVAL: Duration = Duration::from_millis(500);
+/// ...and at most every 2 s (the old fastest poll), and never less often
+/// than its floor. The first change after a quiet spell is read at once.
+const MIN_INTERVAL: Duration = Duration::from_secs(2);
 const MAX_INTERVAL: Duration = Duration::from_secs(15);
 /// Reads run one after another; a stuck read ends after this.
 const READ_TIMEOUT: Duration = Duration::from_secs(12);
@@ -328,11 +329,13 @@ mod tests {
         );
         watched.cost = Duration::from_secs(5);
         assert_eq!(watched.due(), read + MAX_INTERVAL);
-        // The settle read comes after the burst.
+        // The settle read comes after the burst, no sooner than the minimum.
         watched.cost = Duration::from_millis(5);
         watched.pending = None;
+        watched.settle = Some(read + MIN_INTERVAL + SETTLE);
+        assert_eq!(watched.due(), read + MIN_INTERVAL + SETTLE);
         watched.settle = Some(read + SETTLE);
-        assert_eq!(watched.due(), read + SETTLE);
+        assert_eq!(watched.due(), read + MIN_INTERVAL);
         // A short floor caps the interval.
         let mut v1 = Watched::new(Duration::from_secs(10));
         v1.read_at = Some(read);

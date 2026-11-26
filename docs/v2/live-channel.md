@@ -62,7 +62,8 @@ Each answer gets a fingerprint:
 - `~…`: a digest of a successful JSON answer with its read-time samples
   (`observed_at_ms`, `queue_age_ms`, `generated_at_ms`) left out, so a new
   read time alone is not a change (host metrics keep their sample time: a new
-  sample is a change);
+  sample is a change; the conversation status also leaves out process CPU and
+  memory samples, which its sidebar badges do not show);
 - `<status>:…`: a digest of an unsuccessful answer.
 
 ### When the server reads
@@ -73,7 +74,7 @@ liveness (`auth_sessions`, supervisor and run lease tables) are not counted.
 After a counted commit the channel re-reads its paths after 150 ms (one read
 per burst) and once more 1 s after the last change of the burst, so a commit
 that was not yet visible at the first read is not missed. A path is read at
-most once per 40× its last read time (between 0.5 s and 15 s), so an
+most once per 40× its last read time (between 2 s and 15 s), so an
 expensive read such as a 50-row conversation status runs at most every ~10 s
 however busy the store is. Answers that also depend on state outside the
 store are re-read periodically without a change: the sidebar, live map and
