@@ -80,7 +80,10 @@ however busy the store is. Answers that also depend on state outside the
 store are re-read periodically without a change: the sidebar, live map and
 V1 workers every 10 s, host metrics every 15–60 s, the conversation status
 every 30 s, quotas and sites every 60 s, everything else every 30 s. Reads
-run one at a time per channel and at most two at a time across channels.
+run one at a time per channel and at most two at a time across channels,
+and a channel spends at most 5 % of wall time on reads (after a burst of
+1.5 s), so a store that is written all the time cannot make a channel
+expensive.
 
 ## Frames
 

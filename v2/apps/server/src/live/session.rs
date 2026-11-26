@@ -32,6 +32,42 @@ const READ_TIMEOUT: Duration = Duration::from_secs(12);
 /// A change this recent when a path starts being watched may have happened
 /// between the browser's own read and the server's first one.
 const RECENT: Duration = Duration::from_secs(5);
+/// Read time a channel may spend per second of wall time (a store that is
+/// written all the time costs a channel at most 5 % of one core)...
+const BUDGET_RATE: f64 = 0.05;
+/// ...after a burst of at most this much (a first read of every path).
+const BUDGET_CAP: f64 = 1.5;
+
+/// Read time a channel may still spend, in seconds; negative: owed.
+struct Budget {
+    seconds: f64,
+    at: Instant,
+}
+
+impl Budget {
+    fn new() -> Self {
+        Self {
+            seconds: BUDGET_CAP,
+            at: Instant::now(),
+        }
+    }
+    fn refill(&mut self, now: Instant) {
+        let gained = now.saturating_duration_since(self.at).as_secs_f64() * BUDGET_RATE;
+        self.seconds = (self.seconds + gained).min(BUDGET_CAP);
+        self.at = now;
+    }
+    fn spend(&mut self, elapsed: Duration) {
+        self.seconds -= elapsed.as_secs_f64();
+    }
+    /// When reading may resume (now, unless time is owed).
+    fn ready_at(&self) -> Instant {
+        if self.seconds >= 0.0 {
+            self.at
+        } else {
+            self.at + Duration::from_secs_f64(-self.seconds / BUDGET_RATE)
+        }
+    }
+}
 
 struct Watched {
     answer: Option<Answer>,
@@ -80,6 +116,7 @@ pub(crate) struct Session {
     opening: Opening,
     router: Router,
     watched: BTreeMap<String, Watched>,
+    budget: Budget,
 }
 
 /// Why a session ended (the metric `orkestr_v2_live_closed_total` reason).
@@ -96,6 +133,7 @@ impl Session {
             opening,
             router,
             watched: BTreeMap::new(),
+            budget: Budget::new(),
         }
     }
 
@@ -143,7 +181,8 @@ impl Session {
     }
 
     fn next_due(&self) -> Option<Instant> {
-        self.watched.values().map(Watched::due).min()
+        let due = self.watched.values().map(Watched::due).min()?;
+        Some(due.max(self.budget.ready_at()))
     }
 
     /// Reads every due path; returns the new and the changed fingerprints.
@@ -157,7 +196,12 @@ impl Session {
             .collect();
         let (mut first, mut changed) = (Vec::new(), Vec::new());
         let metrics = &Observer::global().metrics.live;
+        self.budget.refill(now);
         for path in due {
+            // Out of read time: the rest stays due for the next round.
+            if self.budget.seconds < -0.001 {
+                break;
+            }
             let _permit = self.hub.reads.acquire().await;
             let started = Instant::now();
             let answer = tokio::time::timeout(
@@ -169,6 +213,7 @@ impl Session {
             .flatten();
             let elapsed = started.elapsed();
             metrics.read(elapsed);
+            self.budget.spend(elapsed);
             let Some(watched) = self.watched.get_mut(&path) else {
                 continue;
             };
@@ -304,6 +349,21 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_busy_store_costs_a_channel_a_bounded_share_of_read_time() {
+        let mut budget = Budget::new();
+        let start = budget.at;
+        assert_eq!(budget.ready_at(), start);
+        budget.spend(Duration::from_secs(2));
+        // 0.5 s owed at 5 % of wall time: ten seconds until the next read.
+        let wait = budget.ready_at().duration_since(start);
+        assert!(wait.abs_diff(Duration::from_secs(10)) < Duration::from_millis(1));
+        budget.refill(start + Duration::from_secs(10));
+        assert!(budget.seconds.abs() < 1e-9);
+        budget.refill(start + Duration::from_secs(1000));
+        assert!((budget.seconds - BUDGET_CAP).abs() < 1e-9);
+    }
 
     #[test]
     fn reads_are_debounced_rate_limited_and_floored() {
