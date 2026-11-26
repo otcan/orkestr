@@ -103,7 +103,8 @@ impl Store {
     /// results when they queue behind its source (`withdraw_superseded`).
     /// This settles one queued ahead of it the same way: withdrawn as
     /// `input_unavailable`, its input retired with the ordinary
-    /// `source_superseded` receipt, in one transaction.
+    /// `source_superseded` receipt, in one transaction. Its fence still
+    /// holds here, so the retirement does not require it to fail.
     ///
     /// Returns the withdrawn event, or None when the intent is not exactly
     /// such a queued, fenced result of a policy-matched conversation
@@ -133,13 +134,18 @@ impl Store {
         if changed != 1 {
             return Err(RuntimeStoreError::Fenced);
         }
-        crate::production_runtime::superseded_source::retire_superseded_queued_in(
+        // Withdrawn and retired together, or neither: a claimed, held or
+        // already run input keeps its queue intent (the transaction drops).
+        if !crate::production_runtime::superseded_source::retire_policy_superseded_queued_in(
             &mut tx,
             &owner,
             conversation,
             &event,
         )
-        .await?;
+        .await?
+        {
+            return Ok(None);
+        }
         tx.commit().await.map_err(db)?;
         Ok(Some(EventId(event.parse().map_err(db)?)))
     }

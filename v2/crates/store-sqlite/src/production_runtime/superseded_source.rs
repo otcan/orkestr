@@ -135,6 +135,31 @@ pub(crate) async fn retire_superseded_queued_in(
     conversation: &ConversationId,
     event: &str,
 ) -> Result<bool> {
+    retire_queued_in(tx, owner, conversation, event, true).await
+}
+
+/// ORK-837: a result a standing provider policy supersedes before its switch
+/// (`withdraw_policy_superseded_result_authenticated`). Its fence still
+/// holds; the policy no longer lets that provider run, and no session of the
+/// target provider issued its call. The same shape checks and the same
+/// receipt as above, without the fence-failure check. `Ok(false)` changes
+/// nothing.
+pub(crate) async fn retire_policy_superseded_queued_in(
+    tx: &mut SqliteConnection,
+    owner: &OwnerId,
+    conversation: &ConversationId,
+    event: &str,
+) -> Result<bool> {
+    retire_queued_in(tx, owner, conversation, event, false).await
+}
+
+async fn retire_queued_in(
+    tx: &mut SqliteConnection,
+    owner: &OwnerId,
+    conversation: &ConversationId,
+    event: &str,
+    require_fence_failure: bool,
+) -> Result<bool> {
     let row = sqlx::query("SELECT i.sequence,i.message_id,i.event_id FROM reasoning_inbox i JOIN messages m ON m.id=i.message_id JOIN source_admission_fences f ON f.message_id=m.id WHERE i.conversation_id=? AND i.event_id=? AND i.state='queued' AND i.claimant_session_id IS NULL AND i.admitted_run_id IS NULL AND i.admitted_fixture_run_id IS NULL AND m.owner_id=? AND m.conversation_id=i.conversation_id AND (NOT EXISTS(SELECT 1 FROM ordinary_input_holds h WHERE h.event_id=i.event_id) OR (EXISTS(SELECT 1 FROM production_held_inputs p JOIN production_stop_boundaries b ON b.event_id=p.boundary_event_id WHERE p.event_id=i.event_id AND p.conversation_id=i.conversation_id AND b.run_id=f.source_run_id) AND NOT EXISTS(SELECT 1 FROM owner_input_retirements x WHERE x.event_id=i.event_id) AND NOT EXISTS(SELECT 1 FROM dormant_timer_inputs t WHERE t.event_id=i.event_id))) AND NOT EXISTS(SELECT 1 FROM execution_window_inputs wi WHERE wi.event_id=i.event_id) AND NOT EXISTS(SELECT 1 FROM production_runs r WHERE r.event_id=i.event_id OR r.message_id=i.message_id) AND NOT EXISTS(SELECT 1 FROM fixture_runs r WHERE r.event_id=i.event_id OR r.message_id=i.message_id)")
         .bind(conversation.to_string()).bind(event).bind(owner.to_string())
         .fetch_optional(&mut *tx).await.map_err(db)?;
@@ -144,10 +169,12 @@ pub(crate) async fn retire_superseded_queued_in(
     let message = MessageId(Uuid::parse_str(row.get("message_id")).map_err(db)?);
     let event = EventId(Uuid::parse_str(row.get("event_id")).map_err(db)?);
     let sequence: i64 = row.get("sequence");
-    match crate::source_continuation::validate(&mut *tx, owner, conversation, &message).await {
-        Ok(()) => return Ok(false),
-        Err(crate::StoreError::ProviderGenerationMismatch) => {}
-        Err(_) => return Err(RuntimeStoreError::Unavailable),
+    if require_fence_failure {
+        match crate::source_continuation::validate(&mut *tx, owner, conversation, &message).await {
+            Ok(()) => return Ok(false),
+            Err(crate::StoreError::ProviderGenerationMismatch) => {}
+            Err(_) => return Err(RuntimeStoreError::Unavailable),
+        }
     }
     receipt_in(tx, owner, conversation, &message, &event, sequence).await?;
     let changed = sqlx::query("UPDATE reasoning_inbox SET state='retired' WHERE conversation_id=? AND sequence=? AND event_id=? AND state='queued' AND claimant_session_id IS NULL")
