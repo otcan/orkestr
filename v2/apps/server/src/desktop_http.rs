@@ -204,7 +204,7 @@ async fn acquire(
     }
     let broker = broker(&state)?;
     let store = &state.store;
-    let prepared = match store
+    let mut prepared = match store
         .prepare_desktop_acquire(caller.store(), &conversation, &slug)
         .await
     {
@@ -217,6 +217,8 @@ async fn acquire(
         }
         prepared => prepared.map_err(failure)?,
     };
+    // A system job's step leaves the chat no task (desk reservations still refuse it).
+    prepared.system_step = request.system_step;
     // A desk another chat holds between its steps, one handed to the owner or
     // one the owner is viewing: refused before V1 is asked.
     let reservation = store

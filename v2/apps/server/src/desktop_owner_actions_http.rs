@@ -360,7 +360,7 @@ async fn link(
     };
     let mut response = Json(
         json!({"url":url,"challenge_required":true,"expires_at":expires_at,
-        "viewer_until_ms":viewer_until_ms}),
+        "viewer_until_ms":viewer_until_ms,"viewer_recorded":viewer_until_ms.is_some()}),
     )
     .into_response();
     response

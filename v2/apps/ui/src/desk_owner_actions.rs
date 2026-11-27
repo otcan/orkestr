@@ -2,7 +2,10 @@ use crate::transport::Failure;
 use dioxus::prelude::*;
 use orkestr_v2_contracts::{stop_needs_confirmation, DesktopResource, DesktopRuntime};
 use orkestr_v2_ui::{
-    desk_presentation::{link_grant, shown_holder, shown_lease_state, stop_outcome, stop_warning},
+    desk_presentation::{
+        link_grant, shown_holder, shown_lease_state, stop_outcome, stop_warning,
+        viewer_not_recorded, VIEW_NOT_RECORDED,
+    },
     session_scope::SessionScope,
 };
 use serde_json::{json, Value};
@@ -163,10 +166,15 @@ fn send(
                 onchanged.call(());
             }
             _ => match value["url"].as_str() {
-                Some(url) => link.set(Some(DeskLink {
-                    url: url.to_owned(),
-                    expires_at: value["expires_at"].as_str().map(str::to_owned),
-                })),
+                Some(url) => {
+                    link.set(Some(DeskLink {
+                        url: url.to_owned(),
+                        expires_at: value["expires_at"].as_str().map(str::to_owned),
+                    }));
+                    if viewer_not_recorded(&value) {
+                        say(notice, VIEW_NOT_RECORDED, false);
+                    }
+                }
                 None => say(
                     notice,
                     "No link was returned; refresh and try again.",

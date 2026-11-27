@@ -3,7 +3,7 @@ use orkestr_v2_contracts::{DesktopLeaseGranted, DesktopResource, DesktopResource
 use orkestr_v2_ui::{
     desk_presentation::{
         free_desk_help, held_by, reservation_lines, shown_holder, shown_lease_state, Availability,
-        DeskSharing,
+        DeskSharing, END_VIEWING_HELP,
     },
     host_metrics::clock,
     session_scope::SessionScope,
@@ -72,7 +72,7 @@ pub fn DesktopResourceRow(
                 td { class: "desk-actions-cell", role: "cell", "data-label": "Actions",
                     div { class: "desk-action-bar",
                     crate::desk_owner_actions::DeskOwnerButtons { actions: owner_actions, desk: desk.clone(), runtime_state: runtime_state.clone(), csrf: csrf.clone(), session_scope, onexpired, onchanged }
-                    if desk.reserved_in_v2() {
+                    if desk.reservation.is_some() {
                         button { r#type: "button", class: "desk-free", title: free_desk_help(&desk), disabled: busy(), onclick: {
                             let (slug, csrf) = (desk.slug.clone(), csrf.clone());
                             move |_| {
@@ -91,6 +91,27 @@ pub fn DesktopResourceRow(
                                 });
                             }
                         }, "Free desk" }
+                    }
+                    if desk.owner_viewer.is_some() {
+                        button { r#type: "button", class: "desk-free", title: END_VIEWING_HELP, disabled: busy(), onclick: {
+                            let (slug, csrf) = (desk.slug.clone(), csrf.clone());
+                            move |_| {
+                                if busy() {return;}
+                                busy.set(true);status.set(String::new());
+                                let (slug, csrf) = (slug.clone(), csrf.clone());
+                                spawn(async move {
+                                    let result = crate::transport::request::<Value>("DELETE", &format!("/api/v2/desktops/{slug}/viewing"), Value::Null, &csrf, "").await;
+                                    if !session_scope.read().is_current(owner) {return;}
+                                    busy.set(false);
+                                    match result {
+                                        Ok(value) if value["link_revoked"] == false => {status.set("Viewing ended, but the desk link could not be revoked; it works until it expires.".into());onchanged.call(());}
+                                        Ok(_) => {status.set("Viewing ended. The desk link no longer works; chats may take this desk again.".into());onchanged.call(());}
+                                        Err(error) if error.status == 401 => onexpired.call(()),
+                                        Err(error) => status.set(error.message),
+                                    }
+                                });
+                            }
+                        }, "End viewing" }
                     }
                     if !bindings.is_empty() {
                         button { r#type: "button", class: "desk-chat-toggle", title: DeskSharing::reserve_title(shared),

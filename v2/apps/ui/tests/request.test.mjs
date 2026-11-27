@@ -347,14 +347,15 @@ test('owner desk actions use only the fixed verbs with cookie and CSRF',async()=
         await assert.rejects(execute({recv:async()=>({...base,method,path})},()=>assert.fail('fetch must not run')),/Invalid API path/);
 });
 
-test('the owner frees a desk with one fixed DELETE and nothing else',async()=>{
-    const path='/api/v2/desktops/desk-a/reservation';
-    await execute({recv:async()=>({...base,method:'DELETE',path,csrf:'synthetic-csrf',body:null})},async(actual,options)=>{
-        assert.equal(actual,path);assert.equal(options.method,'DELETE');assert.equal(options.credentials,'same-origin');
-        assert.equal(options.headers['x-orkestr-csrf'],'synthetic-csrf');assert.equal(options.body,undefined);
-        return Response.json({desk:'desk-a',ended:1});
-    });
-    for(const [method,path] of [['POST','/api/v2/desktops/desk-a/reservation'],['GET','/api/v2/desktops/desk-a/reservation'],['DELETE','/api/v2/desktops/../reservation'],['DELETE','/api/v2/desktops/desk-a/reservation?all=true'],['DELETE','/api/v2/desktops/UPPER/reservation'],['DELETE','/api/v2/conversations/00000000-0000-4000-8000-000000000001/desktops/desk-a/reservation']])
+test('the owner frees a desk or ends viewing it with fixed DELETEs and nothing else',async()=>{
+    for(const path of ['/api/v2/desktops/desk-a/reservation','/api/v2/desktops/desk-a/viewing']) {
+        await execute({recv:async()=>({...base,method:'DELETE',path,csrf:'synthetic-csrf',body:null})},async(actual,options)=>{
+            assert.equal(actual,path);assert.equal(options.method,'DELETE');assert.equal(options.credentials,'same-origin');
+            assert.equal(options.headers['x-orkestr-csrf'],'synthetic-csrf');assert.equal(options.body,undefined);
+            return Response.json({desk:'desk-a',ended:1});
+        });
+    }
+    for(const [method,path] of [['POST','/api/v2/desktops/desk-a/reservation'],['GET','/api/v2/desktops/desk-a/reservation'],['POST','/api/v2/desktops/desk-a/viewing'],['DELETE','/api/v2/desktops/../reservation'],['DELETE','/api/v2/desktops/desk-a/reservation?all=true'],['DELETE','/api/v2/desktops/desk-a/viewing/extra'],['DELETE','/api/v2/desktops/UPPER/reservation'],['DELETE','/api/v2/conversations/00000000-0000-4000-8000-000000000001/desktops/desk-a/reservation']])
         await assert.rejects(execute({recv:async()=>({...base,method,path})},()=>assert.fail('fetch must not run')),/Invalid API path/);
 });
 

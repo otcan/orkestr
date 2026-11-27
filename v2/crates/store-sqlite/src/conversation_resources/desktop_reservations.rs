@@ -14,7 +14,8 @@ use orkestr_v2_contracts::*;
 use sqlx::{sqlite::SqliteRow, Row, Sqlite, Transaction};
 
 pub(super) const SELECT: &str = "SELECT r.desktop_slug,r.kind,r.conversation_id,r.since_ms,r.until_ms,
- coalesce(d.name,'chat-'||substr(r.conversation_id,1,8)) AS chat
+ r.reserved_until_ms,
+ CASE WHEN r.conversation_id IS NULL THEN NULL ELSE coalesce(d.name,'another chat') END AS chat
  FROM desktop_reservations r
  LEFT JOIN conversation_directory d ON d.conversation_id=r.conversation_id AND d.owner_id=r.owner_id";
 /// Desks a chat leased this recently are free-desk candidates.
@@ -54,14 +55,21 @@ pub(super) fn view_of(
         .map(|c| uuid::Uuid::parse_str(&c).map(ConversationId))
         .transpose()
         .map_err(unavailable)?;
+    let mine = id.is_some() && id.as_ref() == me;
     Ok(DesktopReservationView {
         desk: row.get("desktop_slug"),
         kind,
         chat: row.get("chat"),
-        mine: id.is_some() && id.as_ref() == me,
+        mine,
         conversation_id: if with_ids { id } else { None },
         since_ms: row.get("since_ms"),
         until_ms: row.get("until_ms"),
+        // The end of an explicit reserve is the holding chat's (and the owner's) to see.
+        reserved_until_ms: if mine || with_ids {
+            row.get("reserved_until_ms")
+        } else {
+            None
+        },
     })
 }
 
@@ -108,20 +116,29 @@ pub(super) async fn sweep(
     Ok(())
 }
 
+/// A claim to write: the chat, its kind and its times.
+pub(super) struct Claim<'a> {
+    pub conversation: &'a ConversationId,
+    pub kind: DesktopReservationKind,
+    pub since_ms: i64,
+    pub until_ms: i64,
+    /// The end of an explicit `reserve` (a task only).
+    pub reserved_until_ms: Option<i64>,
+}
+
 /// Replaces the desk's claim. Callers have checked, in this transaction, that
 /// the claim it replaces is none or the chat's own.
-#[allow(clippy::too_many_arguments)]
 pub(super) async fn write_claim(
     tx: &mut Transaction<'_, Sqlite>,
     owner: &OwnerId,
     slug: &str,
-    conversation: &ConversationId,
-    kind: DesktopReservationKind,
-    since_ms: i64,
-    until_ms: i64,
+    claim: Claim<'_>,
     now: i64,
 ) -> Result<()> {
-    if kind == DesktopReservationKind::OwnerViewer || until_ms <= since_ms {
+    if claim.kind == DesktopReservationKind::OwnerViewer
+        || claim.until_ms <= claim.since_ms
+        || (claim.reserved_until_ms.is_some() && claim.kind != DesktopReservationKind::Task)
+    {
         return Err(ResourceError::Invalid);
     }
     sqlx::query("DELETE FROM desktop_reservations WHERE owner_id=? AND desktop_slug=? AND kind IN ('task','owner_handoff')")
@@ -130,14 +147,37 @@ pub(super) async fn write_claim(
         .execute(&mut **tx)
         .await
         .map_err(unavailable)?;
-    sqlx::query("INSERT INTO desktop_reservations(owner_id,desktop_slug,kind,conversation_id,since_ms,until_ms,updated_at_ms) VALUES(?,?,?,?,?,?,?)")
+    sqlx::query("INSERT INTO desktop_reservations(owner_id,desktop_slug,kind,conversation_id,since_ms,until_ms,reserved_until_ms,updated_at_ms) VALUES(?,?,?,?,?,?,?,?)")
         .bind(owner.to_string())
         .bind(slug)
-        .bind(kind.as_str())
-        .bind(conversation.to_string())
-        .bind(since_ms)
+        .bind(claim.kind.as_str())
+        .bind(claim.conversation.to_string())
+        .bind(claim.since_ms)
+        .bind(claim.until_ms)
+        .bind(claim.reserved_until_ms)
+        .bind(now)
+        .execute(&mut **tx)
+        .await
+        .map_err(unavailable)?;
+    Ok(())
+}
+
+/// Moves the end of the chat's own task (nothing else).
+async fn set_task_end(
+    tx: &mut Transaction<'_, Sqlite>,
+    owner: &OwnerId,
+    slug: &str,
+    conversation: &ConversationId,
+    until_ms: i64,
+    now: i64,
+) -> Result<()> {
+    sqlx::query("UPDATE desktop_reservations SET until_ms=?,updated_at_ms=? WHERE owner_id=? AND desktop_slug=? AND conversation_id=? AND kind='task' AND since_ms<?")
         .bind(until_ms)
         .bind(now)
+        .bind(owner.to_string())
+        .bind(slug)
+        .bind(conversation.to_string())
+        .bind(until_ms)
         .execute(&mut **tx)
         .await
         .map_err(unavailable)?;
@@ -147,25 +187,43 @@ pub(super) async fn write_claim(
 /// In the transaction that records an acquire: refuses the desk when a
 /// reservation holds it against the chat (`desk_busy`,
 /// `desk_handed_to_owner`), else makes or extends the chat's task to
-/// [`DESK_TASK_GRACE_MS`] past the lease's end.
+/// [`DESK_TASK_GRACE_MS`] past the lease's end (at most
+/// [`DESK_LEASE_TASK_MAX_MS`] ahead). A system step makes or extends none.
 pub(crate) async fn guard_and_touch(
     tx: &mut Transaction<'_, Sqlite>,
     owner: &OwnerId,
     conversation: &ConversationId,
     slug: &str,
-    now: i64,
-    lease_end_ms: i64,
+    lease: (i64, i64),
+    system_step: bool,
 ) -> Result<()> {
+    let (now, lease_end_ms) = lease;
     sweep(tx, owner, now).await?;
     let found = desk_reservations(tx, owner, slug, conversation, now).await?;
     let (verdict, _) = desk_verdict(found.claim.as_ref(), found.viewer.as_ref());
     if verdict != DeskVerdict::Allowed {
         return Err(ResourceError::Conflict(verdict.code()));
     }
-    touch_found(tx, owner, conversation, slug, &found, now, lease_end_ms).await
+    if system_step {
+        return Ok(());
+    }
+    let Some((since_ms, until_ms)) = touched_task(found.claim.as_ref(), now, lease_end_ms) else {
+        return Ok(());
+    };
+    let claim = Claim {
+        conversation,
+        kind: DesktopReservationKind::Task,
+        since_ms,
+        until_ms,
+        // Extending keeps the end of an explicit reserve.
+        reserved_until_ms: found.claim.as_ref().and_then(|c| c.reserved_until_ms),
+    };
+    write_claim(tx, owner, slug, claim, now).await
 }
 
-/// After a heartbeat that extended the chat's lease: its task follows.
+/// After a heartbeat that extended the chat's lease to `lease_end_ms`: the
+/// chat's own existing task follows. Never a new task, and nothing while the
+/// owner views the desk.
 pub(crate) async fn touch(
     tx: &mut Transaction<'_, Sqlite>,
     owner: &OwnerId,
@@ -176,33 +234,31 @@ pub(crate) async fn touch(
 ) -> Result<()> {
     sweep(tx, owner, now).await?;
     let found = desk_reservations(tx, owner, slug, conversation, now).await?;
-    touch_found(tx, owner, conversation, slug, &found, now, lease_end_ms).await
+    match extended_task(
+        found.claim.as_ref(),
+        found.viewer.as_ref(),
+        now,
+        lease_end_ms,
+    ) {
+        Some(until) => set_task_end(tx, owner, slug, conversation, until, now).await,
+        None => Ok(()),
+    }
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn touch_found(
+/// After the chat's step on the desk ended (released or lost): its own task
+/// ends [`DESK_TASK_GRACE_MS`] from now, or at its explicit reserve's end if
+/// that is later; never later than before.
+pub(crate) async fn release_touch(
     tx: &mut Transaction<'_, Sqlite>,
     owner: &OwnerId,
     conversation: &ConversationId,
     slug: &str,
-    found: &DeskReservations,
     now: i64,
-    lease_end_ms: i64,
 ) -> Result<()> {
-    match touched_task(found.claim.as_ref(), now, lease_end_ms) {
-        Some((since, until)) => {
-            write_claim(
-                tx,
-                owner,
-                slug,
-                conversation,
-                DesktopReservationKind::Task,
-                since,
-                until,
-                now,
-            )
-            .await
-        }
+    sweep(tx, owner, now).await?;
+    let found = desk_reservations(tx, owner, slug, conversation, now).await?;
+    match released_task(found.claim.as_ref(), now) {
+        Some(until) => set_task_end(tx, owner, slug, conversation, until, now).await,
         None => Ok(()),
     }
 }
@@ -264,18 +320,16 @@ impl Store {
                 kind,
                 since_ms,
                 until_ms,
+                reserved_until_ms,
             } => {
-                write_claim(
-                    &mut tx,
-                    &owner,
-                    slug,
+                let claim = Claim {
                     conversation,
                     kind,
                     since_ms,
                     until_ms,
-                    now,
-                )
-                .await?
+                    reserved_until_ms,
+                };
+                write_claim(&mut tx, &owner, slug, claim, now).await?
             }
         }
         let after = desk_reservations(&mut tx, &owner, slug, conversation, now).await?;

@@ -28,6 +28,7 @@ pub(crate) fn router() -> Router<AppState> {
         )
         .route(&format!("{base}/desktop-reservations"), get(list))
         .route("/api/v2/desktops/{slug}/reservation", delete(clear))
+        .route("/api/v2/desktops/{slug}/viewing", delete(end_viewing))
 }
 
 #[derive(serde::Deserialize)]
@@ -216,7 +217,8 @@ async fn list(
     Ok(Json(value).into_response())
 }
 
-/// The owner frees a desk: its claim and viewing window end now. Lease rows
+/// The owner frees a desk: the chat's claim on it (a task or a handoff) ends
+/// now. The owner's own viewing window stays (see `end_viewing`); lease rows
 /// and V1 are untouched.
 async fn clear(
     State(state): State<AppState>,
@@ -235,10 +237,48 @@ async fn clear(
     Ok(Json(json!({"desk": slug, "ended": ended})).into_response())
 }
 
+/// The owner ends viewing a desk: the viewing window ends now and the V1 link
+/// it recorded is revoked, so chats may take the desk again and the link no
+/// longer opens it. `link_revoked` is null when no link was recorded.
+async fn end_viewing(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(slug): Path<String>,
+) -> Result<Response, Error> {
+    let (owner, credential) = owner_credential(&state, &headers).await?;
+    if !desktop_slug_valid(&slug) {
+        return Err(invalid());
+    }
+    let (ended, share) = state
+        .store
+        .end_owner_viewer(&credential, &owner, &slug)
+        .await
+        .map_err(failure)?;
+    let link_revoked = match (share, state.desktop_broker.as_deref()) {
+        (Some(id), Some(broker)) => Some(matches!(
+            broker
+                .write_within(
+                    std::time::Duration::from_secs(8),
+                    "POST",
+                    &format!("/api/desktop-shares/{id}/revoke"),
+                    json!({"reason": "owner_ended_viewing"}),
+                    V1_BODY_CAP,
+                )
+                .await,
+            // Already gone at V1 counts as revoked.
+            Ok((200 | 201 | 404, _))
+        )),
+        (Some(_), None) => Some(false),
+        (None, _) => None,
+    };
+    Ok(Json(json!({"desk": slug, "ended": ended, "link_revoked": link_revoked})).into_response())
+}
+
 /// The owner opened a viewing link: until it expires only the chat holding
 /// the desk's task keeps working there (opened from a chat, `watching`, that
 /// chat unless another one holds the desk). The link has been minted already,
-/// so a failure here never withholds it; the answer says whether it was kept.
+/// so a failure here never withholds it: the answer's `viewer_recorded` is
+/// false and the page warns that chats were not kept off the desk.
 pub(crate) async fn record_owner_viewer(
     state: &AppState,
     owner: &OwnerId,
@@ -247,15 +287,19 @@ pub(crate) async fn record_owner_viewer(
     link: &Value,
     watching: Option<&ConversationId>,
 ) -> Option<i64> {
-    let expires = link
-        .get("share")
+    let share = link.get("share");
+    let expires = share
         .and_then(|share| share.get("expiresAt"))
         .or_else(|| link.get("expiresAt"))
         .and_then(Value::as_str)
         .and_then(crate::live_map::timestamp_ms);
+    let share_id = share
+        .and_then(|share| share.get("id"))
+        .or_else(|| link.get("shareId"))
+        .and_then(Value::as_str);
     state
         .store
-        .record_owner_viewer(credential, owner, slug, expires, watching)
+        .record_owner_viewer(credential, owner, slug, (expires, share_id), watching)
         .await
         .ok()
         .map(|window| window.until_ms)

@@ -4,19 +4,24 @@
 //! chat across its steps, for the owner while a chat has handed it over, and
 //! away from other chats while the owner views it:
 //!
-//! - `task`: a chat's multi-step work. Every acquire of the chat (and every
-//!   heartbeat that extends its lease) makes or extends its task to
-//!   [`DESK_TASK_GRACE_MS`] past the lease's expiry. `reserve` keeps it longer
+//! - `task`: a chat's multi-step work. Every acquire of the chat makes or
+//!   extends its task to [`DESK_TASK_GRACE_MS`] past the lease's expiry (at
+//!   most [`DESK_LEASE_TASK_MAX_MS`] ahead); a heartbeat that extends the
+//!   lease extends an existing task only, never while the owner views the
+//!   desk; the release cuts it back to the grace. `reserve` keeps it longer
 //!   (at most [`DESK_RESERVE_MAX_MS`]), `unreserve` ends it. Other chats are
-//!   refused (`desk_busy`).
+//!   refused (`desk_busy`). A system step (`system_step` on the acquire) is
+//!   refused like any step but makes or extends no task.
 //! - `owner_handoff`: a chat handed the desk to the owner, for example with a
 //!   sign-in link. No chat takes the desk, the handing chat included
 //!   (`desk_handed_to_owner`), until that chat's `handback` (the desk then
 //!   stays its task for the grace) or the end time. It does not end when the
 //!   owner disconnects: the owner may come back.
 //! - `owner_viewer`: the owner opened a viewing link to the desk. Until the
-//!   link expires only the chat holding the desk's task keeps working (the
-//!   owner usually watches that chat); every other chat is refused.
+//!   link expires, or the owner ends the viewing (which revokes the link),
+//!   only the chat holding the desk's task keeps working (the owner usually
+//!   watches that chat); every other chat is refused and can neither reserve
+//!   nor hand over the desk.
 //!
 //! A desk has at most one claim (`task` or `owner_handoff`) and at most one
 //! `owner_viewer` window. Expiry is a timestamp: nothing has to end an old
@@ -29,6 +34,9 @@ use serde::{Deserialize, Serialize};
 pub const DESK_TASK_GRACE_MS: i64 = 10 * 60_000;
 pub const DESK_RESERVE_DEFAULT_MS: i64 = 30 * 60_000;
 pub const DESK_RESERVE_MAX_MS: i64 = 120 * 60_000;
+/// A task made by leases never reaches further ahead than this (a lease may
+/// last 8 hours).
+pub const DESK_LEASE_TASK_MAX_MS: i64 = 120 * 60_000;
 pub const DESK_HANDOFF_DEFAULT_MS: i64 = 30 * 60_000;
 pub const DESK_HANDOFF_MAX_MS: i64 = 120 * 60_000;
 /// An owner link whose expiry V1 did not state lasts V1's default lifetime.
@@ -65,8 +73,8 @@ impl DesktopReservationKind {
 
 /// A reservation as the caller sees it. A chat never sees another chat's
 /// conversation id; only the owner's inventory carries `conversation_id`.
+/// Read tolerantly: a page loaded before a newer server keeps working.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct DesktopReservationView {
     pub desk: String,
     pub kind: DesktopReservationKind,
@@ -78,6 +86,9 @@ pub struct DesktopReservationView {
     pub conversation_id: Option<ConversationId>,
     pub since_ms: i64,
     pub until_ms: i64,
+    /// The end of the chat's own explicit `reserve` (a task only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reserved_until_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -170,6 +181,8 @@ pub enum ClaimChange {
         kind: DesktopReservationKind,
         since_ms: i64,
         until_ms: i64,
+        /// The end of an explicit `reserve` (a task only).
+        reserved_until_ms: Option<i64>,
     },
 }
 
@@ -197,14 +210,21 @@ pub fn reservation_change(
             if viewer.is_some() && mine.is_none() {
                 return Err("desk_busy");
             }
+            let until = (now + ms(DESK_RESERVE_DEFAULT_MS)).max(mine.map_or(0, |c| c.until_ms));
             Ok(ClaimChange::Write {
                 kind: DesktopReservationKind::Task,
                 since_ms: mine.map_or(now, |c| c.since_ms),
-                until_ms: (now + ms(DESK_RESERVE_DEFAULT_MS)).max(mine.map_or(0, |c| c.until_ms)),
+                until_ms: until,
+                reserved_until_ms: Some(until),
             })
         }
         DesktopReservationOp::Handoff => {
             if other {
+                return Err("desk_busy");
+            }
+            // Nor is a handoff: its handback would make a chat that does not
+            // hold the desk the holder while the owner views it.
+            if viewer.is_some() && mine.is_none() {
                 return Err("desk_busy");
             }
             let until = match request.until_ms {
@@ -218,6 +238,7 @@ pub fn reservation_change(
                 kind: DesktopReservationKind::OwnerHandoff,
                 since_ms: now,
                 until_ms: until,
+                reserved_until_ms: None,
             })
         }
         DesktopReservationOp::Handback => match mine {
@@ -225,6 +246,7 @@ pub fn reservation_change(
                 kind: DesktopReservationKind::Task,
                 since_ms: now,
                 until_ms: now + DESK_TASK_GRACE_MS,
+                reserved_until_ms: None,
             }),
             _ => Err("no_handoff_of_this_chat"),
         },
@@ -236,15 +258,22 @@ pub fn reservation_change(
     }
 }
 
-/// The calling chat's task after a step whose lease ends at `lease_end_ms`
-/// (`since_ms`, `until_ms`), or `None` to leave the claim as it is (another
-/// chat's claim, or the chat's own handoff).
+/// How far a lease ending at `lease_end_ms` carries the chat's task: the
+/// grace past it, never more than [`DESK_LEASE_TASK_MAX_MS`] ahead.
+fn lease_task_end(now: i64, lease_end_ms: i64) -> i64 {
+    (lease_end_ms.max(now) + DESK_TASK_GRACE_MS).min(now + DESK_LEASE_TASK_MAX_MS)
+}
+
+/// The calling chat's task after an acquire whose lease ends at
+/// `lease_end_ms` (`since_ms`, `until_ms`): made, or extended (a longer end is
+/// kept). `None` leaves the claim as it is (another chat's claim, or the
+/// chat's own handoff).
 pub fn touched_task(
     claim: Option<&DesktopReservationView>,
     now: i64,
     lease_end_ms: i64,
 ) -> Option<(i64, i64)> {
-    let until = lease_end_ms.max(now) + DESK_TASK_GRACE_MS;
+    let until = lease_task_end(now, lease_end_ms);
     match claim {
         None => Some((now, until)),
         Some(c) if c.mine && c.kind == DesktopReservationKind::Task => {
@@ -254,10 +283,42 @@ pub fn touched_task(
     }
 }
 
+/// After a heartbeat that extended the lease to `lease_end_ms`: the chat's
+/// own existing task, extended. Never a new task, and nothing while the owner
+/// views the desk.
+pub fn extended_task(
+    claim: Option<&DesktopReservationView>,
+    viewer: Option<&DesktopReservationView>,
+    now: i64,
+    lease_end_ms: i64,
+) -> Option<i64> {
+    match claim {
+        Some(c) if viewer.is_none() && c.mine && c.kind == DesktopReservationKind::Task => {
+            let until = lease_task_end(now, lease_end_ms).max(c.until_ms);
+            (until != c.until_ms).then_some(until)
+        }
+        _ => None,
+    }
+}
+
+/// After the release of a step: the chat's own task ends [`DESK_TASK_GRACE_MS`]
+/// from now, or at its explicit `reserve`'s end if that is later. Never
+/// longer than it was; `None` leaves it as it is.
+pub fn released_task(claim: Option<&DesktopReservationView>, now: i64) -> Option<i64> {
+    match claim {
+        Some(c) if c.mine && c.kind == DesktopReservationKind::Task => {
+            let until = (now + DESK_TASK_GRACE_MS)
+                .max(c.reserved_until_ms.unwrap_or(0))
+                .min(c.until_ms);
+            (until != c.until_ms && until > c.since_ms).then_some(until)
+        }
+        _ => None,
+    }
+}
+
 /// The desk as the calling chat sees it (`GET …/reservation`, and the result
 /// of a change).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct DesktopReservationState {
     pub schema_version: u32,
     pub desk: String,
@@ -276,7 +337,6 @@ pub struct DesktopReservationState {
 
 /// Every reservation of the owner that still holds, as the caller sees it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct DesktopReservationList {
     pub schema_version: u32,
     pub reservations: Vec<DesktopReservationView>,

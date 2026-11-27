@@ -185,9 +185,11 @@ async fn open(
         Some(&watching),
     )
     .await;
-    let mut response =
-        Json(json!({"url":url,"challenge_required":true,"viewer_until_ms":viewer_until_ms}))
-            .into_response();
+    let mut response = Json(
+        json!({"url":url,"challenge_required":true,"viewer_until_ms":viewer_until_ms,
+            "viewer_recorded":viewer_until_ms.is_some()}),
+    )
+    .into_response();
     response
         .headers_mut()
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));

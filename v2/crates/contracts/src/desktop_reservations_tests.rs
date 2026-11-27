@@ -17,6 +17,7 @@ fn view(kind: DesktopReservationKind, mine: bool, until_ms: i64) -> DesktopReser
         conversation_id: None,
         since_ms: NOW - MIN,
         until_ms,
+        reserved_until_ms: None,
     }
 }
 fn request(
@@ -91,12 +92,22 @@ fn reserve_handoff_handback_and_unreserve_change_only_the_chats_own_claim() {
             kind,
             since_ms,
             until_ms,
+            reserved_until_ms: None,
+        })
+    };
+    // An explicit reserve also records its own end.
+    let reserved = |since_ms, until_ms| {
+        Ok(ClaimChange::Write {
+            kind: Task,
+            since_ms,
+            until_ms,
+            reserved_until_ms: Some(until_ms),
         })
     };
     // reserve: default 30 minutes; a longer own end is kept; another chat or a handoff refuses.
     assert_eq!(
         change(request(Reserve, None, None), None, false),
-        write(Task, NOW, NOW + 30 * MIN)
+        reserved(NOW, NOW + 30 * MIN)
     );
     assert_eq!(
         change(
@@ -104,7 +115,7 @@ fn reserve_handoff_handback_and_unreserve_change_only_the_chats_own_claim() {
             Some(view(Task, true, NOW + 5 * MIN)),
             false
         ),
-        write(Task, NOW - MIN, NOW + 120 * MIN)
+        reserved(NOW - MIN, NOW + 120 * MIN)
     );
     assert_eq!(
         change(
@@ -112,7 +123,7 @@ fn reserve_handoff_handback_and_unreserve_change_only_the_chats_own_claim() {
             Some(view(Task, true, NOW + 50 * MIN)),
             false
         ),
-        write(Task, NOW - MIN, NOW + 50 * MIN)
+        reserved(NOW - MIN, NOW + 50 * MIN)
     );
     assert_eq!(
         change(
@@ -141,7 +152,7 @@ fn reserve_handoff_handback_and_unreserve_change_only_the_chats_own_claim() {
             Some(view(Task, true, NOW + MIN)),
             true
         ),
-        write(Task, NOW - MIN, NOW + 20 * MIN)
+        reserved(NOW - MIN, NOW + 20 * MIN)
     );
     // handoff: a link's end (capped), or minutes; the own task becomes the handoff.
     assert_eq!(
@@ -151,6 +162,12 @@ fn reserve_handoff_handback_and_unreserve_change_only_the_chats_own_claim() {
             true
         ),
         write(OwnerHandoff, NOW, NOW + 30 * MIN)
+    );
+    // While the owner views a desk a chat that does not hold it cannot hand
+    // it over either: its handback would make it the holder.
+    assert_eq!(
+        change(request(Handoff, None, None), None, true),
+        Err("desk_busy")
     );
     assert_eq!(
         change(request(Handoff, None, Some(NOW + 600 * MIN)), None, false),
@@ -241,6 +258,61 @@ fn requests_are_bounded() {
 }
 
 #[test]
+fn a_heartbeat_only_extends_an_existing_task_and_a_release_cuts_it_back() {
+    let lease_end = NOW + 30 * MIN;
+    let own = view(Task, true, NOW + 5 * MIN);
+    let viewer = view(OwnerViewer, false, NOW + 60 * MIN);
+    assert_eq!(
+        extended_task(Some(&own), None, NOW, lease_end),
+        Some(lease_end + DESK_TASK_GRACE_MS)
+    );
+    // Never a new task, never another chat's or a handoff, never while the owner views.
+    assert_eq!(extended_task(None, None, NOW, lease_end), None);
+    assert_eq!(
+        extended_task(Some(&view(Task, false, NOW + MIN)), None, NOW, lease_end),
+        None
+    );
+    assert_eq!(
+        extended_task(
+            Some(&view(OwnerHandoff, true, NOW + MIN)),
+            None,
+            NOW,
+            lease_end
+        ),
+        None
+    );
+    assert_eq!(
+        extended_task(Some(&own), Some(&viewer), NOW, lease_end),
+        None
+    );
+    // At most two hours ahead, whatever the lease (up to 8 hours).
+    assert_eq!(
+        extended_task(Some(&own), None, NOW, NOW + 8 * 60 * MIN),
+        Some(NOW + DESK_LEASE_TASK_MAX_MS)
+    );
+    // Release: 10 minutes from now, or the explicit reserve's end, never longer.
+    let lease_made = view(Task, true, NOW + 12 * MIN);
+    assert_eq!(
+        released_task(Some(&lease_made), NOW),
+        Some(NOW + DESK_TASK_GRACE_MS)
+    );
+    let mut reserved = view(Task, true, NOW + 90 * MIN);
+    reserved.reserved_until_ms = Some(NOW + 90 * MIN);
+    assert_eq!(released_task(Some(&reserved), NOW), None);
+    reserved.until_ms = NOW + 100 * MIN;
+    assert_eq!(released_task(Some(&reserved), NOW), Some(NOW + 90 * MIN));
+    assert_eq!(
+        released_task(Some(&view(Task, true, NOW + 3 * MIN)), NOW),
+        None
+    );
+    assert_eq!(
+        released_task(Some(&view(Task, false, NOW + 12 * MIN)), NOW),
+        None
+    );
+    assert_eq!(released_task(None, NOW), None);
+}
+
+#[test]
 fn every_step_extends_the_chats_task_past_its_lease_and_never_touches_other_claims() {
     let lease_end = NOW + 2 * MIN;
     assert_eq!(
@@ -263,6 +335,11 @@ fn every_step_extends_the_chats_task_past_its_lease_and_never_touches_other_clai
     assert_eq!(
         touched_task(Some(&view(OwnerHandoff, true, NOW + MIN)), NOW, lease_end),
         None
+    );
+    // An 8-hour lease reserves the desk at most two hours ahead.
+    assert_eq!(
+        touched_task(None, NOW, NOW + 8 * 60 * MIN),
+        Some((NOW, NOW + DESK_LEASE_TASK_MAX_MS))
     );
 }
 

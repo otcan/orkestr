@@ -84,6 +84,34 @@ async fn step(case: &Case, chat: &Chat, desk: &str, version: i64) -> Result<()> 
     Ok(())
 }
 
+/// A system job's step on `pa` (a sync or renewal): prepared as a system
+/// step, recorded, released.
+async fn system_step(case: &Case, chat: &Chat, version: i64) -> Result<()> {
+    let mut prepared = case
+        .store
+        .prepare_desktop_acquire(chat.caller(), &chat.id, "pa")
+        .await?;
+    prepared.system_step = true;
+    let v1 = grant("pa", version);
+    case.store
+        .record_desktop_acquired(chat.caller(), &chat.id, &prepared, "pa", &v1, TTL)
+        .await?;
+    let fence = case
+        .store
+        .desktop_fence(chat.caller(), &chat.id, "pa", &v1.fencing_token)
+        .await?;
+    case.store
+        .end_desktop_lease(
+            chat.caller(),
+            &chat.id,
+            &fence,
+            DesktopLeaseState::Released,
+            "done",
+        )
+        .await
+        .map(|_| ())
+}
+
 async fn verdict(case: &Case, chat: &Chat, desk: &str) -> DesktopReservationState {
     case.store
         .desktop_reservation(chat.caller(), &chat.id, desk)
@@ -126,12 +154,16 @@ async fn a_step_keeps_the_desk_for_its_chat_and_refuses_every_other_grant_inside
     let second = chat(&case, "second-chat", "v1-second").await;
     let before = now_ms();
     step(&case, &first, "desk-a", 1).await.unwrap();
-    // The lease is released; the task keeps the desk 10 minutes past it.
+    // The lease is released; the task keeps the desk 10 minutes past the release.
     let state = verdict(&case, &first, "desk-a").await;
     assert_eq!(state.verdict, DeskVerdict::Allowed);
     let task = state.reservation.unwrap();
     assert_eq!((task.kind, task.mine), (DesktopReservationKind::Task, true));
-    assert!(task.until_ms >= before + TTL as i64 + DESK_TASK_GRACE_MS);
+    assert!(task.until_ms >= before + DESK_TASK_GRACE_MS);
+    assert!(
+        task.until_ms <= now_ms() + DESK_TASK_GRACE_MS,
+        "cut back on release"
+    );
     let state = verdict(&case, &second, "desk-a").await;
     assert_eq!(state.verdict, DeskVerdict::DeskBusy);
     let holder = state.holder.unwrap();
@@ -226,6 +258,120 @@ async fn a_renewing_heartbeat_extends_the_task_with_the_lease() {
             .unwrap()
             .until_ms,
         after
+    );
+    // A heartbeat never makes a task: with the task gone (the owner freed the
+    // desk), the next renewing heartbeat leaves the desk unreserved.
+    let (t, o) = (&case.token, &case.owner);
+    assert_eq!(
+        case.store
+            .clear_desktop_reservations(t, o, "desk-a")
+            .await
+            .unwrap(),
+        1
+    );
+    case.store
+        .record_desktop_heartbeat(first.caller(), &first.id, &fence, Some((None, hour)))
+        .await
+        .unwrap();
+    assert!(verdict(&case, &first, "desk-a").await.reservation.is_none());
+    case.finish().await;
+}
+
+#[tokio::test]
+async fn while_the_owner_views_a_heartbeat_extends_nothing_and_a_release_cuts_the_task_back() {
+    let case = Case::new().await;
+    share_all(&case).await;
+    let (t, o) = (&case.token, &case.owner);
+    let first = chat(&case, "first-chat", "v1-first").await;
+    let prepared = case
+        .store
+        .prepare_desktop_acquire(first.caller(), &first.id, "desk-a")
+        .await
+        .unwrap();
+    let v1 = grant("desk-a", 1);
+    // An eight-hour lease reserves the desk at most two hours ahead.
+    let eight_hours = 8 * 3_600_000;
+    case.store
+        .record_desktop_acquired(
+            first.caller(),
+            &first.id,
+            &prepared,
+            "desk-a",
+            &v1,
+            eight_hours,
+        )
+        .await
+        .unwrap();
+    let made = verdict(&case, &first, "desk-a").await.reservation.unwrap();
+    assert!(
+        made.until_ms <= now_ms() + DESK_LEASE_TASK_MAX_MS,
+        "{made:?}"
+    );
+    case.store
+        .record_owner_viewer(t, o, "desk-a", (Some(now_ms() + 30 * 60_000), None), None)
+        .await
+        .unwrap();
+    let fence = case
+        .store
+        .desktop_fence(first.caller(), &first.id, "desk-a", &v1.fencing_token)
+        .await
+        .unwrap();
+    case.store
+        .record_desktop_heartbeat(first.caller(), &first.id, &fence, Some((None, eight_hours)))
+        .await
+        .unwrap();
+    assert_eq!(
+        verdict(&case, &first, "desk-a")
+            .await
+            .reservation
+            .unwrap()
+            .until_ms,
+        made.until_ms,
+        "no extension while the owner views the desk"
+    );
+    // The step ends: 10 minutes from now, not the lease's planned end.
+    case.store
+        .end_desktop_lease(
+            first.caller(),
+            &first.id,
+            &fence,
+            DesktopLeaseState::Released,
+            "done",
+        )
+        .await
+        .unwrap();
+    let cut = verdict(&case, &first, "desk-a").await.reservation.unwrap();
+    assert!(
+        cut.until_ms <= now_ms() + DESK_TASK_GRACE_MS && cut.until_ms < made.until_ms,
+        "{cut:?}"
+    );
+    case.finish().await;
+}
+
+#[tokio::test]
+async fn a_system_step_is_refused_like_any_step_but_leaves_no_task() {
+    let case = Case::new().await;
+    share_all(&case).await;
+    let first = chat(&case, "first-chat", "v1-first").await;
+    let second = chat(&case, "second-chat", "v1-second").await;
+    system_step(&case, &first, 1).await.unwrap();
+    assert!(verdict(&case, &first, "pa").await.reservation.is_none());
+    // A chat's real step reserves the desk; another chat's system step is refused.
+    step(&case, &first, "pa", 2).await.unwrap();
+    let held = verdict(&case, &first, "pa").await.reservation.unwrap();
+    assert_eq!(
+        system_step(&case, &second, 3).await.unwrap_err(),
+        ResourceError::Conflict("desk_busy")
+    );
+    // The chat's own system step neither extends nor (on release) lengthens its task.
+    system_step(&case, &first, 4).await.unwrap();
+    assert!(
+        verdict(&case, &first, "pa")
+            .await
+            .reservation
+            .unwrap()
+            .until_ms
+            <= held.until_ms
     );
     case.finish().await;
 }
@@ -341,13 +487,19 @@ async fn while_the_owner_views_a_desk_only_the_chat_holding_its_task_goes_on() {
     step(&case, &first, "desk-a", 1).await.unwrap();
     let window = case
         .store
-        .record_owner_viewer(t, o, "desk-a", Some(now_ms() + 20 * 60_000), None)
+        .record_owner_viewer(
+            t,
+            o,
+            "desk-a",
+            (Some(now_ms() + 20 * 60_000), Some("share-1")),
+            None,
+        )
         .await
         .unwrap();
     assert_eq!(window.kind, DesktopReservationKind::OwnerViewer);
     // A longer window is kept when the owner opens it again.
     case.store
-        .record_owner_viewer(t, o, "desk-a", Some(now_ms() + 60_000), None)
+        .record_owner_viewer(t, o, "desk-a", (Some(now_ms() + 60_000), None), None)
         .await
         .unwrap();
     let state = verdict(&case, &second, "desk-a").await;
@@ -393,17 +545,33 @@ async fn while_the_owner_views_a_desk_only_the_chat_holding_its_task_goes_on() {
             ResourceError::Conflict("desk_busy")
         );
     }
-    // Handing it to the owner is allowed: it keeps every chat off.
-    case.store
-        .change_desktop_reservation(
-            second.caller(),
-            &second.id,
-            "desk-a",
-            &request(Handoff, Some(5)),
-        )
-        .await
-        .unwrap();
-    // The owner frees the desk; a chat's grant cannot.
+    // Nor is a handoff: its handback would make the chat the holder while the
+    // owner views the desk.
+    assert_eq!(
+        case.store
+            .change_desktop_reservation(
+                second.caller(),
+                &second.id,
+                "desk-a",
+                &request(Handoff, Some(5)),
+            )
+            .await
+            .unwrap_err(),
+        ResourceError::Conflict("desk_busy")
+    );
+    assert_eq!(
+        case.store
+            .change_desktop_reservation(
+                second.caller(),
+                &second.id,
+                "desk-a",
+                &request(Handback, None)
+            )
+            .await
+            .unwrap_err(),
+        ResourceError::Conflict("no_handoff_of_this_chat")
+    );
+    // Free desk ends a chat's claim only (none here); a chat's grant cannot.
     assert_eq!(
         case.store
             .clear_desktop_reservations("wrong", o, "desk-a")
@@ -416,15 +584,29 @@ async fn while_the_owner_views_a_desk_only_the_chat_holding_its_task_goes_on() {
             .clear_desktop_reservations(t, o, "desk-a")
             .await
             .unwrap(),
-        2
+        0
     );
-    step(&case, &second, "desk-a", 4).await.unwrap();
+    assert_eq!(
+        step(&case, &second, "desk-a", 4).await.unwrap_err(),
+        ResourceError::Conflict("desk_busy"),
+        "the owner's viewing stays"
+    );
+    // End viewing drops the window and names the V1 link to revoke.
+    assert_eq!(
+        case.store.end_owner_viewer(t, o, "desk-a").await.unwrap(),
+        (true, Some("share-1".to_string()))
+    );
+    assert_eq!(
+        case.store.end_owner_viewer(t, o, "desk-a").await.unwrap(),
+        (false, None)
+    );
+    step(&case, &second, "desk-a", 5).await.unwrap();
     // Opened from a chat, the owner watches that chat: it goes on, others
     // do not; a desk another chat holds stays that chat's.
     expire_all(&case).await;
     let window = case
         .store
-        .record_owner_viewer(t, o, "desk-a", None, Some(&first.id))
+        .record_owner_viewer(t, o, "desk-a", (None, None), Some(&first.id))
         .await
         .unwrap();
     let state = verdict(&case, &first, "desk-a").await;
@@ -437,9 +619,9 @@ async fn while_the_owner_views_a_desk_only_the_chat_holding_its_task_goes_on() {
         verdict(&case, &second, "desk-a").await.verdict,
         DeskVerdict::DeskBusy
     );
-    step(&case, &first, "desk-a", 5).await.unwrap();
+    step(&case, &first, "desk-a", 6).await.unwrap();
     case.store
-        .record_owner_viewer(t, o, "desk-a", None, Some(&second.id))
+        .record_owner_viewer(t, o, "desk-a", (None, None), Some(&second.id))
         .await
         .unwrap();
     let state = verdict(&case, &second, "desk-a").await;
@@ -463,7 +645,7 @@ async fn free_desks_leave_out_held_viewed_and_leased_desks_and_ids_stay_with_the
     expire_all(&case).await;
     step(&case, &first, "desk-c", 10).await.unwrap(); // the first chat's task
     case.store
-        .record_owner_viewer(t, o, "desk-d", None, None)
+        .record_owner_viewer(t, o, "desk-d", (None, None), None)
         .await
         .unwrap();
     let prepared = case

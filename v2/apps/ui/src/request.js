@@ -21,8 +21,8 @@ const deskRequest = (input.method === 'GET' && input.path === '/api/v2/desktops'
     (['GET', 'PUT'].includes(input.method) && input.path === '/api/v2/desktop-sharing') ||
     (input.method === 'POST' && /^\/api\/v2\/conversations\/[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}\/desktops\/[a-z0-9][a-z0-9_-]{0,63}\/(?:acquire|release|reset)$/.test(input.path)) ||
     (input.method === 'POST' && /^\/api\/v2\/desktops\/[a-z0-9][a-z0-9_-]{0,63}\/(?:start|stop|link)$/.test(input.path)) ||
-    // The owner frees a desk: its reservation between steps and viewing window end.
-    (input.method === 'DELETE' && /^\/api\/v2\/desktops\/[a-z0-9][a-z0-9_-]{0,63}\/reservation$/.test(input.path));
+    // The owner frees a desk (a chat's reservation) or ends viewing it (and revokes the link).
+    (input.method === 'DELETE' && /^\/api\/v2\/desktops\/[a-z0-9][a-z0-9_-]{0,63}\/(?:reservation|viewing)$/.test(input.path));
 const health = input.path === "/api/v2/health" && input.method === "GET";
 // Install-wide provider sign-in: one fixed read and closed per-provider actions.
 const signIn = (input.method === "GET" && input.path === "/api/v2/provider-sign-in") ||

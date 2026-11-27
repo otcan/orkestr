@@ -143,7 +143,7 @@ desk once V1 has let it go:
 
 A lease lasts one tool step. Between two steps of one chat, while a chat has
 handed a desk to the owner, or while the owner views a desk, Core keeps a desk
-reservation (migration 0103, table `desktop_reservations`). Every acquire
+reservation (migration 0104, table `desktop_reservations`). Every acquire
 checks it, whichever tool takes the lease: V2 refuses before V1 is asked, and
 the record of the lease checks again in the transaction that inserts the
 lease row. A reservation made while V1 prepared the desk therefore ends that
@@ -151,47 +151,79 @@ acquire too: the row is not written and the V1 lease is released.
 
 | Kind | Made by | Who may acquire meanwhile |
 | --- | --- | --- |
-| `task` | every recorded acquire of the chat, until 10 minutes past the lease's expiry (a heartbeat with `extend_ttl_ms` moves it along); `reserve` (default 30, at most 120 minutes) | only that chat |
+| `task` | every recorded acquire of the chat, until 10 minutes past the lease's expiry but at most 120 minutes ahead; `reserve` (default 30, at most 120 minutes) | only that chat |
 | `owner_handoff` | the chat's `handoff` (default 30, at most 120 minutes, or `until_ms`, for example a sign-in link's expiry) | no chat, the handing chat included (`desk_handed_to_owner`), until its `handback` (the desk is then its task for 10 minutes) or the end time |
-| `owner_viewer` | the owner's viewing link: Link on Virtual Desks, or Open in a chat, until the link expires (60 minutes when V1 states no expiry, at most 120) | only the chat that holds the desk's task. Opened from a chat, that chat gets the task for the window unless another chat already holds the desk |
+| `owner_viewer` | the owner's viewing link: Link on Virtual Desks, or Open in a chat, until the link expires (60 minutes when V1 states no expiry, at most 120) or the owner ends viewing | only the chat that holds the desk's task. Opened from a chat, that chat gets the task for the window unless another chat already holds the desk |
 
-A desk has at most one claim (`task` or `owner_handoff`) and at most one
-`owner_viewer` window. A reservation ends at its time; nothing has to remove
-it. While the owner views a desk, `reserve` by a chat that does not hold its
-task is refused as well, so a reservation is no way around the owner. Only the
-chat's own claim changes: another chat's claim is `409 desk_busy` (reserve,
-handoff) or `409 reservation_of_another_chat` (unreserve).
+- **Limits.** A desk has at most one claim (`task` or `owner_handoff`) and at
+  most one `owner_viewer` window. A reservation ends at its time; nothing has
+  to remove it.
+- **Heartbeat and release.** A heartbeat with `extend_ttl_ms` extends the
+  chat's existing task, never makes one, and extends nothing while the owner
+  views the desk. When the step ends (release, or a lost lease), the task is
+  cut back to 10 minutes from then, or to the end of an explicit `reserve` if
+  that is later.
+- **System steps.** An acquire with `"system_step": true` is refused like any
+  step but makes or extends no task. Use it for a job's step on a chat's desk,
+  such as a sync or a token renewal.
+- **While the owner views a desk,** a chat that does not hold its task can
+  neither `reserve` it nor hand it over (`409 desk_busy`). A reservation or a
+  handoff followed by a handback would otherwise make it the holder.
+- **Only the chat's own claim changes.** Another chat's claim answers
+  `409 desk_busy` (reserve, handoff) or `409 reservation_of_another_chat`
+  (unreserve).
 
-A refused acquire (and a refused `reserve` or `handoff`) answers `409` with
-`code` `desk_busy` or `desk_handed_to_owner`, a `message` that says nothing was
-done, the `desk`, the `holder` (`kind`, the holding chat's name as `chat`,
-`mine`, `since_ms`, `until_ms`; never another chat's conversation id) and, for
-`desk_busy`, up to three `free_desks`. Free desks are the client's
-`candidates` first, then the chat's bound desks, then desks it leased in the
-last 14 days; a desk is left out when another chat holds it, it is handed over
-or viewed, a step is running there, the binding does not list it while
-sharing is off, or V1 does not list it or holds it for another V1 thread.
+A refused acquire (and a refused `reserve` or `handoff`) answers `409`. The body
+has:
 
-Routes (grant or owner, `/api/v2/conversations/{id}/…`):
+- `code`: `desk_busy` or `desk_handed_to_owner`;
+- `message`: what holds the desk, and that nothing was done;
+- `desk`;
+- `holder`: `kind`, the holding chat's name as `chat` ("another chat" when it
+  has none), `mine`, `since_ms`, `until_ms`. Another chat's conversation id is
+  never included;
+- for `desk_busy` only, up to three `free_desks`.
+
+Free desks are the client's `candidates` first, then the chat's bound desks,
+then desks it leased in the last 14 days. A desk is left out when another chat
+holds it, it is handed over or viewed, a step is running there, the binding
+does not list it while sharing is off, or V1 does not list it or holds it for
+another V1 thread.
+
+Routes for a chat's grant or the owner, under `/api/v2/conversations/{id}/`:
 
 - `GET desktops/{slug}/reservation[?candidates=a,b]`: the desk as this chat
-  sees it, with `verdict` (`allowed`, `desk_busy`, `desk_handed_to_owner`)
-  for its next acquire, `holder`, `reservation`, `owner_viewer` and
-  `free_desks` (when refused, or when `candidates` is given).
+  sees it. It has the `verdict` for its next acquire (`allowed`, `desk_busy`,
+  `desk_handed_to_owner`), `holder`, `reservation`, `owner_viewer`, and
+  `free_desks` when refused or when `candidates` is given.
 - `POST desktops/{slug}/reservation {"op":"reserve"|"handoff"|"handback"|"unreserve", "minutes"?, "until_ms"?}`.
 - `GET desktop-reservations`: every reservation of the owner that still
   holds, by chat name.
 
-Owner only: `DELETE /api/v2/desktops/{slug}/reservation` frees a desk (its
-claim and viewing window end; leases and V1 are untouched), shown as "Free
-desk" on Virtual Desks. `GET /api/v2/desktops` adds `reservation` and
-`owner_viewer` (with the holding conversation's id) to each desk, so a desk a
-chat keeps between steps never reads as available, and Stop on such a desk
-needs the interruption confirmed. The owner's Link and Open answers carry
-`viewer_until_ms`.
+Owner only:
 
-The table is additive: a server before 0103 neither reads nor writes it.
-Callers that take V1's lease API directly, without V2, are not covered; V1
+- `DELETE /api/v2/desktops/{slug}/reservation` frees a desk: the chat's claim
+  (task or handoff) ends; the owner's own viewing stays.
+- `DELETE /api/v2/desktops/{slug}/viewing` ends the owner's viewing window and
+  revokes the V1 link it recorded (`link_revoked`).
+- On Virtual Desks they are "Free desk" and "End viewing".
+- `GET /api/v2/desktops` adds `reservation` and `owner_viewer` (with the
+  holding conversation's id) to each desk, so a desk a chat keeps between
+  steps never reads as available. Stop on such a desk needs the interruption
+  confirmed.
+- The owner's Link and Open answers carry `viewer_until_ms` and
+  `viewer_recorded`. When the window could not be recorded the page warns that
+  chats were not kept off the desk.
+
+The inventory types are read tolerantly, so a Virtual Desks page loaded
+before a newer server keeps working.
+
+Migration 0104 is additive and changes no existing row. A server built before
+it refuses a store that has it, because the preflight requires an exact
+migration prefix. A rollback is therefore a release that keeps the migration
+and reverts the checks, never an older binary on the migrated store.
+
+Callers that take V1's lease API directly, without V2, are not covered. V1
 stays the lease authority and knows nothing of reservations.
 
 ## V1 worker sub-threads

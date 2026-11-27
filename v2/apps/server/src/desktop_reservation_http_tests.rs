@@ -38,6 +38,9 @@ fn handle(v1: &mut FakeV1, method: &str, path: &str, body: &Value) -> (u16, Valu
             .collect();
         return (200, json!({"ok": true, "sessions": sessions}));
     }
+    if method == "POST" && path.starts_with("/api/desktop-shares/") && path.ends_with("/revoke") {
+        return (200, json!({"ok": true, "share": {"status": "revoked"}}));
+    }
     if method == "GET" && path.ends_with("/desktop-grants") {
         return (200, json!({"grants": []}));
     }
@@ -383,6 +386,7 @@ async fn the_pa4_collision_is_refused_at_the_acquire_for_every_tool() {
     .await;
     assert_eq!(status, 200, "{link}");
     assert!(link["viewer_until_ms"].as_i64().unwrap() > now_ms());
+    assert_eq!(link["viewer_recorded"], true);
     // 19:51:36: steps on pa-4 while the owner is connected are refused, for
     // every chat without the desk's task, and reserving is no way around it.
     for chat in [&b, &a] {
@@ -429,12 +433,41 @@ async fn the_pa4_collision_is_refused_at_the_acquire_for_every_tool() {
     );
     assert!(desk("pa")["reservation"].is_null() && desk("pa")["owner_viewer"].is_null());
 
-    // The owner frees pa-4; a chat's grant cannot.
+    // Nor can B hand it over: its handback would make it the holder.
+    let (status, refused) = reservation(&c, &b, "pa-4", json!({"op": "handoff"})).await;
+    assert_eq!((status, refused["code"].as_str()), (409, Some("desk_busy")));
+
+    // Free desk ends a chat's claim only (pa-4 has none now); a chat's grant cannot.
     let free = "/api/v2/desktops/pa-4/reservation";
     let (status, _) = send(&c.state, "DELETE", free, &[&b.header()], "").await;
     assert_eq!(status, 401);
     let (status, freed) = send(&c.state, "DELETE", free, &[&c.auth()], "").await;
-    assert_eq!((status, freed["ended"].as_u64()), (200, Some(1)));
+    assert_eq!((status, freed["ended"].as_u64()), (200, Some(0)));
+    assert_eq!(
+        step(&c, &b, "pa-4").await.0,
+        409,
+        "the owner still views pa-4"
+    );
+    // End viewing: the window ends and the link is revoked at V1.
+    let viewing = "/api/v2/desktops/pa-4/viewing";
+    let (status, _) = send(&c.state, "DELETE", viewing, &[&b.header()], "").await;
+    assert_eq!(status, 401);
+    let (status, ended) = send(&c.state, "DELETE", viewing, &[&c.auth()], "").await;
+    assert_eq!(
+        (
+            status,
+            ended["ended"].as_bool(),
+            ended["link_revoked"].as_bool()
+        ),
+        (200, Some(true), Some(true)),
+        "{ended}"
+    );
+    assert!(v1
+        .lock()
+        .unwrap()
+        .calls
+        .iter()
+        .any(|call| call == "POST /api/desktop-shares/share-1/revoke"));
     assert_eq!(step(&c, &b, "pa-4").await.0, 201);
     c.finish().await;
 }
@@ -522,6 +555,18 @@ async fn a_chat_changes_only_its_own_reservation_and_sees_other_chats_by_name() 
         (status, value["code"].as_str()),
         (409, Some("reservation_of_another_chat"))
     );
+    // A system job's step (a sync on the chat's desk) is refused like any
+    // step but leaves the chat no reservation.
+    let path = a.path("/desktops/spare/acquire");
+    let body = r#"{"ttl_ms":120000,"purpose":"google-password-sync","system_step":true}"#;
+    let (status, granted) = send(&c.state, "POST", &path, &[&a.header()], body).await;
+    assert_eq!(status, 201, "{granted}");
+    let (_, seen) = look(&c, &a, "/desktops/spare/reservation").await;
+    assert!(seen["reservation"].is_null(), "{seen}");
+    let path = b.path("/desktops/pa-4/acquire");
+    let body = r#"{"ttl_ms":120000,"system_step":true}"#;
+    let (status, refused) = send(&c.state, "POST", &path, &[&b.header()], body).await;
+    assert_eq!((status, refused["code"].as_str()), (409, Some("desk_busy")));
     for body in [
         json!({"op": "reserve", "minutes": 121}),
         json!({"op": "steal"}),

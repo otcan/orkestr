@@ -26,6 +26,10 @@ pub struct PreparedAcquire {
     /// slugs and V1's per-thread grants. The record is refused if sharing is
     /// off by then.
     pub shared: bool,
+    /// A system job's step: refused by desk reservations like any step, but
+    /// makes or extends no task reservation. Set by the caller before the
+    /// record.
+    pub system_step: bool,
 }
 #[derive(Debug, Clone)]
 pub struct V1LeaseGrant {
@@ -358,6 +362,7 @@ impl Store {
             v1_thread_id: binding.v1_thread_id,
             binding_revision: binding.revision,
             shared,
+            system_step: false,
         })
     }
 
@@ -413,8 +418,8 @@ impl Store {
             &owner,
             conversation,
             slug,
-            now,
-            expires_ms,
+            (now, expires_ms),
+            prepared.system_step,
         )
         .await?;
         let lease = lease_row(&mut tx, row).await?;
@@ -526,7 +531,8 @@ impl Store {
             return Err(ResourceError::Conflict("desktop_fence_rejected"));
         }
         let lease = lease_row(&mut tx, fence.row).await?;
-        // A step that keeps its lease longer keeps the chat's task with it.
+        // A step that keeps its lease longer keeps the chat's existing task
+        // with it (never a new one, never while the owner views the desk).
         if let Some(until) = expires_ms {
             super::desktop_reservations::touch(
                 &mut tx,
@@ -553,15 +559,26 @@ impl Store {
         if state == DesktopLeaseState::Active || reason.is_empty() || reason.len() > 200 {
             return Err(ResourceError::Invalid);
         }
-        let (mut tx, _) = self.desktop_scope(caller, conversation, true).await?;
+        let (mut tx, owner) = self.desktop_scope(caller, conversation, true).await?;
+        let now = now_ms();
         let changed = sqlx::query("UPDATE desktop_leases SET state=?,ended_at_ms=?,end_reason=? WHERE row_sequence=? AND conversation_id=? AND state='active' AND token_hash=?")
-            .bind(state.as_str()).bind(now_ms()).bind(reason).bind(fence.row)
+            .bind(state.as_str()).bind(now).bind(reason).bind(fence.row)
             .bind(conversation.to_string()).bind(&fence.token_hash)
             .execute(&mut *tx).await.map_err(unavailable)?.rows_affected();
         if changed != 1 {
             return Err(ResourceError::Conflict("desktop_fence_rejected"));
         }
         let lease = lease_row(&mut tx, fence.row).await?;
+        // The step is over: the chat's task now ends 10 minutes from here (or
+        // at its explicit reserve's end), not at the lease's planned end.
+        super::desktop_reservations::release_touch(
+            &mut tx,
+            &owner,
+            conversation,
+            &lease.desktop_slug,
+            now,
+        )
+        .await?;
         tx.commit().await.map_err(unavailable)?;
         Ok(lease)
     }

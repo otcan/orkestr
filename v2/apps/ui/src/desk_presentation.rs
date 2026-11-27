@@ -105,12 +105,26 @@ pub fn reservation_lines(desk: &DesktopResource, clock: impl Fn(i64) -> String) 
 }
 
 /// Freeing a desk ends what V2 holds there; say what that lets happen.
+/// Free desk ends a chat's claim only; your own viewing ends with End viewing.
 pub fn free_desk_help(desk: &DesktopResource) -> &'static str {
     match desk.reservation.as_ref().map(|r| r.kind) {
-        Some(DesktopReservationKind::Task) => "End this chat's reservation now. Other chats may then take the desk; a running step is not stopped.",
         Some(DesktopReservationKind::OwnerHandoff) => "End the hand-over now: chats may take the desk again. Do this only when you are done with it.",
-        _ => "End your viewing window now: chats may take the desk again while your link stays valid.",
+        _ => "End this chat's reservation now. Other chats may then take the desk; a running step is not stopped.",
     }
+}
+
+/// End viewing ends the owner's window and revokes the link.
+pub const END_VIEWING_HELP: &str =
+    "End your viewing now: the desk link stops working and chats may take the desk again.";
+
+/// Shown when a link was made but Orkestr could not record that the owner is
+/// viewing the desk, so chats were not kept off it.
+pub const VIEW_NOT_RECORDED: &str = "This link works, but Orkestr could not record that you are viewing this desk, so chats are not kept off it. A chat may act there while you use it; refresh and try again before typing on the desk.";
+
+/// Whether a Link or Open answer says the viewing window was not recorded. An
+/// older server, which does not say, never warns.
+pub fn viewer_not_recorded(answer: &serde_json::Value) -> bool {
+    answer.get("viewer_recorded") == Some(&serde_json::Value::Bool(false))
 }
 
 /// Names what Stop will interrupt, for the confirmation shown before it runs.
@@ -351,6 +365,7 @@ mod tests {
                 conversation_id: None,
                 since_ms: 0,
                 until_ms,
+                reserved_until_ms: None,
             };
         DesktopResource {
             slug: "desk-a".into(),
@@ -397,10 +412,21 @@ mod tests {
             ]
         );
         assert!(free_desk_help(&handed).contains("hand-over"));
+        assert!(free_desk_help(&task).contains("chat's reservation"));
+        assert!(END_VIEWING_HELP.contains("link stops working"));
+        assert!(viewer_not_recorded(
+            &serde_json::json!({"url":"x","viewer_recorded":false})
+        ));
+        assert!(!viewer_not_recorded(
+            &serde_json::json!({"url":"x","viewer_recorded":true})
+        ));
+        assert!(
+            !viewer_not_recorded(&serde_json::json!({"url":"x"})),
+            "an older server never warns"
+        );
         let viewed = desk("unknown", None, true);
         assert_eq!(shown_lease_state(&viewed), "reserved");
         assert_eq!(shown_holder(&viewed).as_deref(), Some("You (viewing)"));
-        assert!(free_desk_help(&viewed).contains("viewing window"));
         assert!(stop_needs_confirmation_shown(&task));
     }
     fn stop_needs_confirmation_shown(desk: &DesktopResource) -> bool {
