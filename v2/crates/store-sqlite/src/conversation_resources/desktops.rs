@@ -313,8 +313,10 @@ impl Store {
 
     /// Checks binding, slug (unless all desks are shared) and V2-side
     /// exclusivity before contacting V1.
-    /// An active V2 row past its V2-observed expiry is marked lost; V1 still
-    /// decides whether the desktop is free.
+    /// Every active V2 row of the owner past its V2-observed expiry, on any
+    /// desk, is marked lost; V1 still decides whether the desktop is free.
+    /// (Only the requested desk was swept before 2026-11-26, so a row whose
+    /// release V2 never saw stayed active until that same desk was asked for.)
     pub async fn prepare_desktop_acquire(
         &self,
         caller: DesktopCaller<'_>,
@@ -333,8 +335,8 @@ impl Store {
             return Err(ResourceError::Conflict("desktop_not_granted"));
         }
         let now = now_ms();
-        sqlx::query("UPDATE desktop_leases SET state='lost',ended_at_ms=?,end_reason='expired' WHERE owner_id=? AND desktop_slug=? AND state='active' AND expires_at_ms<=?")
-            .bind(now).bind(owner.to_string()).bind(slug).bind(now)
+        sqlx::query("UPDATE desktop_leases SET state='lost',ended_at_ms=?,end_reason='expired' WHERE owner_id=? AND state='active' AND expires_at_ms<=?")
+            .bind(now).bind(owner.to_string()).bind(now)
             .execute(&mut *tx).await.map_err(unavailable)?;
         let holder: Option<String> = sqlx::query_scalar(
             "SELECT conversation_id FROM desktop_leases WHERE owner_id=? AND desktop_slug=? AND state='active'",
@@ -407,6 +409,55 @@ impl Store {
             lease,
             fencing_token: grant.fencing_token.clone(),
         })
+    }
+
+    /// This conversation's active row on `slug`, if any. No token: the server
+    /// compares it with V1 when the conversation's own row blocks an acquire.
+    pub async fn held_desktop_lease(
+        &self,
+        caller: DesktopCaller<'_>,
+        conversation: &ConversationId,
+        slug: &str,
+    ) -> Result<Option<DesktopLeaseView>> {
+        if !desktop_slug_valid(slug) {
+            return Err(ResourceError::Invalid);
+        }
+        let (mut tx, _) = self.desktop_scope(caller, conversation, false).await?;
+        let row = sqlx::query(
+            "SELECT * FROM desktop_leases WHERE conversation_id=? AND desktop_slug=? AND state='active'",
+        )
+        .bind(conversation.to_string())
+        .bind(slug)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(unavailable)?;
+        let lease = row.as_ref().map(lease_of).transpose()?;
+        tx.commit().await.map_err(unavailable)?;
+        Ok(lease)
+    }
+
+    /// Ends this conversation's active row on `slug` that V1 (the lease
+    /// authority) no longer holds: a release V1 completed after V2 stopped
+    /// waiting for it. Only the row with exactly this V1 lease and fencing
+    /// version; a newer lease is never touched. True when a row was ended.
+    pub async fn end_unheld_desktop_lease(
+        &self,
+        caller: DesktopCaller<'_>,
+        conversation: &ConversationId,
+        slug: &str,
+        v1_lease_id: &str,
+        fencing_version: i64,
+    ) -> Result<bool> {
+        if !desktop_slug_valid(slug) {
+            return Err(ResourceError::Invalid);
+        }
+        let (mut tx, _) = self.desktop_scope(caller, conversation, true).await?;
+        let changed = sqlx::query("UPDATE desktop_leases SET state='lost',ended_at_ms=?,end_reason='v1_lease_gone' WHERE conversation_id=? AND desktop_slug=? AND state='active' AND v1_lease_id=? AND fencing_version=?")
+            .bind(now_ms()).bind(conversation.to_string()).bind(slug)
+            .bind(v1_lease_id).bind(fencing_version)
+            .execute(&mut *tx).await.map_err(unavailable)?.rows_affected();
+        tx.commit().await.map_err(unavailable)?;
+        Ok(changed == 1)
     }
 
     /// The active lease of this conversation and slug matching the token.

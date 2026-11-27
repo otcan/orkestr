@@ -16,6 +16,12 @@ const WRITE_TIMEOUT: Duration = Duration::from_secs(12);
 /// answers. A same-thread acquire renews the same lease, so a retry after a
 /// timeout never creates a second one.
 const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(45);
+/// Heartbeat, release and the lease read write or read V1's lease file under
+/// its lock, which a busy V1 holds for seconds. 2026-11-26: V1 finished a
+/// release in about 4.4 s, the old 3 s bound had already answered 503, and the
+/// V2 row stayed active with nobody left to retry, which blocked the chat's
+/// own next acquire on that desk. Well inside the lease client's 60 s.
+const FENCED_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BrokerError {
@@ -27,6 +33,14 @@ pub(crate) enum BrokerError {
     Denied,
     /// Transport failure, timeout or unexpected response.
     Unavailable,
+}
+
+/// The lease V1 currently holds on a desk (no token).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct V1Lease {
+    pub(crate) lease_id: String,
+    pub(crate) thread_id: String,
+    pub(crate) fencing_version: i64,
 }
 
 #[derive(serde::Deserialize)]
@@ -194,10 +208,62 @@ impl Broker {
             .await
     }
 
+    /// V1's current lease of `slug` (`GET /api/desktops/{slug}/lease`), or
+    /// `None` when V1 holds none. Only the id, thread and fencing version are
+    /// read; V1's answer also carries the token, which is dropped here.
+    pub(crate) async fn active_lease(&self, slug: &str) -> Result<Option<V1Lease>, BrokerError> {
+        let (status, body) = tokio::time::timeout(
+            FENCED_TIMEOUT,
+            self.exchange(
+                "GET",
+                &format!("/api/desktops/{slug}/lease"),
+                None,
+                RESPONSE_MAX,
+            ),
+        )
+        .await
+        .map_err(|_| BrokerError::Unavailable)??;
+        match status {
+            200 => {}
+            403 | 404 => return Err(BrokerError::Denied),
+            _ => return Err(BrokerError::Unavailable),
+        }
+        let lease = match body.get("lease") {
+            None | Some(Value::Null) => return Ok(None),
+            Some(lease) => lease,
+        };
+        if lease.get("releasedAt").is_some_and(|v| !v.is_null())
+            || lease.get("active") == Some(&Value::Bool(false))
+        {
+            return Ok(None);
+        }
+        let text = |key: &str| {
+            lease
+                .get(key)
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .ok_or(BrokerError::Unavailable)
+        };
+        Ok(Some(V1Lease {
+            lease_id: text("id")?,
+            thread_id: text("threadId")?,
+            fencing_version: lease
+                .get("fencingVersion")
+                .and_then(Value::as_i64)
+                .ok_or(BrokerError::Unavailable)?,
+        }))
+    }
+
     /// V1 maps a stale token and a missing lease to 404 and another thread's
     /// lease to 409; both mean this holder lost the lease.
     async fn fenced(&self, path: &str, body: Value) -> Result<(), BrokerError> {
-        match self.send("POST", path, Some(body)).await?.0 {
+        let sent = tokio::time::timeout(
+            FENCED_TIMEOUT,
+            self.exchange("POST", path, Some(body), RESPONSE_MAX),
+        )
+        .await
+        .map_err(|_| BrokerError::Unavailable)??;
+        match sent.0 {
             200 | 201 => Ok(()),
             404 | 409 => Err(BrokerError::Lost),
             403 => Err(BrokerError::Denied),
@@ -429,6 +495,18 @@ mod acquire_timeout_tests {
 
     /// A V1 that answers acquire only after `delay` (like a slow `pa` desk).
     async fn slow_v1(delay: Duration) -> std::net::SocketAddr {
+        let body = serde_json::json!({"lease": {"id": "lease-1", "threadId": "thread-1",
+            "desktopSlug": "pa", "fencingToken": "fence-1", "fencingVersion": 3,
+            "expiresAt": "2026-10-21T15:00:00Z"}});
+        slow_v1_answering(delay, 201, body).await
+    }
+
+    /// A V1 that answers one request with `status` and `body` after `delay`.
+    async fn slow_v1_answering(
+        delay: Duration,
+        status: u16,
+        body: serde_json::Value,
+    ) -> std::net::SocketAddr {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         tokio::spawn(async move {
@@ -436,18 +514,55 @@ mod acquire_timeout_tests {
             let mut buffer = vec![0u8; 8192];
             let _ = socket.read(&mut buffer).await.unwrap();
             tokio::time::sleep(delay).await;
-            let body = serde_json::json!({"lease": {"id": "lease-1", "threadId": "thread-1",
-                "desktopSlug": "pa", "fencingToken": "fence-1", "fencingVersion": 3,
-                "expiresAt": "2026-10-21T15:00:00Z"}})
-            .to_string();
+            let body = body.to_string();
             let response = format!(
-                "HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 body.len(),
                 body
             );
             socket.write_all(response.as_bytes()).await.unwrap();
         });
         address
+    }
+
+    #[tokio::test]
+    async fn a_release_v1_finishes_after_the_ordinary_timeout_still_counts() {
+        // 2026-11-26: V1 released pa-3 after about 4.4 s; the old 3 s bound
+        // reported 503 and left the V2 row active.
+        let address = slow_v1_answering(
+            TIMEOUT + Duration::from_secs(2),
+            200,
+            serde_json::json!({"ok": true}),
+        )
+        .await;
+        let broker = Broker::new(&format!("http://{address}"), "t".repeat(32)).unwrap();
+        assert_eq!(
+            broker
+                .release("thread-1", "pa-3", "fence-1", "hold_finished")
+                .await,
+            Ok(())
+        );
+    }
+
+    #[tokio::test]
+    async fn active_lease_reads_id_thread_and_version_and_none_when_free() {
+        let held = serde_json::json!({"ok": true, "lease": {"id": "pa-3:admin:t:1",
+            "threadId": "t", "desktopSlug": "pa-3", "fencingToken": "never-kept",
+            "fencingVersion": 10374, "releasedAt": null, "active": true}});
+        let address = slow_v1_answering(Duration::ZERO, 200, held).await;
+        let broker = Broker::new(&format!("http://{address}"), "t".repeat(32)).unwrap();
+        assert_eq!(
+            broker.active_lease("pa-3").await,
+            Ok(Some(V1Lease {
+                lease_id: "pa-3:admin:t:1".into(),
+                thread_id: "t".into(),
+                fencing_version: 10374,
+            }))
+        );
+        let free = serde_json::json!({"ok": true, "lease": null});
+        let address = slow_v1_answering(Duration::ZERO, 200, free).await;
+        let broker = Broker::new(&format!("http://{address}"), "t".repeat(32)).unwrap();
+        assert_eq!(broker.active_lease("pa-3").await, Ok(None));
     }
 
     #[tokio::test]

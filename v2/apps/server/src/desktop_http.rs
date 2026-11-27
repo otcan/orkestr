@@ -10,7 +10,7 @@ use crate::archived_history_http::owner_credential;
 use crate::conversation_resources_http::{conversation, failure, invalid};
 use crate::desktop_broker::BrokerError;
 use axum::extract::{rejection::JsonRejection, Path};
-use orkestr_v2_store_sqlite::DesktopCaller;
+use orkestr_v2_store_sqlite::{DesktopCaller, ResourceError};
 
 pub(crate) fn router() -> Router<AppState> {
     let base = "/api/v2/conversations/{id}";
@@ -200,10 +200,19 @@ async fn acquire(
     }
     let broker = broker(&state)?;
     let store = &state.store;
-    let prepared = store
+    let prepared = match store
         .prepare_desktop_acquire(caller.store(), &conversation, &slug)
         .await
-        .map_err(failure)?;
+    {
+        Err(ResourceError::Conflict("desktop_lease_held")) => {
+            end_row_v1_no_longer_holds(store, broker, &caller, &conversation, &slug).await?;
+            store
+                .prepare_desktop_acquire(caller.store(), &conversation, &slug)
+                .await
+                .map_err(failure)?
+        }
+        prepared => prepared.map_err(failure)?,
+    };
     let thread = prepared.v1_thread_id.clone();
     if !prepared.shared
         && !broker
@@ -250,6 +259,50 @@ async fn acquire(
             Err(failure(error))
         }
     }
+}
+
+/// The conversation's own active row blocks its acquire (`desktop_lease_held`).
+/// That row may outlive its V1 lease: on 2026-11-26 V1 finished a release
+/// after V2 had stopped waiting, so V2 kept the row and refused the same
+/// chat's next two acquires of pa-3, and the chat moved to pa-4 (which the
+/// owner was about to use). V1 is the lease authority: when V1 no longer holds
+/// exactly that lease, the row ends as lost and the acquire goes ahead. When
+/// V1 still holds it, or cannot be asked, the refusal stands.
+async fn end_row_v1_no_longer_holds(
+    store: &Store,
+    broker: &desktop_broker::Broker,
+    caller: &Caller,
+    conversation: &ConversationId,
+    slug: &str,
+) -> Result<(), Error> {
+    let held = || failure(ResourceError::Conflict("desktop_lease_held"));
+    let Some(row) = store
+        .held_desktop_lease(caller.store(), conversation, slug)
+        .await
+        .map_err(failure)?
+    else {
+        return Ok(());
+    };
+    let v1 = broker.active_lease(slug).await.map_err(|_| held())?;
+    let same = v1.is_some_and(|lease| {
+        lease.lease_id == row.v1_lease_id
+            && lease.thread_id == row.v1_thread_id
+            && lease.fencing_version == row.fencing_version
+    });
+    if same {
+        return Err(held());
+    }
+    store
+        .end_unheld_desktop_lease(
+            caller.store(),
+            conversation,
+            slug,
+            &row.v1_lease_id,
+            row.fencing_version,
+        )
+        .await
+        .map_err(failure)?;
+    Ok(())
 }
 
 async fn heartbeat(

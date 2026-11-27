@@ -62,6 +62,16 @@ fn handle(v1: &mut FakeV1, method: &str, path: &str, auth: bool, body: Value) ->
         "fencingToken": k, "fencingVersion": v, "expiresAt": "2026-10-20T13:00:00.000Z"})
     };
     match path.rsplit('/').next() {
+        // V1's lease read answers for the admin bearer; it carries the token.
+        Some("lease") if method == "GET" => match v1.lease.clone() {
+            Some((s, t, k, v)) if s == slug => {
+                let mut held = lease(&t, &k, v);
+                held["releasedAt"] = Value::Null;
+                held["active"] = json!(true);
+                reply(200, json!({"ok": true, "lease": held}))
+            }
+            _ => reply(200, json!({"ok": true, "lease": null})),
+        },
         Some("acquire") => match v1.lease.clone() {
             Some((s, t, k, v)) if s == slug && t == thread => {
                 reply(201, json!({"ok": true, "lease": lease(&t, &k, v)}))
@@ -474,6 +484,103 @@ async fn v1_conflicts_and_lost_leases_fail_closed() {
         .calls
         .iter()
         .any(|c| c.contains("linkedin")));
+    case.finish().await;
+}
+
+async fn acquire_pa3(
+    case: &crate::conversation_resources_http::tests::Case,
+    auth: &str,
+) -> (u16, Value) {
+    send(
+        &case.state,
+        "POST",
+        &case.path("/desktops/pa-3/acquire"),
+        &[auth],
+        r#"{"ttl_ms":600000}"#,
+    )
+    .await
+}
+
+/// 2026-11-26: V1 finished a release after V2 had stopped waiting, so V2 kept
+/// its row and refused the same chat's next acquires of that desk.
+#[tokio::test]
+async fn an_own_row_that_v1_no_longer_holds_does_not_block_the_next_acquire() {
+    let mut case = case().await;
+    let v1 = StdArc::new(StdMutex::new(FakeV1 {
+        grants: vec!["pa-3".into()],
+        ..Default::default()
+    }));
+    let url = fake_v1(v1.clone()).await;
+    case.state.desktop_broker = Some(Arc::new(
+        desktop_broker::Broker::new(&url, V1_TOKEN.into()).unwrap(),
+    ));
+    let auth = case.auth();
+    let bind = json!({"expected_revision":0,"v1_thread_id":"v1-parent","desktop_slugs":["pa-3"]})
+        .to_string();
+    send(
+        &case.state,
+        "PUT",
+        &case.path("/desktop-binding"),
+        &[&auth],
+        &bind,
+    )
+    .await;
+    let v1_acquires = || {
+        v1.lock()
+            .unwrap()
+            .calls
+            .iter()
+            .filter(|c| c.as_str() == "POST /api/desktops/pa-3/acquire")
+            .count()
+    };
+    let (status, first) = acquire_pa3(&case, &auth).await;
+    assert_eq!(status, 201, "{first}");
+    assert_eq!(first["lease"]["fencing_version"].as_i64(), Some(1));
+    // V1 still holds exactly that lease: the refusal stands and V1 gets no acquire.
+    let (status, value) = acquire_pa3(&case, &auth).await;
+    assert_eq!(
+        (status, value["code"].as_str()),
+        (409, Some("desktop_lease_held"))
+    );
+    assert_eq!(v1_acquires(), 1);
+    // V1 released it after V2 gave up waiting; the V2 row is still active.
+    v1.lock().unwrap().lease = None;
+    let (status, second) = acquire_pa3(&case, &auth).await;
+    assert_eq!(status, 201, "{second}");
+    assert_eq!(second["lease"]["fencing_version"].as_i64(), Some(2));
+    let (_, list) = send(&case.state, "GET", &case.path("/desktops"), &[&auth], "").await;
+    let ended: Vec<_> = list["leases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|l| l["end_reason"] == "v1_lease_gone")
+        .collect();
+    assert_eq!(ended.len(), 1, "{list}");
+    assert_eq!(
+        (
+            ended[0]["state"].as_str(),
+            ended[0]["fencing_version"].as_i64()
+        ),
+        (Some("lost"), Some(1))
+    );
+    // Another thread took it at V1: the stale row ends and V1's refusal is returned.
+    v1.lock().unwrap().lease = Some((
+        "pa-3".into(),
+        "v1-other".into(),
+        "cccccccc-0000-4000-8000-000000000000".into(),
+        7,
+    ));
+    let (status, value) = acquire_pa3(&case, &auth).await;
+    assert_eq!(
+        (status, value["code"].as_str()),
+        (409, Some("desktop_leased"))
+    );
+    let (_, list) = send(&case.state, "GET", &case.path("/desktops"), &[&auth], "").await;
+    assert!(list["leases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|l| l["state"] != "active"));
     case.finish().await;
 }
 
