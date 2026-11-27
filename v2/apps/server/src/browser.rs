@@ -147,10 +147,11 @@ pub(crate) async fn body(
 }
 pub async fn login(
     State(state): State<AppState>,
+    peer: auth_limits::Peer,
     headers: HeaderMap,
     credentials: Result<Json<Credentials>, JsonRejection>,
 ) -> Result<Response, Error> {
-    let (owner, verified_hash) = auth::verify_credentials(&state, credentials).await?;
+    let (owner, verified_hash) = auth::verify_credentials(&state, peer, credentials).await?;
     let value = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
     if !state
         .store

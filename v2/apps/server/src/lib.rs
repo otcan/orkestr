@@ -26,6 +26,7 @@ mod archived_history_http;
 pub mod attachment_keys_http;
 mod attachment_transfer;
 mod auth;
+mod auth_limits;
 mod automatic_reply_control;
 mod beta_config;
 mod beta_discovery_http;
@@ -142,7 +143,8 @@ pub struct AppState {
     bootstrap_token: Arc<String>,
     origin: Arc<String>,
     authority: Arc<String>,
-    auth_window: Arc<Mutex<(Instant, u32)>>,
+    /// Authentication attempt limits per client (owner sign-in, service sessions).
+    auth_limits: Arc<auth_limits::AuthLimits>,
     resources: resource_health::ResourceSampler,
     provider_quota: Option<Arc<provider_quota_http::Source>>,
     provider_sign_in: Option<Arc<dyn provider_sign_in_http::Port>>,
@@ -433,7 +435,7 @@ impl AppState {
             bootstrap_token: Arc::new(bootstrap_token),
             origin: Arc::new(origin),
             authority: Arc::new(authority),
-            auth_window: Arc::new(Mutex::new((Instant::now(), 0))),
+            auth_limits: Arc::default(),
             resources: resource_health::ResourceSampler::new(),
             provider_quota: None,
             provider_sign_in: None,

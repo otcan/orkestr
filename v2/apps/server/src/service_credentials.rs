@@ -1,4 +1,5 @@
 use super::*;
+use crate::auth_limits::{Key, Peer};
 use axum::extract::Path;
 
 #[derive(serde::Deserialize)]
@@ -11,12 +12,14 @@ pub struct Create {
 
 pub async fn create(
     State(state): State<AppState>,
+    peer: Peer,
     headers: HeaderMap,
     Json(input): Json<Create>,
 ) -> Result<impl IntoResponse, Error> {
     let owner = browser::owner(&state, &headers).await?;
     let (verified, hash) = auth::verify_credentials(
         &state,
+        peer,
         Ok(Json(Credentials {
             username: input.username,
             password: input.current_password,
@@ -76,24 +79,48 @@ pub struct Exchange {
     service_token: String,
 }
 
+/// Exchanges a service token for a session. Attempts count against the stored
+/// credential the token belongs to, so a consumer retrying a revoked or expired
+/// key locks out only that key; tokens no credential has count against their
+/// source address.
 pub async fn exchange(
     State(state): State<AppState>,
+    peer: Peer,
     headers: HeaderMap,
     Json(input): Json<Exchange>,
 ) -> Result<Response, Error> {
     machine_request(&headers)?;
-    auth::rate_limit(&state).await?;
-    if input.service_token.len() != 64
-        || !input.service_token.bytes().all(|b| b.is_ascii_hexdigit())
-    {
+    let well_formed = input.service_token.len() == 64
+        && input.service_token.bytes().all(|b| b.is_ascii_hexdigit());
+    let credential = if well_formed {
+        state
+            .store
+            .service_credential_of(&input.service_token)
+            .await?
+    } else {
+        None
+    };
+    let Some(credential) = credential else {
+        let _failure = state.auth_limits.begin(&[Key::source(peer), Key::Server])?;
         return Err(unauthorized());
-    }
+    };
+    let attempt = state
+        .auth_limits
+        .begin(&[Key::ServiceCredential(credential)])?;
     let token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
-    let owner = state
+    let owner = match state
         .store
         .exchange_service_session(&input.service_token, &browser::stored(&token))
-        .await?
-        .ok_or_else(unauthorized)?;
+        .await
+    {
+        // Revoked or expired: the attempt is dropped and counts as a failure.
+        Ok(owner) => owner.ok_or_else(unauthorized)?,
+        Err(error) => {
+            attempt.cleared();
+            return Err(error.into());
+        }
+    };
+    attempt.cleared();
     Ok((
         [
             (header::CACHE_CONTROL, "no-store"),
@@ -106,3 +133,7 @@ pub async fn exchange(
     )
         .into_response())
 }
+
+#[cfg(test)]
+#[path = "service_credentials_tests.rs"]
+mod tests;

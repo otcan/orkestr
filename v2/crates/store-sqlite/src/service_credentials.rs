@@ -78,6 +78,16 @@ impl Store {
         Ok(Some(OwnerId(parse(owner)?)))
     }
 
+    /// The stored credential a presented service token belongs to, active,
+    /// revoked or expired, so failed exchanges count against that credential.
+    pub async fn service_credential_of(&self, secret: &str) -> Result<Option<String>> {
+        sqlx::query_scalar("SELECT id FROM service_credentials WHERE token_hash=?")
+            .bind(digest(secret))
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(db)
+    }
+
     pub async fn service_credentials(&self, browser: &str) -> Result<Vec<ServiceCredential>> {
         let rows = sqlx::query("SELECT k.id,k.label,k.expires_at,k.revoked FROM service_credentials k JOIN auth_sessions s ON s.owner_id=k.owner_id WHERE s.token_hash=? AND s.kind='browser' AND s.expires_at>unixepoch() ORDER BY k.id")
             .bind(digest(browser)).fetch_all(&self.pool).await.map_err(db)?;
@@ -142,6 +152,14 @@ mod tests {
             .await
             .unwrap()
             .is_none());
+        assert_eq!(
+            store.service_credential_of(&secret).await.unwrap(),
+            Some(id.clone())
+        );
+        assert_eq!(
+            store.service_credential_of(&"b".repeat(64)).await.unwrap(),
+            None
+        );
         assert_eq!(
             store
                 .exchange_service_session(&secret, "browser:service")
@@ -213,6 +231,11 @@ mod tests {
             .await
             .unwrap()
             .is_none());
+        // A revoked credential is still the one its token belongs to.
+        assert_eq!(
+            store.service_credential_of(&secret).await.unwrap(),
+            Some(id.clone())
+        );
         store.close().await;
         std::fs::remove_file(path).unwrap();
     }

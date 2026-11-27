@@ -298,11 +298,15 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     let mut timers = timer_supervisor.map(|supervisor| timer_state.start_timers(supervisor));
     let (shutdown, mut requested) = tokio::sync::watch::channel(false);
     let mut serving = tokio::spawn(async move {
-        axum::serve(listener, app)
-            .with_graceful_shutdown(async move {
-                let _ = requested.changed().await;
-            })
-            .await
+        // Peer addresses key the authentication limits per source.
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .with_graceful_shutdown(async move {
+            let _ = requested.changed().await;
+        })
+        .await
     });
     let completed = tokio::select! {
         result = &mut serving => Some(result),
