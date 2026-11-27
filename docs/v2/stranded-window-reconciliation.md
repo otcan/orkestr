@@ -68,6 +68,12 @@ Observations, payloads, messages and receipts are kept. Nothing is dispatched ag
   generation=… cause=… retry_ms=… max_retry_ms=…`. The first success after
   refusals logs `window_reconcile_backoff_cleared … refused_attempts=…`. Owner
   decisions do not wait.
+- **Server (`server`).** Before the deadline, the same automatic pass closes a
+  window whose task in this process ended and reaped every original child, after
+  the manager has closed the window's egress. Core allows this only for a plan
+  that abandons nothing: a failed open, or turns already accepted, stopped or
+  lapsed. A proposal the owner could still accept keeps waiting for the owner or
+  the deadline. Before migration 0103 these decisions were recorded as `owner`.
 - **Owner (`owner`).** Use `POST /api/v2/conversations/{id}/window/reconcile` with
   `{"window_id", "generation", "decision"}`. The decision is either:
   - `abandon_unaccepted`: allowed before the deadline as an explicit owner choice.

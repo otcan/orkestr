@@ -50,3 +50,15 @@ fn a_failed_open_alerts_the_operator_with_identifiers_only() {
 fn a_reconciled_turn_window_is_not_an_open_failure_alert() {
     assert_eq!(open_failure_alert(&receipt(None), 0), None);
 }
+
+/// The server's own released-window recovery names itself, never the owner.
+#[test]
+fn a_server_decision_alerts_as_the_server() {
+    let mut receipt = receipt(Some(ExecutionWindowOpenFailureCause::CredentialUnbound));
+    receipt.actor = Actor::Server;
+    let alert = open_failure_alert(&receipt, 0).unwrap();
+    assert!(
+        alert.contains(" cause=credential_unbound actor=server "),
+        "{alert}"
+    );
+}

@@ -1,6 +1,7 @@
 //! Audited recovery of an execution window whose opening process is gone.
 //! A reconciliation never accepts, re-executes or grants budget; it records the
-//! owner's (or the deadline-passed startup path's) explicit terminal decision.
+//! owner's (or the deadline-passed startup path's, or the server's) explicit
+//! terminal decision.
 use crate::{ConversationId, EventId, RunId};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -22,6 +23,10 @@ pub enum ExecutionWindowReconciliationDecision {
 pub enum ExecutionWindowReconciliationActor {
     Startup,
     Owner,
+    /// The server's immediate recovery of a window whose task in this process
+    /// ended and reaped every original child. Allowed before the hard
+    /// deadline, but never for a plan that abandons a run.
+    Server,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -177,5 +182,16 @@ mod tests {
             );
         }
         assert!(ExecutionWindowOpenFailureCause::parse("open_failed").is_none());
+        for (actor, name) in [
+            (ExecutionWindowReconciliationActor::Startup, "startup"),
+            (ExecutionWindowReconciliationActor::Owner, "owner"),
+            (ExecutionWindowReconciliationActor::Server, "server"),
+        ] {
+            assert_eq!(serde_json::to_value(actor).unwrap(), name);
+            assert_eq!(
+                serde_json::from_value::<ExecutionWindowReconciliationActor>(name.into()).unwrap(),
+                actor
+            );
+        }
     }
 }

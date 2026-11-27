@@ -122,6 +122,7 @@ fn actor_name(actor: Actor) -> &'static str {
     match actor {
         Actor::Startup => "startup",
         Actor::Owner => "owner",
+        Actor::Server => "server",
     }
 }
 
@@ -344,6 +345,12 @@ fn startup_allowed(plan: &Plan, actor: Actor) -> Result<()> {
         Kind::Open(_) => false,
     };
     if actor == Actor::Startup && acceptable && !plan.abandon_grace_passed {
+        return Err(RuntimeStoreError::Fenced);
+    }
+    // The server's immediate recovery of a window whose process is provably
+    // gone may close it before the deadline, but never abandons a run: that
+    // stays the owner's decision or the deadline's.
+    if actor == Actor::Server && !plan.public.abandoned_run_ids.is_empty() {
         return Err(RuntimeStoreError::Fenced);
     }
     Ok(())

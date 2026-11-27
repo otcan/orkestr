@@ -80,12 +80,12 @@ pub(super) async fn commit_turns(
         sqlx::query("INSERT INTO production_run_abandonments(run_id,reconciliation_id,completion_event_id,binding_generation,abandoned_at_ms) VALUES(?,?,?,?,?)")
             .bind(&a.run).bind(id.to_string()).bind(&a.completion).bind(a.binding_generation + 1).bind(clock)
             .execute(&mut *tx).await.map_err(db)?;
-        let cause = if !a.acceptable {
-            "proposal_execution_missing"
-        } else if actor == Actor::Startup {
-            "acceptance_grace_expired"
-        } else {
-            "owner_decision"
+        let cause = match (a.acceptable, actor) {
+            (false, _) => "proposal_execution_missing",
+            (true, Actor::Startup) => "acceptance_grace_expired",
+            (true, Actor::Owner) => "owner_decision",
+            // Refused in planning (`startup_allowed`): the server never abandons.
+            (true, Actor::Server) => return Err(RuntimeStoreError::Fenced),
         };
         sqlx::query("INSERT INTO production_abandonment_causes(run_id,cause) VALUES(?,?)")
             .bind(&a.run)

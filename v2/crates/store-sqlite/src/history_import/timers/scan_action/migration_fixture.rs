@@ -4,10 +4,66 @@ use crate::Store;
 #[path = "credential_migration_fixture.rs"]
 mod credentials;
 
+/// One complete statement of a migration, from `start` to its `;`.
+fn statement<'a>(sql: &'a str, start: &str) -> &'a str {
+    let from = sql.find(start).unwrap();
+    &sql[from..from + sql[from..].find(";\n").unwrap() + 1]
+}
+
+/// Migration 103 down: the same copy-out, recreate and copy-back as 0103,
+/// with the schema-102 definitions (0054, 0052 and 0055 as stored after their
+/// rebuilds), keeping every row and rowid. Only while no decision names the
+/// server, which the older actor CHECKs refuse.
+pub(crate) async fn downgrade_server_actor(store: &Store) {
+    let server: i64 = sqlx::query_scalar(
+        "SELECT (SELECT count(*) FROM execution_window_reconciliations WHERE actor='server')
+          +(SELECT count(*) FROM execution_window_open_failures WHERE actor='server')
+          +(SELECT count(*) FROM production_run_lapses WHERE actor='server')",
+    )
+    .fetch_one(&store.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        server, 0,
+        "historical fixture must not rewrite a server decision"
+    );
+    let v103 = include_str!("../../../../migrations/0103_server_reconciliation_actor.sql");
+    let v52 = include_str!("../../../../migrations/0052_stranded_window_failures.sql");
+    let v54 = include_str!("../../../../migrations/0054_lapsed_runs.sql");
+    let v55 = include_str!("../../../../migrations/0055_generalized_settlement.sql");
+    let down = v103
+        .replace(
+            statement(v103, "CREATE TABLE execution_window_reconciliations ("),
+            &statement(v54, "CREATE TABLE execution_window_reconciliations_new (").replace(
+                "execution_window_reconciliations_new",
+                "\"execution_window_reconciliations\"",
+            ),
+        )
+        .replace(
+            statement(v103, "CREATE TABLE execution_window_open_failures ("),
+            statement(v52, "CREATE TABLE execution_window_open_failures ("),
+        )
+        .replace(
+            statement(v103, "CREATE TABLE production_run_lapses ("),
+            &statement(v55, "CREATE TABLE production_run_lapses_new (")
+                .replace("production_run_lapses_new", "\"production_run_lapses\""),
+        );
+    assert_ne!(down, v103);
+    let mut tx = store.pool.begin().await.unwrap();
+    sqlx::raw_sql(&down).execute(&mut *tx).await.unwrap();
+    sqlx::query("DELETE FROM _sqlx_migrations WHERE version=103")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+}
+
 /// Migration 102 down: rebuild `production_payloads` with its 0014 definition
 /// (8 KiB bound) and its 0059 index, keeping every row and rowid. Only while
-/// every stored text fits the old bound, so no reply is cut.
+/// every stored text fits the old bound, so no reply is cut. Migration 103 is
+/// undone first: this heads the historical downgrade chain.
 pub(crate) async fn downgrade_payload_bound(store: &Store) {
+    downgrade_server_actor(store).await;
     let long: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM production_payloads WHERE length(CAST(text AS BLOB))>8192",
     )
