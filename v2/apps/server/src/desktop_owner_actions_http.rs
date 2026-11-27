@@ -7,6 +7,8 @@
 //! check at all, so Stop cannot rely on it. Stop re-reads the reservation
 //! itself just before acting and requires a confirmation that matches what it
 //! finds. Lease state is never written from here: no force, no break-glass.
+//! A desk reserved in V2 between steps also needs the confirmation, and a
+//! link opens the owner's viewing window ([`crate::desktop_reservation_http`]).
 use super::*;
 use crate::conversation_resources_http::invalid;
 use crate::desktop_broker::Broker;
@@ -174,6 +176,21 @@ async fn act(broker: &Broker, slug: &str, action: &'static str) -> Result<Value,
     Ok(browser)
 }
 
+/// Whether V2 holds a reservation or the owner's viewing window on the desk;
+/// one that cannot be read counts as held.
+async fn reserved_in_v2(state: &AppState, headers: &HeaderMap, slug: &str) -> Result<bool, Error> {
+    let owner = browser::owner(state, headers).await?;
+    let credential = browser::credential(headers)?;
+    match state
+        .store
+        .owner_desktop_reservations(&credential, &owner)
+        .await
+    {
+        Ok(held) => Ok(held.iter().any(|r| r.desk == slug)),
+        Err(_) => Ok(true),
+    }
+}
+
 fn runtime_after(browser: &Value) -> String {
     text(browser, "status")
         .or_else(|| text(browser, "state"))
@@ -255,6 +272,14 @@ async fn stop(
             ))
         }
     }
+    // V1 holds no lease between a chat's steps: its V2 reservation (or the
+    // owner's viewing window) still means the desk is in use.
+    if !request.confirm_interruption && reserved_in_v2(&state, &headers, &slug).await? {
+        return Err(conflict(
+            "desktop_stop_confirmation_required",
+            "This desk is reserved or unverified; confirm the interruption to stop it",
+        ));
+    }
     let browser = act(broker, &slug, "stop").await?;
     browser::owner(&state, &headers).await?;
     let after = read_lease(broker, &slug).await;
@@ -315,12 +340,29 @@ async fn link(
         .filter(|url| safe_share_url(url))
         .ok_or_else(failed)?;
     // Never publish a newly minted link on authorization that has since lapsed.
-    browser::owner(&state, &headers).await?;
+    let owner = browser::owner(&state, &headers).await?;
     let expires_at = value
         .get("share")
         .and_then(|share| text(share, "expiresAt"));
-    let mut response =
-        Json(json!({"url":url,"challenge_required":true,"expires_at":expires_at})).into_response();
+    let viewer_until_ms = match browser::credential(&headers) {
+        Ok(credential) => {
+            crate::desktop_reservation_http::record_owner_viewer(
+                &state,
+                &owner,
+                &credential,
+                &slug,
+                &value,
+                None,
+            )
+            .await
+        }
+        Err(_) => None,
+    };
+    let mut response = Json(
+        json!({"url":url,"challenge_required":true,"expires_at":expires_at,
+        "viewer_until_ms":viewer_until_ms}),
+    )
+    .into_response();
     response
         .headers_mut()
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));

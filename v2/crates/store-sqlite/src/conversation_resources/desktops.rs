@@ -64,7 +64,7 @@ fn binding_of(
         grant_generation: row.get("grant_generation"),
     })
 }
-async fn binding(
+pub(super) async fn binding(
     tx: &mut Transaction<'_, Sqlite>,
     conversation: &ConversationId,
 ) -> Result<Option<DesktopBinding>> {
@@ -106,7 +106,7 @@ async fn lease_row(tx: &mut Transaction<'_, Sqlite>, row: i64) -> Result<Desktop
 }
 
 impl Store {
-    async fn desktop_scope(
+    pub(super) async fn desktop_scope(
         &self,
         caller: DesktopCaller<'_>,
         conversation: &ConversationId,
@@ -386,6 +386,7 @@ impl Store {
             return Err(ResourceError::Conflict("desktop_sharing_changed"));
         }
         let now = now_ms();
+        let expires_ms = now.saturating_add(ttl_ms as i64);
         let inserted = sqlx::query(
             "INSERT INTO desktop_leases(owner_id,conversation_id,desktop_slug,v1_thread_id,v1_lease_id,fencing_version,token_hash,state,expires_at,expires_at_ms,acquired_at_ms,heartbeat_at_ms)
              VALUES(?,?,?,?,?,?,?,'active',?,?,?,?)",
@@ -393,7 +394,7 @@ impl Store {
         .bind(owner.to_string()).bind(conversation.to_string()).bind(slug)
         .bind(&prepared.v1_thread_id).bind(&grant.lease_id).bind(grant.fencing_version)
         .bind(fence_hash(&grant.fencing_token)).bind(&grant.expires_at)
-        .bind(now.saturating_add(ttl_ms as i64)).bind(now).bind(now)
+        .bind(expires_ms).bind(now).bind(now)
         .execute(&mut *tx)
         .await;
         let row = match inserted {
@@ -403,6 +404,19 @@ impl Store {
             }
             Err(e) => return Err(unavailable(e)),
         };
+        // Desk reservations, in the transaction that inserts the lease row: a
+        // desk another chat or the owner took while V1 prepared it is refused
+        // (the row is rolled back and the server releases the V1 lease), and
+        // this chat's task is made or extended to past the lease.
+        super::desktop_reservations::guard_and_touch(
+            &mut tx,
+            &owner,
+            conversation,
+            slug,
+            now,
+            expires_ms,
+        )
+        .await?;
         let lease = lease_row(&mut tx, row).await?;
         tx.commit().await.map_err(unavailable)?;
         Ok(DesktopLeaseGranted {
@@ -498,7 +512,7 @@ impl Store {
         fence: &DesktopFence,
         extended: Option<(Option<String>, u64)>,
     ) -> Result<DesktopLeaseView> {
-        let (mut tx, _) = self.desktop_scope(caller, conversation, true).await?;
+        let (mut tx, owner) = self.desktop_scope(caller, conversation, true).await?;
         let now = now_ms();
         let (expires_at, expires_ms) = match &extended {
             Some((at, ttl)) => (at.clone(), Some(now.saturating_add(*ttl as i64))),
@@ -512,6 +526,18 @@ impl Store {
             return Err(ResourceError::Conflict("desktop_fence_rejected"));
         }
         let lease = lease_row(&mut tx, fence.row).await?;
+        // A step that keeps its lease longer keeps the chat's task with it.
+        if let Some(until) = expires_ms {
+            super::desktop_reservations::touch(
+                &mut tx,
+                &owner,
+                conversation,
+                &lease.desktop_slug,
+                now,
+                until,
+            )
+            .await?;
+        }
         tx.commit().await.map_err(unavailable)?;
         Ok(lease)
     }

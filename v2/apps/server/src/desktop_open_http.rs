@@ -174,7 +174,20 @@ async fn open(
             "Desktop access changed while preparing its link; do not retry automatically",
         ));
     }
-    let mut response = Json(json!({"url":url,"challenge_required":true})).into_response();
+    // The owner watches this chat's desk: the chat keeps working there.
+    let watching = conversation(&id)?;
+    let viewer_until_ms = crate::desktop_reservation_http::record_owner_viewer(
+        &state,
+        &owner,
+        &credential,
+        &slug,
+        &value,
+        Some(&watching),
+    )
+    .await;
+    let mut response =
+        Json(json!({"url":url,"challenge_required":true,"viewer_until_ms":viewer_until_ms}))
+            .into_response();
     response
         .headers_mut()
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));

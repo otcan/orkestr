@@ -4,7 +4,7 @@ use super::*;
 use crate::archived_history_http::owner_credential;
 use crate::conversation_resources_http::{conversation, failure, invalid};
 use axum::extract::{rejection::JsonRejection, Path};
-use orkestr_v2_contracts::{DesktopInventory, DesktopResource};
+use orkestr_v2_contracts::{DesktopInventory, DesktopReservationKind, DesktopResource};
 use orkestr_v2_store_sqlite::DesktopCaller;
 use serde_json::{json, Value};
 
@@ -84,6 +84,8 @@ pub(crate) fn project(value: &Value) -> Result<Vec<DesktopResource>, Error> {
                 lease_state: lease.state,
                 holder: lease.holder,
                 expires_at: lease.expires_at,
+                reservation: None,
+                owner_viewer: None,
             })
         })
         .collect()
@@ -98,13 +100,29 @@ async fn list(State(state): State<AppState>, headers: HeaderMap) -> Result<Respo
     if status != 200 {
         return Err(unavailable());
     }
-    let resources = project(&value)?;
+    let mut resources = project(&value)?;
     // Revalidate the original credential after the remote observation.
     let bindings = state
         .store
         .desktop_resource_bindings(&credential, &owner)
         .await
         .map_err(failure)?;
+    // Beside V1's lease of the current step: V2's reservation between steps
+    // and the owner's viewing window, so a reserved desk never looks free.
+    for view in state
+        .store
+        .owner_desktop_reservations(&credential, &owner)
+        .await
+        .map_err(failure)?
+    {
+        if let Some(desk) = resources.iter_mut().find(|desk| desk.slug == view.desk) {
+            if view.kind == DesktopReservationKind::OwnerViewer {
+                desk.owner_viewer = Some(view);
+            } else {
+                desk.reservation = Some(view);
+            }
+        }
+    }
     let observed_at_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|_| unavailable())?

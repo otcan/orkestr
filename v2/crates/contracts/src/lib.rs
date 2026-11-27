@@ -410,4 +410,7 @@ pub use desktop_inventory::*;
 mod desktop_sharing;
 pub use desktop_sharing::*;
 
+mod desktop_reservations;
+pub use desktop_reservations::*;
+
 pub mod build_times;

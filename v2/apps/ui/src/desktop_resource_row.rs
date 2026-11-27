@@ -1,7 +1,11 @@
 use dioxus::prelude::*;
 use orkestr_v2_contracts::{DesktopLeaseGranted, DesktopResource, DesktopResourceBinding};
 use orkestr_v2_ui::{
-    desk_presentation::{held_by, Availability, DeskSharing},
+    desk_presentation::{
+        free_desk_help, held_by, reservation_lines, shown_holder, shown_lease_state, Availability,
+        DeskSharing,
+    },
+    host_metrics::clock,
     session_scope::SessionScope,
 };
 use serde_json::{json, Value};
@@ -17,6 +21,9 @@ pub fn DesktopResourceRow(
     observed_at_ms: i64,
     #[props(default = true)] visible: bool,
     #[props(default)] shared: bool,
+    /// The page's time zone offset (minutes, as `Date` gives it).
+    #[props(default)]
+    offset_minutes: i64,
 ) -> Element {
     let owner = session_scope.read().generation();
     let initial = if bindings.len() == 1 {
@@ -25,7 +32,9 @@ pub fn DesktopResourceRow(
         String::new()
     };
     let mut selected = use_signal(|| initial);
-    let availability = Availability::from_lease(&desk.lease_state);
+    let availability = Availability::from_lease(shown_lease_state(&desk));
+    let reserved_lines = reservation_lines(&desk, |ms| clock(ms, offset_minutes, false));
+    let holder = held_by(shown_lease_state(&desk), shown_holder(&desk).as_deref());
     let mut token = use_signal(|| None::<String>);
     let mut busy = use_signal(|| false);
     let mut uncertain = use_signal(|| false);
@@ -49,17 +58,40 @@ pub fn DesktopResourceRow(
                 }
                 td { role: "cell", "data-label": "Reservation",
                     span { class: "desk-badge", "data-availability": availability.token(), title: availability.explanation(), "{availability.label()}" }
+                    for line in reserved_lines.iter() {
+                        span { class: "desk-reservation", "{line}" }
+                    }
                 }
                 td { class: "desk-runtime", role: "cell", "data-label": "Runtime", "{runtime_state}" }
                 td { class: "desk-holder", role: "cell", "data-label": "Held by",
                     span { class: "desk-holder-value",
-                        span { {held_by(&desk.lease_state, desk.holder.as_deref())} }
+                        span { "{holder}" }
                         if let Some(expiry) = &desk.expires_at { span { class: "desk-expiry", "until {expiry}" } }
                     }
                 }
                 td { class: "desk-actions-cell", role: "cell", "data-label": "Actions",
                     div { class: "desk-action-bar",
                     crate::desk_owner_actions::DeskOwnerButtons { actions: owner_actions, desk: desk.clone(), runtime_state: runtime_state.clone(), csrf: csrf.clone(), session_scope, onexpired, onchanged }
+                    if desk.reserved_in_v2() {
+                        button { r#type: "button", class: "desk-free", title: free_desk_help(&desk), disabled: busy(), onclick: {
+                            let (slug, csrf) = (desk.slug.clone(), csrf.clone());
+                            move |_| {
+                                if busy() {return;}
+                                busy.set(true);status.set(String::new());
+                                let (slug, csrf) = (slug.clone(), csrf.clone());
+                                spawn(async move {
+                                    let result = crate::transport::request::<Value>("DELETE", &format!("/api/v2/desktops/{slug}/reservation"), Value::Null, &csrf, "").await;
+                                    if !session_scope.read().is_current(owner) {return;}
+                                    busy.set(false);
+                                    match result {
+                                        Ok(_) => {status.set("Reservation ended. Chats may take this desk again.".into());onchanged.call(());}
+                                        Err(error) if error.status == 401 => onexpired.call(()),
+                                        Err(error) => status.set(error.message),
+                                    }
+                                });
+                            }
+                        }, "Free desk" }
+                    }
                     if !bindings.is_empty() {
                         button { r#type: "button", class: "desk-chat-toggle", title: DeskSharing::reserve_title(shared),
                             "aria-expanded": if chat_shown { "true" } else { "false" }, "aria-controls": "{chat_panel}",

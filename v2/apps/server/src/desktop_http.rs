@@ -4,11 +4,15 @@
 //! the grant (header `x-orkestr-desktop-grant`, machine requests only). When
 //! the owner shares all desks with all chats, an acquire of any desk needs no
 //! slug in the binding and no V1 per-thread grant; V1 still decides the lease
-//! under its own access policy and stays the fencing authority.
+//! under its own access policy and stays the fencing authority. Desk
+//! reservations ([`crate::desktop_reservation_http`]) are checked before V1
+//! is asked and again where the lease is recorded, so every grant caller
+//! honours them.
 use super::*;
 use crate::archived_history_http::owner_credential;
 use crate::conversation_resources_http::{conversation, failure, invalid};
 use crate::desktop_broker::BrokerError;
+use crate::desktop_reservation_http::refusal;
 use axum::extract::{rejection::JsonRejection, Path};
 use orkestr_v2_store_sqlite::{DesktopCaller, ResourceError};
 
@@ -29,19 +33,19 @@ pub(crate) fn router() -> Router<AppState> {
         .route(&format!("{base}/desktops/{{slug}}/release"), post(release))
 }
 
-enum Caller {
+pub(crate) enum Caller {
     Owner(OwnerId, String),
     Grant(String),
 }
 impl Caller {
-    fn store(&self) -> DesktopCaller<'_> {
+    pub(crate) fn store(&self) -> DesktopCaller<'_> {
         match self {
             Self::Owner(owner, credential) => DesktopCaller::Owner { credential, owner },
             Self::Grant(grant) => DesktopCaller::Grant(grant),
         }
     }
 }
-async fn caller(state: &AppState, headers: &HeaderMap) -> Result<Caller, Error> {
+pub(crate) async fn caller(state: &AppState, headers: &HeaderMap) -> Result<Caller, Error> {
     let mut grants = headers.get_all(DESKTOP_GRANT_HEADER).iter();
     let Some(grant) = grants.next() else {
         let (owner, credential) = owner_credential(state, headers).await?;
@@ -213,6 +217,15 @@ async fn acquire(
         }
         prepared => prepared.map_err(failure)?,
     };
+    // A desk another chat holds between its steps, one handed to the owner or
+    // one the owner is viewing: refused before V1 is asked.
+    let reservation = store
+        .desktop_reservation(caller.store(), &conversation, &slug)
+        .await
+        .map_err(failure)?;
+    if reservation.verdict != DeskVerdict::Allowed {
+        return Ok(refusal(&state, caller.store(), &conversation, reservation, &[]).await);
+    }
     let thread = prepared.v1_thread_id.clone();
     if !prepared.shared
         && !broker
@@ -256,6 +269,27 @@ async fn acquire(
                     "orkestr_v2_unrecorded",
                 )
                 .await;
+            // Reserved or handed over while V1 prepared the desk.
+            if matches!(
+                error,
+                ResourceError::Conflict("desk_busy" | "desk_handed_to_owner")
+            ) {
+                if let Ok(reservation) = store
+                    .desktop_reservation(caller.store(), &conversation, &slug)
+                    .await
+                {
+                    if reservation.verdict != DeskVerdict::Allowed {
+                        return Ok(refusal(
+                            &state,
+                            caller.store(),
+                            &conversation,
+                            reservation,
+                            &[],
+                        )
+                        .await);
+                    }
+                }
+            }
             Err(failure(error))
         }
     }

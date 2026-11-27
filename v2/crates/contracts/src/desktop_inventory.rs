@@ -1,5 +1,5 @@
 //! Owner-wide public desk inventory; no tokens, profile paths or endpoints.
-use crate::ConversationId;
+use crate::{ConversationId, DesktopReservationView};
 use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -7,9 +7,23 @@ pub struct DesktopResource {
     pub slug: String,
     pub label: String,
     pub state: String,
+    /// The V1 lease of the current step (`reserved`, `unreserved`, …).
     pub lease_state: String,
     pub holder: Option<String>,
     pub expires_at: Option<String>,
+    /// The desk's V2 claim between steps: a chat's task or a handoff to the
+    /// owner ([`crate::DesktopReservationKind`]). Absent when there is none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reservation: Option<DesktopReservationView>,
+    /// The owner's viewing window, when one holds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_viewer: Option<DesktopReservationView>,
+}
+impl DesktopResource {
+    /// Held between steps or watched by the owner: never a free desk.
+    pub fn reserved_in_v2(&self) -> bool {
+        self.reservation.is_some() || self.owner_viewer.is_some()
+    }
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

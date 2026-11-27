@@ -14,12 +14,15 @@ const vault = /^\/api\/v2\/vault(?:\/(?:items(?:\/vi_[A-Za-z0-9_-]{6,64}(?:\/(?:
 // the revision it saw). No route of the page ever answers with a value.
 const credentials = /^\/api\/v2\/credentials(?:\/(?:vi_[A-Za-z0-9_-]{6,64}|[a-z0-9][a-z0-9-]{0,62})(?:\/value|\?expected_revision=[A-Za-z0-9%._~-]{1,256})?)?$/;
 // Owner-wide discovery; lease mutations retain an explicit conversation scope,
-// and only the fixed owner lifecycle verbs apply to a desk without one. The
-// owner's desk sharing switch is one fixed path, read and replaced whole.
+// and only the fixed owner lifecycle verbs and freeing a reservation apply to
+// a desk without one. The owner's desk sharing switch is one fixed path, read
+// and replaced whole.
 const deskRequest = (input.method === 'GET' && input.path === '/api/v2/desktops') ||
     (['GET', 'PUT'].includes(input.method) && input.path === '/api/v2/desktop-sharing') ||
     (input.method === 'POST' && /^\/api\/v2\/conversations\/[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}\/desktops\/[a-z0-9][a-z0-9_-]{0,63}\/(?:acquire|release|reset)$/.test(input.path)) ||
-    (input.method === 'POST' && /^\/api\/v2\/desktops\/[a-z0-9][a-z0-9_-]{0,63}\/(?:start|stop|link)$/.test(input.path));
+    (input.method === 'POST' && /^\/api\/v2\/desktops\/[a-z0-9][a-z0-9_-]{0,63}\/(?:start|stop|link)$/.test(input.path)) ||
+    // The owner frees a desk: its reservation between steps and viewing window end.
+    (input.method === 'DELETE' && /^\/api\/v2\/desktops\/[a-z0-9][a-z0-9_-]{0,63}\/reservation$/.test(input.path));
 const health = input.path === "/api/v2/health" && input.method === "GET";
 // Install-wide provider sign-in: one fixed read and closed per-provider actions.
 const signIn = (input.method === "GET" && input.path === "/api/v2/provider-sign-in") ||
