@@ -33,6 +33,9 @@ minutes. The chat sees nothing meanwhile. When they are used up, the input
 closes with one plain notice that says why (`setup_unavailable`, no reason
 code) and one operator ALERT (ORK-770).
 
+While another input's window is open, the retirement is asked for at once:
+a window Core reconciled or failed releases its unrun inputs to the inbox,
+and no later window picks them up, so waiting for that window never helps.
 When Core refuses the retirement it still owns the input (for example in a
 successor window): the adapter keeps matching and waiting, at most
 RETIRE_WAIT_S, then closes it as before this change. A terminal Deep always
@@ -215,7 +218,13 @@ def recover(worker, data, reason, started=False):
             log(worker, "input_journal_behind", data, reason=reason)
         return True
     state = own_window_state(worker, data)
-    if state in ("successor_open", "successor_queued", "reconciliation_required"):
+    if state == "successor_open":
+        data.pop("ended_seen_at", None)
+        if released_input_retired(worker, data):
+            readmit(worker, data, "automatic", reason)
+            return True
+        return wait_or_close(worker, data, now, reason, state)
+    if state in ("successor_queued", "reconciliation_required"):
         # Core may hand the joined-but-unrun input to that window and run it.
         data.pop("ended_seen_at", None)
         return wait_or_close(worker, data, now, reason, state)
@@ -237,6 +246,25 @@ def recover(worker, data, reason, started=False):
         return wait_or_close(worker, data, now, reason, "retire_refused")
     readmit(worker, data, "automatic", reason)
     return True
+
+
+def released_input_retired(worker, data):
+    """True when Core retired an input whose own window ended while another
+    window is open, so it can be admitted again at once.
+
+    Core either handed the joined-but-unrun input to that window (it runs
+    there) or released it back to its inbox, where no window picks it up
+    again: a reconciled or failed window releases every input no run
+    consumed. Waiting for the open window never helps the released one.
+    Core's retirement gate tells the two apart in one transaction: it refuses
+    while the input is in an open window, has a queued window request or any
+    run references it. Its own window closed before the other could open, so
+    no requeue of it is still in flight (unlike "ended, no successor")."""
+    if data.get("matched_runs") or held(worker, data) != "not_held":
+        return False  # Core never retires it; an owner stop is never undone.
+    if queued_for(worker, data) != "not_queued":
+        return False  # Core requeued it for a window of its own.
+    return retire_original(worker, data) == "retired"
 
 
 # Core may still run the input itself (a newer open window, a queued window
