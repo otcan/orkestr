@@ -381,6 +381,10 @@ fn run_case(case: &str) {
         "wrong_scope" => reply["receipt"]["conversation_id"] = json!(Uuid::from_u128(99)),
         "unknown" => reply["request_id"] = json!("invented-echo"),
         "refused" => reply = json!({"ok":false,"code":"control_refused","receipt":receipt()}),
+        "refused_admit" => {
+            assert_eq!(request["operation"], "admit");
+            reply = json!({"ok":false,"code":"control_refused","receipt":receipt(),"reason":"input_reused"});
+        }
         "unavailable" => reply = json!({"ok":false,"code":"control_unavailable"}),
         "wrong_window" => {
             reply["receipt"]["window_id"] = json!(Uuid::from_u128(99));
@@ -461,6 +465,14 @@ fn transport_child() {
                 );
                 Ok(())
             }
+            "refused_admit" => match client.admit_or_refused(&admission(), deadline).await? {
+                AdmitOutcome::Refused(refusal)
+                    if refusal.reason.as_deref() == Some("input_reused") =>
+                {
+                    Ok(())
+                }
+                _ => Err(ManagerError::Protocol),
+            },
             "drain" | "wrong_window" => client
                 .drain("synthetic", &window(), deadline)
                 .await
@@ -510,7 +522,7 @@ fn transport_child() {
     });
     match case.as_str() {
         "status" | "admit" | "historical" | "drain" | "uncertain" | "retire" | "reconcile"
-        | "reconcile_failed" => {
+        | "reconcile_failed" | "refused_admit" => {
             assert_eq!(result, Ok(()))
         }
         "deadline" | "partial_deadline" => assert_eq!(result, Err(ManagerError::Deadline)),
@@ -620,4 +632,5 @@ transport_cases! {
     duplicate_fields_refused => "duplicate", noncanonical_reply_refused => "noncanonical", oversized_reply_refused => "oversized",
     truncated_reply_refused => "truncated", trailing_reply_refused => "suffix", ambiguous_timeout_is_not_retried => "deadline",
     partial_read_shares_deadline => "partial_deadline", explicit_refusal_stays_refused => "refused", unavailable_stays_refused => "unavailable",
+    refused_admission_keeps_receipt_and_code => "refused_admit",
 }

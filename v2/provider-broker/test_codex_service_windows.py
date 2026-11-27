@@ -250,6 +250,8 @@ class Windows(unittest.TestCase):
         self.assertEqual((answer["ok"], answer["code"]), (False, "control_refused"))
         self.assertEqual((answer["receipt"]["conversation_id"], answer["receipt"]["window_id"],
                           answer["receipt"]["state"]), (self.home, a["window_id"], "draining"))
+        # The fixed refusal code travels with the receipt (a closed token).
+        self.assertEqual(answer["reason"], "window_not_accepting_inputs")
         # A request that never parsed names no conversation: the newest window, as before.
         unparsed = self.join(a, a["opened_at_ms"] + 14_400_001)
         answer = self.exchange(encode(unparsed))

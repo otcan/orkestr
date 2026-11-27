@@ -414,6 +414,8 @@ impl Controller {
             if let Err(reason) = &result {
                 // Static local diagnostics only; never provider text or tokens.
                 eprintln!("window dispatch refused: {reason}");
+                self.close_refused_admission(browser, conversation, &entry)
+                    .await;
             }
             match result {
                 Ok(_) => {

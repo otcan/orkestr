@@ -85,10 +85,14 @@ impl Controller {
             self.queue.remember(browser);
             return self.enqueue(browser, conversation, input).await;
         }
-        entry
-            .process(browser, owner, conversation, input)
-            .await
-            .map(WindowOutcome::Admitted)
+        let result = entry.process(browser, owner, conversation, input).await;
+        if result.is_err() {
+            // A refusal proving the manager never admitted this opening
+            // closes it as a failed open now (no-op for any other error).
+            self.close_refused_admission(browser, conversation, entry)
+                .await;
+        }
+        result.map(WindowOutcome::Admitted)
     }
 
     /// The dispatcher's controller for an open or join, unless a hold

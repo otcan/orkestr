@@ -201,3 +201,45 @@ fn only_the_unretired_direct_predecessor_of_an_unissued_open_is_replayed() {
         assert!(unretired_predecessor(&shape, &stuck, NOW, Some(&uncertain)).is_none());
     }
 }
+
+#[test]
+fn a_refused_admission_commits_at_once_on_the_same_proof() {
+    // 2026-11-27: a timer firing released by a turn reconciliation was
+    // refused at admission (`input_reused`); the refusal reached the opener.
+    // Nothing can still be in flight, so the young window closes at once.
+    let young = window(2, NOW - 1);
+    let unissued = plan(Some(Cause::CredentialUnissued), false);
+    let previous = manager(Uuid::from_u128(31), 1, WindowState::Retired);
+    assert!(!local_commit_allowed(
+        &unissued,
+        &young,
+        NOW,
+        Some(&previous)
+    ));
+    assert!(refused_commit_allowed(&unissued, &young, &previous));
+    let idle = ManagerReceipt::Idle {
+        owner_id: OwnerId(Uuid::from_u128(1)),
+        conversation_id: ConversationId(Uuid::from_u128(2)),
+    };
+    assert!(refused_commit_allowed(&unissued, &young, &idle));
+    // A refusal naming this, a later or an unretired window proves nothing.
+    for receipt in [
+        manager(young.window_id, 2, WindowState::Reconciliation),
+        manager(young.window_id, 2, WindowState::Retired),
+        manager(Uuid::from_u128(99), 2, WindowState::Retired),
+        manager(Uuid::from_u128(31), 1, WindowState::Active),
+        manager(Uuid::from_u128(31), 1, WindowState::Reconciliation),
+        manager(Uuid::from_u128(31), 1, WindowState::Expired),
+    ] {
+        assert!(!refused_commit_allowed(&unissued, &young, &receipt));
+    }
+    // Core's plan must still be a failed open that never got its credential.
+    for shape in [
+        plan(Some(Cause::CredentialUnbound), false),
+        plan(Some(Cause::SetupIncomplete), false),
+        plan(Some(Cause::CredentialUnissued), true),
+        plan(None, false),
+    ] {
+        assert!(!refused_commit_allowed(&shape, &young, &previous));
+    }
+}

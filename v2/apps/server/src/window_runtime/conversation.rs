@@ -6,7 +6,7 @@ use super::{
     context::Context,
     handles::Handles,
     initial::{InitialAuthority, WindowAuthority},
-    manager_client::{Admission, ManagerClient, Window},
+    manager_client::{Admission, AdmitOutcome, ManagerClient, RefusedAdmission, Window},
 };
 use crate::{
     beta_config::BetaConfig,
@@ -35,7 +35,13 @@ pub(super) struct ConversationController {
     operation: Mutex<()>,
     /// Last immediate reconciliation attempt of a released window (spacing).
     released_attempt: std::sync::Mutex<Option<Instant>>,
+    /// The manager's proven refusal of this controller's opening, kept until
+    /// the controller closes it as a failed open.
+    refused: std::sync::Mutex<Option<RefusedAdmission>>,
 }
+/// The manager refused the opening and its receipt proves it never admitted
+/// the window. Everything else about an admission failure stays uncertain.
+pub(super) const ADMISSION_REFUSED: &str = "manager admission refused";
 /// Spacing of immediate reconciliation attempts for one released window.
 const RELEASED_RETRY: Duration = Duration::from_secs(10);
 mod state;
@@ -86,7 +92,12 @@ impl ConversationController {
             state: Mutex::new(State::Idle),
             operation: Mutex::new(()),
             released_attempt: std::sync::Mutex::new(None),
+            refused: std::sync::Mutex::new(None),
         }
+    }
+    /// The proven refusal of this controller's opening, at most once.
+    pub(super) fn take_refused_admission(&self) -> Option<RefusedAdmission> {
+        self.refused.lock().ok()?.take()
     }
     pub(crate) async fn process(
         &self,
@@ -320,7 +331,13 @@ impl ConversationController {
                 Ok(())
             }
             Err(error) => {
-                *state = State::Uncertain;
+                // A proven refusal: neither the manager nor this process holds
+                // anything of the window (no task was started).
+                *state = if error == ADMISSION_REFUSED {
+                    State::Released
+                } else {
+                    State::Uncertain
+                };
                 self.handles.poison();
                 Err(error)
             }
@@ -375,14 +392,35 @@ impl ConversationController {
                     && receipt.state == super::manager_client::WindowState::Retired => {}
             _ => return Err("manager prior window is not retired"),
         }
-        let ack = self
+        let ack = match self
             .manager
-            .admit(
+            .admit_or_refused(
                 &self.request(input, admission),
                 Instant::now() + Duration::from_secs(5),
             )
             .await
-            .map_err(|_| "manager admission uncertain")?;
+        {
+            Ok(AdmitOutcome::Admitted(ack)) => *ack,
+            Ok(AdmitOutcome::Refused(refusal)) => {
+                let refused = RefusedAdmission {
+                    window: Window {
+                        window_id: admission.status.window_id,
+                        generation: admission.status.generation,
+                    },
+                    refusal,
+                };
+                // A receipt naming this (or a later, or a live) window may
+                // follow a committed admission: that stays uncertain.
+                if !refused.proves_unadmitted() {
+                    return Err("manager admission uncertain");
+                }
+                if let Ok(mut slot) = self.refused.lock() {
+                    *slot = Some(refused);
+                }
+                return Err(ADMISSION_REFUSED);
+            }
+            Err(_) => return Err("manager admission uncertain"),
+        };
         if !ack.fresh_window {
             return Err("fresh private issuance requires fresh manager admission");
         }
