@@ -171,6 +171,11 @@ fn plan(
                 ExecutionWindowState::Active if joinable(status, now_ms, max_lifetime_ms) => {
                     request.window_id = Some(status.window_id)
                 }
+                // Core's own intent has no sender who could send it again:
+                // it waits for the reconciliation instead of being withdrawn.
+                ExecutionWindowState::ReconciliationRequired if core_owned(&row.request_key) => {
+                    return Plan::Wait
+                }
                 ExecutionWindowState::ReconciliationRequired => {
                     return Plan::Withdraw(QueuedWindowWithdrawal::ReconciliationRequired)
                 }
@@ -179,6 +184,20 @@ fn plan(
         }
     }
     Plan::Admit(request)
+}
+
+/// Intents Core queued itself: a timer firing (`timer-window:<event>`, and
+/// its one retry `…:retry1`) or an automatic result
+/// (`source-continuation:<event>`, likewise). Withdrawing one while the
+/// conversation's window awaits reconciliation lost it for good: nothing
+/// re-admits a result, and the adapter reopened a withdrawn timer firing
+/// under a fresh request key the manager refuses (`input_reused`), so that
+/// opening failed as well (2026-11-27). Waiting keeps the intent's own key,
+/// which Core and the manager both accept once the window is reconciled.
+fn core_owned(request_key: &str) -> bool {
+    ["timer-window:", "source-continuation:"]
+        .iter()
+        .any(|prefix| request_key.starts_with(prefix))
 }
 
 /// Operator alert for an intent that keeps waiting; it is never withdrawn.

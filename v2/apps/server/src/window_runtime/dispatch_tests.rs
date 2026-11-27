@@ -454,6 +454,84 @@ fn queued_intent_is_rebuilt_against_current_window_state() {
     ));
 }
 
+#[test]
+fn core_owned_intents_wait_for_a_reconciliation_instead_of_being_withdrawn() {
+    // 2026-11-27: a timer firing's retry was withdrawn while its chat's window
+    // awaited reconciliation; reopened under a fresh key, it never ran.
+    const HOUR: i64 = 3_600_000;
+    let conversation = ConversationId(Uuid::new_v4());
+    let event = Uuid::new_v4();
+    let row = |request_key: &str| ExecutionWindowQueued {
+        conversation_id: conversation.clone(),
+        request_key: request_key.into(),
+        input_message_id: orkestr_v2_contracts::MessageId(Uuid::new_v4()),
+        input_event_id: orkestr_v2_contracts::EventId(event),
+        input_request_key: "input".into(),
+        state: QueuedWindowState::Queued,
+        position: Some(1),
+        queued_at_ms: 0,
+        window_id: None,
+        withdrawal: None,
+    };
+    let status = |state| ExecutionWindowStatus {
+        window_id: Uuid::from_u128(9),
+        conversation_id: conversation.clone(),
+        generation: 4,
+        state,
+        input_message_id: orkestr_v2_contracts::MessageId(Uuid::new_v4()),
+        input_event_id: orkestr_v2_contracts::EventId(Uuid::new_v4()),
+        predecessor_window_id: None,
+        opened_at_ms: 0,
+        work_deadline_ms: 870_000,
+        expires_at_ms: 900_000,
+        limits: ExecutionWindowLimits::default(),
+    };
+    let blocked = status(ExecutionWindowState::ReconciliationRequired);
+    for key in [
+        format!("timer-window:{event}"),
+        format!("timer-window:{event}:retry1"),
+        format!("source-continuation:{event}"),
+        format!("source-continuation:{event}:retry1"),
+    ] {
+        assert!(
+            matches!(
+                plan(&row(key.as_str()), Some(&blocked), 1_000, HOUR),
+                Plan::Wait
+            ),
+            "{key}"
+        );
+    }
+    // An input with a sender (an owner message, a relay) is still withdrawn:
+    // the sender admits it again once the window is reconciled.
+    for key in [
+        Uuid::new_v4().to_string(),
+        format!("adapter-readmit:{event}"),
+        "peer-note-window-synthetic-1".to_owned(),
+        format!("timer:{event}"),
+    ] {
+        assert!(
+            matches!(
+                plan(&row(key.as_str()), Some(&blocked), 1_000, HOUR),
+                Plan::Withdraw(QueuedWindowWithdrawal::ReconciliationRequired)
+            ),
+            "{key}"
+        );
+    }
+    // Once reconciled, the intent opens the successor under its own key.
+    let retry = format!("timer-window:{event}:retry1");
+    let Plan::Admit(request) = plan(
+        &row(retry.as_str()),
+        Some(&status(ExecutionWindowState::Closed)),
+        1_000,
+        HOUR,
+    ) else {
+        panic!("a reconciled window lets the waiting intent open its successor")
+    };
+    assert_eq!(request.request_key, retry);
+    assert_eq!(request.predecessor_window_id, Some(Uuid::from_u128(9)));
+    assert_eq!(request.expected_generation, 4);
+}
+
 #[path = "expired_join_http_tests.rs"]
 mod expired_join_http_tests;
 #[path = "reconcile_backoff_tests.rs"]
