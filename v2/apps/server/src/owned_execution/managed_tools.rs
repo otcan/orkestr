@@ -10,6 +10,8 @@ use std::time::Instant;
 mod close;
 #[path = "managed_pace.rs"]
 mod pace;
+#[path = "managed_result.rs"]
+mod result_release;
 #[path = "managed_workers.rs"]
 mod workers;
 
@@ -286,7 +288,7 @@ impl ManagedTools {
                 .await
                 .map_err(|_| "managed result persistence uncertain")?;
             let started = Instant::now();
-            let result = self
+            let release = self
                 .context
                 .manager
                 .release_managed_result(
@@ -297,8 +299,16 @@ impl ManagedTools {
                     self.control_deadline()?,
                 )
                 .await;
-            observed_rpc(ManagedRpc::Result, started, result)
-                .map_err(|_| "managed result release unknown; replay refused")?;
+            // A definite refusal fails only this delivery (managed_result.rs).
+            let release = observed_rpc(ManagedRpc::Result, started, release);
+            if let result_release::Released::Undeliverable(refused) =
+                result_release::released(release)?
+            {
+                eprintln!(
+                    "owned execution managed result undeliverable: {}; run continues",
+                    refused.code()
+                );
+            }
         }
         Ok(())
     }

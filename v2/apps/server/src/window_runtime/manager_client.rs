@@ -17,6 +17,9 @@ mod launch_wire;
 mod managed_launch;
 #[path = "manager_operations.rs"]
 mod managed_operations;
+#[path = "manager_result_release.rs"]
+mod result_release;
+pub(crate) use result_release::ResultRefused;
 #[path = "manager_sign_in.rs"]
 mod sign_in;
 #[path = "manager_workers.rs"]
