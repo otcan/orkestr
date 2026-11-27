@@ -107,6 +107,68 @@ class Readmission(unittest.TestCase):
             with self.subTest(pair=pair), self.assertRaisesRegex(Refused, "input_reused"):
                 ledger.admit(self.request(4, other["window_id"], source=pair))
 
+    def join(self, window, source, key):
+        """`source` joins the live `window` as a follow-up under `key`."""
+        joined = {**self.request(window["generation"], None, key, source, expected=window["generation"]),
+                  **{k: window[k] for k in ("window_id", "opened_at_ms", "work_deadline_ms", "expires_at_ms")}}
+        self.assertFalse(self.ledger.admit(joined)[1])
+        return joined
+
+    def ran_and_failed(self, window):
+        """The window's Deep turn ran, then its lease was fenced: Core closed
+        it failed, naming that turn."""
+        self.ledger.uncertain(window["window_id"], window["generation"], "cleanup_unknown")
+        self.ledger.reconcile({**{k: window[k] for k in ("owner_id", "conversation_id", "window_id", "generation")},
+                               "outcome": "failed", "run_id": uid(), "terminal_event_id": uid()})
+
+    def test_a_joined_input_released_unrun_is_admitted_once_under_cores_retry_key(self):
+        # ORK-795/ORK-783: Core re-queues a timer occurrence or automatic result
+        # that joined a window which then failed with another input's run.
+        ledger = self.open()
+        previous = None
+        for generation, kind in ((1, "timer-window:"), (3, "source-continuation:")):
+            with self.subTest(kind=kind):
+                opener = self.request(generation, previous)
+                self.assertTrue(ledger.admit(opener)[1])
+                source = (uid(), uid())
+                self.join(opener, source, kind + source[1])
+                self.ran_and_failed(opener)
+                other_kind = next(k for k in ("timer-window:", "source-continuation:") if k != kind)
+                for key in (uid(), kind + source[1] + ":retry2", kind + source[1] + ":retry",
+                            other_kind + source[1] + ":retry1", kind + uid() + ":retry1"):
+                    with self.subTest(key=key), self.assertRaisesRegex(Refused, "input_reused"):
+                        ledger.admit(self.request(generation + 1, opener["window_id"], key, source))
+                retry = self.request(generation + 1, opener["window_id"], kind + source[1] + ":retry1", source)
+                receipt, fresh = ledger.admit(retry)
+                self.assertTrue(fresh)
+                self.assertEqual((receipt["generation"], receipt["state"]), (generation + 1, "active"))
+                self.assertEqual(ledger.admit(retry), (receipt, False))
+                # Once retried and run, never again: not under any key.
+                self.ran_and_failed(retry)
+                for key in (uid(), kind + source[1] + ":retry2"):
+                    with self.subTest(after=key), self.assertRaisesRegex(Refused, "input_reused"):
+                        ledger.admit(self.request(generation + 2, retry["window_id"], key, source))
+                previous = retry["window_id"]
+
+    def test_an_input_that_opened_a_window_that_ran_is_not_retried(self):
+        ledger = self.open()
+        source = (uid(), uid())
+        first = self.request(key="timer-window:" + source[1], source=source)
+        self.assertTrue(ledger.admit(first)[1])
+        self.ran_and_failed(first)
+        with self.assertRaisesRegex(Refused, "input_reused"):
+            ledger.admit(self.request(2, first["window_id"], first["request_id"] + ":retry1", source))
+
+    def test_a_joined_input_of_an_unretired_window_is_not_retried(self):
+        ledger = self.open()
+        opener = self.request()
+        self.assertTrue(ledger.admit(opener)[1])
+        source = (uid(), uid())
+        self.join(opener, source, "timer-window:" + source[1])
+        ledger.uncertain(opener["window_id"], 1, "cleanup_unknown")
+        with self.assertRaisesRegex(Refused, "input_reused"):
+            ledger.admit(self.request(2, opener["window_id"], "timer-window:" + source[1] + ":retry1", source))
+
     def test_successor_of_generations_core_closed_without_the_manager(self):
         ledger = self.open()
         first = self.request()
