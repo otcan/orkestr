@@ -194,8 +194,11 @@ impl AuthLimits {
         let mut fresh = 0;
         for key in keys {
             match buckets.get_mut(key) {
-                Some(bucket) if bucket.full(now, key.rule()) => return None,
-                Some(_) => {}
+                Some(bucket) => {
+                    if bucket.full(now, key.rule()) {
+                        return None;
+                    }
+                }
                 None => fresh += 1,
             }
         }
