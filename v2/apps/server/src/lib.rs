@@ -49,6 +49,7 @@ mod desktop_http;
 mod desktop_inventory_http;
 mod desktop_open_http;
 mod desktop_owner_actions_http;
+mod desktop_reservation_http;
 mod desktop_sharing_http;
 mod encrypted_upload_http;
 pub mod encrypted_upload_ingest;
@@ -790,6 +791,7 @@ pub fn router_with_google_catalog(
         .merge(desktop_owner_actions_http::router())
         .merge(desktop_open_http::router())
         .merge(desktop_sharing_http::router())
+        .merge(desktop_reservation_http::router())
         .merge(sidebar_http::router())
         .merge(message_attachments::router())
         .merge(encrypted_upload_http::router())

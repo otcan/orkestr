@@ -1,5 +1,5 @@
 //! Owner inventory labels. Runtime health is never evidence of availability.
-use orkestr_v2_contracts::DesktopRuntime;
+use orkestr_v2_contracts::{DesktopReservationKind, DesktopResource, DesktopRuntime};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Availability {
@@ -48,6 +48,83 @@ impl Availability {
             Self::Unknown => "unknown",
         }
     }
+}
+
+/// The reservation state the page shows. V1's lease covers one step only: a
+/// desk V2 keeps for a chat between its steps, one handed to the owner, or
+/// one the owner is viewing reads as reserved even while V1 holds no lease.
+pub fn shown_lease_state(desk: &DesktopResource) -> &str {
+    if desk.reserved_in_v2() {
+        "reserved"
+    } else {
+        &desk.lease_state
+    }
+}
+
+/// Who holds the desk: V1's current holder, else the chat V2 keeps it for,
+/// else the owner's own viewing link.
+pub fn shown_holder(desk: &DesktopResource) -> Option<String> {
+    desk.holder
+        .clone()
+        .or_else(|| desk.reservation.as_ref().and_then(|r| r.chat.clone()))
+        .or_else(|| desk.owner_viewer.as_ref().map(|_| "You (viewing)".into()))
+}
+
+pub fn reservation_kind_label(kind: DesktopReservationKind) -> &'static str {
+    match kind {
+        DesktopReservationKind::Task => "Chat task",
+        DesktopReservationKind::OwnerHandoff => "Handed to you",
+        DesktopReservationKind::OwnerViewer => "Your viewing link",
+    }
+}
+
+/// Kind, holder and end of each reservation V2 holds on the desk, one line
+/// each; `clock` writes a time in the page's local time.
+pub fn reservation_lines(desk: &DesktopResource, clock: impl Fn(i64) -> String) -> Vec<String> {
+    let mut lines = Vec::new();
+    if let Some(claim) = &desk.reservation {
+        let chat = claim.chat.as_deref().unwrap_or("a chat");
+        let holder = match claim.kind {
+            DesktopReservationKind::OwnerHandoff => format!("by {chat}"),
+            _ => chat.to_owned(),
+        };
+        lines.push(format!(
+            "{} · {holder} · until {}",
+            reservation_kind_label(claim.kind),
+            clock(claim.until_ms)
+        ));
+    }
+    if let Some(viewer) = &desk.owner_viewer {
+        lines.push(format!(
+            "{} · you · until {}",
+            reservation_kind_label(viewer.kind),
+            clock(viewer.until_ms)
+        ));
+    }
+    lines
+}
+
+/// Freeing a desk ends what V2 holds there; say what that lets happen.
+/// Free desk ends a chat's claim only; your own viewing ends with End viewing.
+pub fn free_desk_help(desk: &DesktopResource) -> &'static str {
+    match desk.reservation.as_ref().map(|r| r.kind) {
+        Some(DesktopReservationKind::OwnerHandoff) => "End the hand-over now: chats may take the desk again. Do this only when you are done with it.",
+        _ => "End this chat's reservation now. Other chats may then take the desk; a running step is not stopped.",
+    }
+}
+
+/// End viewing ends the owner's window and revokes the link.
+pub const END_VIEWING_HELP: &str =
+    "End your viewing now: the desk link stops working and chats may take the desk again.";
+
+/// Shown when a link was made but Orkestr could not record that the owner is
+/// viewing the desk, so chats were not kept off it.
+pub const VIEW_NOT_RECORDED: &str = "This link works, but Orkestr could not record that you are viewing this desk, so chats are not kept off it. A chat may act there while you use it; refresh and try again before typing on the desk.";
+
+/// Whether a Link or Open answer says the viewing window was not recorded. An
+/// older server, which does not say, never warns.
+pub fn viewer_not_recorded(answer: &serde_json::Value) -> bool {
+    answer.get("viewer_recorded") == Some(&serde_json::Value::Bool(false))
 }
 
 /// Names what Stop will interrupt, for the confirmation shown before it runs.
@@ -173,7 +250,7 @@ impl DeskSharing {
 }
 
 /// One line above the table, so the rows themselves stay short.
-pub const LEGEND: &str = "Available: no reservation at the last refresh. Reserved: a chat holds the desk. Not verified or needs checking: it could not be confirmed, which does not mean the desk is free. Hover a status for details.";
+pub const LEGEND: &str = "Available: no reservation at the last refresh. Reserved: a chat holds the desk for a step or between its steps, it was handed to you, or you are viewing it. Not verified or needs checking: it could not be confirmed, which does not mean the desk is free. Hover a status for details.";
 
 #[cfg(test)]
 mod tests {
@@ -273,6 +350,90 @@ mod tests {
             DeskSharing::switch_label(true),
             DeskSharing::switch_label(false)
         );
+    }
+    fn desk(
+        lease_state: &str,
+        claim: Option<(DesktopReservationKind, &str)>,
+        viewer: bool,
+    ) -> DesktopResource {
+        let view =
+            |kind, chat: Option<&str>, until_ms| orkestr_v2_contracts::DesktopReservationView {
+                desk: "desk-a".into(),
+                kind,
+                chat: chat.map(str::to_owned),
+                mine: false,
+                conversation_id: None,
+                since_ms: 0,
+                until_ms,
+                reserved_until_ms: None,
+            };
+        DesktopResource {
+            slug: "desk-a".into(),
+            label: "Desk A".into(),
+            state: "running".into(),
+            lease_state: lease_state.into(),
+            holder: None,
+            expires_at: None,
+            reservation: claim.map(|(kind, chat)| view(kind, Some(chat), 60_000)),
+            owner_viewer: viewer.then(|| view(DesktopReservationKind::OwnerViewer, None, 120_000)),
+        }
+    }
+    #[test]
+    fn a_desk_reserved_between_steps_never_looks_free() {
+        let clock = |ms: i64| format!("t{}", ms / 60_000);
+        let free = desk("unreserved", None, false);
+        assert_eq!(shown_lease_state(&free), "unreserved");
+        assert_eq!(shown_holder(&free), None);
+        assert!(reservation_lines(&free, clock).is_empty());
+        let task = desk(
+            "unreserved",
+            Some((DesktopReservationKind::Task, "Chat one")),
+            false,
+        );
+        assert_eq!(
+            Availability::from_lease(shown_lease_state(&task)),
+            Availability::Reserved
+        );
+        assert_eq!(shown_holder(&task).as_deref(), Some("Chat one"));
+        assert_eq!(
+            reservation_lines(&task, clock),
+            vec!["Chat task · Chat one · until t1"]
+        );
+        let handed = desk(
+            "unreserved",
+            Some((DesktopReservationKind::OwnerHandoff, "Chat one")),
+            true,
+        );
+        assert_eq!(
+            reservation_lines(&handed, clock),
+            vec![
+                "Handed to you · by Chat one · until t1",
+                "Your viewing link · you · until t2"
+            ]
+        );
+        assert!(free_desk_help(&handed).contains("hand-over"));
+        assert!(free_desk_help(&task).contains("chat's reservation"));
+        assert!(END_VIEWING_HELP.contains("link stops working"));
+        assert!(viewer_not_recorded(
+            &serde_json::json!({"url":"x","viewer_recorded":false})
+        ));
+        assert!(!viewer_not_recorded(
+            &serde_json::json!({"url":"x","viewer_recorded":true})
+        ));
+        assert!(
+            !viewer_not_recorded(&serde_json::json!({"url":"x"})),
+            "an older server never warns"
+        );
+        let viewed = desk("unknown", None, true);
+        assert_eq!(shown_lease_state(&viewed), "reserved");
+        assert_eq!(shown_holder(&viewed).as_deref(), Some("You (viewing)"));
+        assert!(stop_needs_confirmation_shown(&task));
+    }
+    fn stop_needs_confirmation_shown(desk: &DesktopResource) -> bool {
+        orkestr_v2_contracts::stop_needs_confirmation(
+            shown_lease_state(desk),
+            DesktopRuntime::Running,
+        )
     }
     #[test]
     fn unknown_reservations_have_explicit_check_action() {

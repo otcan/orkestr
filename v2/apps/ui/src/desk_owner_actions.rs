@@ -2,7 +2,10 @@ use crate::transport::Failure;
 use dioxus::prelude::*;
 use orkestr_v2_contracts::{stop_needs_confirmation, DesktopResource, DesktopRuntime};
 use orkestr_v2_ui::{
-    desk_presentation::{link_grant, stop_outcome, stop_warning},
+    desk_presentation::{
+        link_grant, shown_holder, shown_lease_state, stop_outcome, stop_warning,
+        viewer_not_recorded, VIEW_NOT_RECORDED,
+    },
     session_scope::SessionScope,
 };
 use serde_json::{json, Value};
@@ -163,10 +166,15 @@ fn send(
                 onchanged.call(());
             }
             _ => match value["url"].as_str() {
-                Some(url) => link.set(Some(DeskLink {
-                    url: url.to_owned(),
-                    expires_at: value["expires_at"].as_str().map(str::to_owned),
-                })),
+                Some(url) => {
+                    link.set(Some(DeskLink {
+                        url: url.to_owned(),
+                        expires_at: value["expires_at"].as_str().map(str::to_owned),
+                    }));
+                    if viewer_not_recorded(&value) {
+                        say(notice, VIEW_NOT_RECORDED, false);
+                    }
+                }
                 None => say(
                     notice,
                     "No link was returned; refresh and try again.",
@@ -199,7 +207,8 @@ pub fn DeskOwnerButtons(
     onchanged: EventHandler<()>,
 ) -> Element {
     let runtime = DesktopRuntime::from_state(&runtime_state);
-    let needs_confirmation = stop_needs_confirmation(&desk.lease_state, runtime);
+    // A desk V2 keeps for a chat between steps is in use too.
+    let needs_confirmation = stop_needs_confirmation(shown_lease_state(&desk), runtime);
     let busy = (actions.busy)();
     let blocked = busy.is_some() || (actions.uncertain)();
     let mut confirming = actions.confirming;
@@ -263,7 +272,7 @@ pub fn DeskOwnerNotices(
     rsx! {
         if confirming() {
             div { class: "desk-confirm", role: "alert",
-                p { {stop_warning(&desk.label, &desk.lease_state, desk.holder.as_deref(), desk.expires_at.as_deref(), runtime)} }
+                p { {stop_warning(&desk.label, shown_lease_state(&desk), shown_holder(&desk).as_deref(), desk.expires_at.as_deref(), runtime)} }
                 div { class: "desk-confirm-actions",
                     button { r#type: "button", class: "danger", disabled: blocked, onclick: {
                         let (desk, csrf) = (desk.clone(), csrf.clone());
@@ -277,7 +286,7 @@ pub fn DeskOwnerNotices(
             div { class: "desk-notice desk-link",
                 div {
                     a { href: "{desk_link.url}", target: "_blank", rel: "noopener noreferrer", "Open desk link" }
-                    p { class: "field-help", {link_grant(desk_link.expires_at.as_deref(), &desk.lease_state)} }
+                    p { class: "field-help", {link_grant(desk_link.expires_at.as_deref(), shown_lease_state(&desk))} }
                 }
                 button { r#type: "button", class: "desk-dismiss", "aria-label": "Hide the link for {desk.label}", onclick: move |_| link.set(None), "Hide" }
             }

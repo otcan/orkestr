@@ -85,6 +85,11 @@ pub struct DesktopAcquireRequest {
     pub ttl_ms: u64,
     #[serde(default)]
     pub purpose: Option<String>,
+    /// A system job's step (a sync or token renewal on the chat's desk): it is
+    /// refused by a desk reservation like any step, but makes or extends no
+    /// task reservation for the chat.
+    #[serde(default)]
+    pub system_step: bool,
 }
 impl DesktopAcquireRequest {
     pub fn is_valid(&self) -> bool {
@@ -227,12 +232,14 @@ mod tests {
         assert!(!fencing_token_valid("has space in it"));
         assert!(!DesktopAcquireRequest {
             ttl_ms: 1000,
-            purpose: None
+            purpose: None,
+            system_step: false,
         }
         .is_valid());
         assert!(DesktopAcquireRequest {
             ttl_ms: 600_000,
-            purpose: Some("linkedin".into())
+            purpose: Some("linkedin".into()),
+            system_step: true,
         }
         .is_valid());
         assert!(!DesktopHeartbeatRequest {

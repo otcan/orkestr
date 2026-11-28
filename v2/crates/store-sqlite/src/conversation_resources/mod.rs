@@ -3,11 +3,15 @@
 //! create effects; they are preferences, fences and lineage.
 pub mod codex_default;
 mod desktop_inventory;
+pub(crate) mod desktop_reservations;
+mod desktop_reservations_owner;
 pub(crate) mod desktop_sharing;
 pub(crate) mod desktops;
 pub(crate) mod fast_settings;
 mod legacy_workers;
 pub(crate) mod settings;
+#[cfg(test)]
+mod tests_desktop_reservations;
 #[cfg(test)]
 mod tests_desktop_sharing;
 #[cfg(test)]

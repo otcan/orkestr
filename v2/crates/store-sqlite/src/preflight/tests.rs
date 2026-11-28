@@ -494,6 +494,7 @@ async fn populated_payload_prefix_upgrade_preserves_all_rows_and_foreign_links()
         "vault_audit",
         "desktop_sharing",
         "agent_timer_instruction_updates",
+        "desktop_reservations",
     ] {
         expected.insert(table.into(), Vec::new());
     }

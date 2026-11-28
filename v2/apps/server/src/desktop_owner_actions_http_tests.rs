@@ -436,9 +436,11 @@ async fn link_never_starts_the_desk_and_only_publishes_a_safe_url() {
     let headers = browser(&c);
     let (status, value) = post(&c, link, &headers, "{}").await;
     assert_eq!(status, 200, "{value}");
+    // A link that already ended opens no viewing window.
     assert_eq!(
         value,
-        json!({"url":SAFE_URL,"challenge_required":true,"expires_at":"2026-01-01T01:00:00Z"})
+        json!({"url":SAFE_URL,"challenge_required":true,"expires_at":"2026-01-01T01:00:00Z",
+            "viewer_until_ms":null,"viewer_recorded":false})
     );
     let calls = v1.lock().unwrap().calls.clone();
     assert_eq!(

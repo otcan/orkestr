@@ -11,12 +11,14 @@
 .desk-id { display:block; font-weight:400; font-size:.74rem; color:var(--muted); }
 .desk-runtime { white-space:nowrap; }
 .desk-expiry { display:block; font-size:.74rem; color:var(--muted); }
+/* What V2 keeps the desk for between steps: kind, holder, until. */
+.desk-reservation { display:block; margin-top:.15rem; font-size:.74rem; color:var(--muted); }
 .desk-badge { display:inline-block; border:1px solid var(--border); border-radius:1rem; padding:.1rem .5rem; font-size:.76rem; white-space:nowrap; cursor:help; }
 .desk-badge[data-availability="available"] { border-color:var(--success,#26946d); color:var(--success,#26946d); }
 .desk-badge[data-availability="reserved"] { border-color:var(--warning,#b58a35); color:var(--warning,#b58a35); }
 .desk-badge[data-availability="needs-check"], .desk-badge[data-availability="unknown"] { border-style:dashed; border-color:var(--border-strong); color:var(--muted); }
 .desk-action-bar, .desk-owner-buttons { display:flex; flex-wrap:wrap; justify-content:flex-end; align-items:center; gap:.35rem; }
-.desk-owner-buttons button, .desk-chat-toggle { padding:.25rem .6rem; font-size:.84rem; }
+.desk-owner-buttons button, .desk-chat-toggle, .desk-free { padding:.25rem .6rem; font-size:.84rem; }
 .desk-detail > td { padding:0 .6rem .6rem; }
 .desk-detail > td > * + * { margin-top:.4rem; }
 .desk-notice { display:flex; align-items:flex-start; justify-content:space-between; gap:.5rem; border:1px solid var(--border); border-radius:.5rem; padding:.4rem .6rem; background:var(--surface-2); }

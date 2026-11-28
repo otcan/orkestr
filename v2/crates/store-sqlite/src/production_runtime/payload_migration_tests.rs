@@ -1,6 +1,6 @@
 //! Migration 0102 widens one stored reply from 8 KiB to 32 KiB and keeps
 //! every payload row exactly; its downgrade fixture restores schema 101
-//! (after undoing 0103). Upgrades then run every later migration too.
+//! (after undoing 0104 and 0103). Upgrades then run every later migration too.
 use super::observation_tests::{consumed, input};
 use super::tests::setup;
 use super::*;
@@ -28,6 +28,15 @@ async fn version(store: &Store) -> i64 {
     sqlx::query_scalar("SELECT max(version) FROM _sqlx_migrations WHERE success=1")
         .fetch_one(&store.pool)
         .await
+        .unwrap()
+}
+/// The newest embedded migration: an upgraded store applies 0102 and every
+/// later one.
+fn latest() -> i64 {
+    sqlx::migrate!("./migrations")
+        .iter()
+        .map(|m| m.version)
+        .max()
         .unwrap()
 }
 
@@ -68,7 +77,7 @@ async fn schema101_upgrade_keeps_every_payload_and_admits_a_32_kib_reply() {
     assert_eq!(before.len(), 2);
     assert!(before.iter().any(|row| row.6.is_none()));
     assert!(table_sql(&f.store).await.contains("<=32768"));
-    assert_eq!(version(&f.store).await, 103);
+    assert_eq!(version(&f.store).await, latest());
 
     // Back to exact schema 101 (the preflight would refuse anything else).
     downgrade_payload_bound(&f.store).await;
@@ -77,7 +86,7 @@ async fn schema101_upgrade_keeps_every_payload_and_admits_a_32_kib_reply() {
     assert_eq!(rows_of(&f.store).await, before);
 
     let upgraded = Store::open(&f.root.join("core.sqlite3")).await.unwrap();
-    assert_eq!(version(&upgraded).await, 103);
+    assert_eq!(version(&upgraded).await, latest());
     assert!(table_sql(&upgraded).await.contains("<=32768"));
     assert_eq!(
         rows_of(&upgraded).await,
@@ -234,7 +243,7 @@ async fn schema101_upgrade_needs_no_writable_temporary_directory() {
     );
 
     let upgraded = Store::open(&database).await.unwrap();
-    assert_eq!(version(&upgraded).await, 103);
+    assert_eq!(version(&upgraded).await, latest());
     assert_eq!(rows_of(&upgraded).await, before);
 }
 
@@ -255,5 +264,5 @@ async fn read_only_host_child() {
     }
     let store = Store::open(std::path::Path::new(&database)).await;
     assert!(store.is_ok(), "migrations need no temporary directory");
-    assert_eq!(version(&store.unwrap()).await, 103);
+    assert_eq!(version(&store.unwrap()).await, latest());
 }

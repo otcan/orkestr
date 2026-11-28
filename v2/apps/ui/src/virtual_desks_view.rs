@@ -1,7 +1,7 @@
 use dioxus::prelude::*;
 use orkestr_v2_contracts::{DesktopInventory, DesktopSharing};
 use orkestr_v2_ui::{
-    desk_presentation::{Availability, DeskSharing, LEGEND},
+    desk_presentation::{shown_lease_state, Availability, DeskSharing, LEGEND},
     session_scope::SessionScope,
 };
 use serde_json::Value;
@@ -20,6 +20,11 @@ pub fn VirtualDesks(
     let mut reload = use_signal(|| 0_u64);
     let mut search = use_signal(String::new);
     let mut sharing = use_signal(|| None::<DesktopSharing>);
+    // Reservation ends are shown in the page's local time.
+    let mut offset = use_signal(|| 0_i64);
+    use_resource(move || async move {
+        offset.set(crate::host_metrics_fetch::clock().await.1);
+    });
     use_resource(move || {
         let _ = reload();
         async move {
@@ -67,7 +72,9 @@ pub fn VirtualDesks(
         .map(|v| {
             v.resources
                 .iter()
-                .filter(|d| Availability::from_lease(&d.lease_state) == Availability::Available)
+                .filter(|d| {
+                    Availability::from_lease(shown_lease_state(d)) == Availability::Available
+                })
                 .count()
         })
         .unwrap_or(0);
@@ -76,7 +83,9 @@ pub fn VirtualDesks(
         .map(|v| {
             v.resources
                 .iter()
-                .filter(|d| Availability::from_lease(&d.lease_state) == Availability::Reserved)
+                .filter(|d| {
+                    Availability::from_lease(shown_lease_state(d)) == Availability::Reserved
+                })
                 .count()
         })
         .unwrap_or(0);
@@ -128,6 +137,7 @@ pub fn VirtualDesks(
                         shared, desk, csrf: csrf.clone(), session_scope, onexpired,
                         onchanged: move |_| reload += 1,
                         observed_at_ms: value.observed_at_ms,
+                        offset_minutes: offset(),
                     }
                 }
                 }

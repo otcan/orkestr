@@ -10,11 +10,33 @@ fn statement<'a>(sql: &'a str, start: &str) -> &'a str {
     &sql[from..from + sql[from..].find(";\n").unwrap() + 1]
 }
 
-/// Migration 103 down: the same copy-out, recreate and copy-back as 0103,
+/// Migration 104 down: only empty desk reservations; a historical fixture
+/// never reserves a desk, so dropping the table loses no reservation. It heads
+/// the historical downgrade chain.
+pub(crate) async fn downgrade_desk_reservations(store: &Store) {
+    let reservations: i64 = sqlx::query_scalar("SELECT count(*) FROM desktop_reservations")
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        reservations, 0,
+        "historical fixture must not erase desk reservations"
+    );
+    sqlx::raw_sql(
+        "DROP TABLE desktop_reservations;
+         DELETE FROM _sqlx_migrations WHERE version=104;",
+    )
+    .execute(&store.pool)
+    .await
+    .unwrap();
+}
+
+/// Migration 103 down (after 104): the same copy-out, recreate and copy-back as 0103,
 /// with the schema-102 definitions (0054, 0052 and 0055 as stored after their
 /// rebuilds), keeping every row and rowid. Only while no decision names the
 /// server, which the older actor CHECKs refuse.
 pub(crate) async fn downgrade_server_actor(store: &Store) {
+    downgrade_desk_reservations(store).await;
     let server: i64 = sqlx::query_scalar(
         "SELECT (SELECT count(*) FROM execution_window_reconciliations WHERE actor='server')
           +(SELECT count(*) FROM execution_window_open_failures WHERE actor='server')
@@ -60,8 +82,8 @@ pub(crate) async fn downgrade_server_actor(store: &Store) {
 
 /// Migration 102 down: rebuild `production_payloads` with its 0014 definition
 /// (8 KiB bound) and its 0059 index, keeping every row and rowid. Only while
-/// every stored text fits the old bound, so no reply is cut. Migration 103 is
-/// undone first: this heads the historical downgrade chain.
+/// every stored text fits the old bound, so no reply is cut. Migrations 104
+/// and 103 are undone first.
 pub(crate) async fn downgrade_payload_bound(store: &Store) {
     downgrade_server_actor(store).await;
     let long: i64 = sqlx::query_scalar(

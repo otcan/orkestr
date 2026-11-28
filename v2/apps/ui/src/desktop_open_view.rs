@@ -1,5 +1,8 @@
 use dioxus::prelude::*;
-use orkestr_v2_ui::session_scope::SessionScope;
+use orkestr_v2_ui::{
+    desk_presentation::{viewer_not_recorded, VIEW_NOT_RECORDED},
+    session_scope::SessionScope,
+};
 use serde_json::{json, Value};
 
 /// A bound desktop remains visible while its bridge is unavailable. Preparing
@@ -36,6 +39,7 @@ pub fn DesktopOpen(
                         match result {
                             Ok(value) => if let Some(url) = value.get("url").and_then(Value::as_str) {
                                 link.set(Some(url.to_owned()));
+                                if viewer_not_recorded(&value) { status.set(VIEW_NOT_RECORDED.into()); }
                             } else { status.set("Desktop viewing did not return a link.".into()); },
                             Err(error) if error.status == 401 => onexpired.call(()),
                             Err(error) => status.set(error.message),
