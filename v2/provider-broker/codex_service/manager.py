@@ -508,7 +508,7 @@ class Manager:
                 # Static refusal codes only (never request values): the operator
                 # needs the reason a retirement or custody check refused.
                 operation = request.get("operation") if isinstance(request, dict) else None
-                if operation in ("retire", "reconcile", "extend", "uncertain", "bind_child"):
+                if operation in ("admit", "retire", "reconcile", "extend", "uncertain", "bind_child"):
                     # Once per window, operation and code per period: a
                     # retried refusal (uncertain cleanup) logged every attempt.
                     from .manager_uncertain import refusal_notice

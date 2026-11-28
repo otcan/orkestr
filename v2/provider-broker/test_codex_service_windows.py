@@ -526,6 +526,24 @@ class RefusalNoticeTests(unittest.TestCase):
                 client.close()
         self.assertEqual(output.getvalue(), "manager refused reconcile: owned_cleanup_uncertain\n")
 
+    def test_the_manager_names_why_it_refused_an_admission(self):
+        # 2026-11-27: Core only saw "manager admission uncertain"; the
+        # refusal (input_reused) was not in the journal.
+        request = dict(operation="admit", window_id=uid(), generation=71, owner_id=uid(),
+                       conversation_id=uid())
+        manager = Manager.__new__(Manager)
+        manager.ledger = SimpleNamespace(status=lambda *_: {})
+        manager.peer = SimpleNamespace(accepts=lambda _: True)
+        manager.due = lambda: False
+        manager.dispatch = lambda *_: (_ for _ in ()).throw(Refused("input_reused"))
+        with patch.object(module.sys, "stderr", io.StringIO()) as output, \
+                patch.object(module, "receive_control", lambda *_: (request, [])):
+            server, client = module.socket.socketpair()
+            manager.control = SimpleNamespace(socket=SimpleNamespace(accept=lambda: (server, None)))
+            manager.once()
+            client.close()
+        self.assertEqual(output.getvalue(), "manager refused admit: input_reused\n")
+
     def test_a_retried_refusal_logs_once_per_window_and_period(self):
         manager = SimpleNamespace()
         request = {"window_id": uid(), "generation": 3}

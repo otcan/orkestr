@@ -40,6 +40,21 @@ INDEXES = ("CREATE INDEX IF NOT EXISTS windows_input ON windows(input_id)",
 WINDOW_COLUMNS = "id,generation,request_id,input_id,fingerprint,state,boot,created_wall_ns,deadline_wall_ns,deadline_mono_ns,attempts,reserved_bytes,reason,outcome,run_id,terminal_event_id"
 
 
+# Core's request keys for inputs it re-queues once after a window released
+# them unrun: a timer occurrence and an automatic result (source continuation).
+RETRIED_KEY_KINDS = ("timer-window:", "source-continuation:")
+FIRST_RETRY = ":retry1"
+
+
+def first_key_of_retry(request_id, event_id):
+    """The first key of `event_id` when `request_id` is Core's first retry of
+    it (``<kind><event>:retry1``), else None."""
+    for kind in RETRIED_KEY_KINDS:
+        if request_id == kind + event_id + FIRST_RETRY:
+            return kind + event_id
+    return None
+
+
 def _single_unique(db, table, column):
     """Whether `table` still carries a one-column UNIQUE constraint on `column`."""
     for index in db.execute(f"PRAGMA index_list({table})").fetchall():
@@ -288,19 +303,34 @@ class Ledger:
 
     def _require_fresh_input(self, request):
         """An input is admitted once, unless every earlier window holding it
-        retired as a failed open that ran nothing (no run, no terminal event)
-        and, by this manager's own budget evidence, spent nothing (no attempt
-        or byte reserved: no provider traffic, so no Fast or Deep turn ran).
-        Core then re-queues a timer occurrence under a new request key."""
+        retired and either
+
+        - retired as a failed open that ran nothing (no run, no terminal event)
+          and, by this manager's own budget evidence, spent nothing (no attempt
+          or byte reserved: no provider traffic, so no Fast or Deep turn ran);
+          Core then re-queues a timer occurrence under a new request key; or
+        - held it as a joined input (not the input that opened the window)
+          under its first key, and this is Core's one retry of it
+          (``<kind><event>`` then ``<kind><event>:retry1``, for a timer
+          occurrence or an automatic result). Core re-queues such an input
+          once, only when no run of that event exists and the window released
+          it unrun (ORK-795, ORK-783). A run of that window belongs to another
+          input, and this manager keeps no per-input run evidence, so it relies
+          on Core's proof for joined inputs only; an input that opened a window
+          that ran, a second retry and any other key stay refused.
+        """
         earlier = self.db.execute(
-            "SELECT a.conversation,a.input_id,a.event_id,w.state,w.outcome,w.run_id,w.terminal_event_id,w.attempts,w.reserved_bytes FROM admissions a JOIN windows w ON w.id=a.window_id WHERE a.input_id=? OR a.event_id=?",
+            "SELECT a.conversation,a.request_id,a.input_id,a.event_id,w.input_id AS opener,w.state,w.outcome,w.run_id,w.terminal_event_id,w.attempts,w.reserved_bytes FROM admissions a JOIN windows w ON w.id=a.window_id WHERE a.input_id=? OR a.event_id=?",
             (request["input_message_id"], request["input_event_id"])).fetchall()
+        first_key = first_key_of_retry(request["request_id"], request["input_event_id"])
         require(all(row["conversation"] == request["conversation_id"] and
                     row["input_id"] == request["input_message_id"] and
                     row["event_id"] == request["input_event_id"] and
-                    row["state"] == "retired" and row["outcome"] == "failed" and
-                    row["run_id"] is None and row["terminal_event_id"] is None and
-                    row["attempts"] == 0 and row["reserved_bytes"] == 0
+                    row["state"] == "retired" and
+                    ((row["outcome"] == "failed" and
+                      row["run_id"] is None and row["terminal_event_id"] is None and
+                      row["attempts"] == 0 and row["reserved_bytes"] == 0) or
+                     (row["request_id"] == first_key and row["opener"] != row["input_id"]))
                     for row in earlier), "input_reused")
 
     def _record_admission(self, request, fingerprint):
