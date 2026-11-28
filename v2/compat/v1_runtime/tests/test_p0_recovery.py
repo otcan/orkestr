@@ -641,11 +641,11 @@ class OwnerStopTests(Base):
     def test_successor_window_wait_is_bounded_and_alerted_once(self):
         self.stranded()
         self.peer.current = dict(window_id="successor", state="active", conversation_id="conversation")
-        self.peer.retire_state = "retired"
+        self.peer.retire_state = None  # Core refuses: it handed the input to that window.
         log = self.passes(2)
         data = self.ledger.next_input()
         self.assertEqual(data["phase"], "running")
-        self.assertEqual(self.retires(), [], "Core may still run it there")
+        self.assertNotIn("readmitted", data, "Core may still run it there")
         self.assertEqual(log.count("input_waiting_for_core"), 1)
         data["retry_wait_since"] -= recovery.RETIRE_WAIT_S + 1
         self.ledger.save(data)

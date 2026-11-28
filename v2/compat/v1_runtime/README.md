@@ -673,9 +673,14 @@ leaving it `running` behind a Fast wait.
   Core's head (a non-streaming snapshot read), never retried or continued
   before. When a run references the message (in owner-only chats usually
   its Fast) Core never retires it, so the input closes at once with the
-  "interrupted" notice and an ALERT. Only while Core may still run it itself
-  (a newer open window, a window request for its event still in Core's
-  `/window/queue`, reconciliation, a refused retirement) does the
+  "interrupted" notice and an ALERT. When the input's own window ended while
+  another input's window is open, the retirement is asked for at once: a
+  window Core reconciled or failed releases every input no run consumed back
+  to its inbox, and no later window picks those up, so waiting for the open
+  window never helps. Only while Core may still run it itself
+  (a newer open window that Core refuses to retire it from, a window request
+  for its event still in Core's `/window/queue`, reconciliation, a refused
+  retirement) does the
   serial queue wait, at most 10 minutes, with `ALERT … input_waiting_for_core`
   when the wait starts. "Window ended, no successor" must also be observed
   twice at least 30 s apart, because Core can requeue the input just before
