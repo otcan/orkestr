@@ -28,7 +28,7 @@
 //! failed open as `failed` (`Actor::Owner`, the same decision the explicit
 //! endpoint records) instead of leaving the conversation blocked until the
 //! hard deadline. Any other plan is left untouched for the deadline path.
-use super::super::manager_client::{TerminalOutcome, Window};
+use super::super::manager_client::{ManagerReceipt, TerminalOutcome, Window};
 use super::Controller;
 use orkestr_v2_contracts::{
     ConversationId, ExecutionWindowReconciliation, ExecutionWindowReconciliationActor as Actor,
@@ -197,6 +197,7 @@ impl Controller {
                 Decision::AbandonUnaccepted,
                 Actor::Owner,
                 Scope::FailedOpenOnly,
+                None,
             )
             .await
         {
@@ -253,6 +254,7 @@ impl Controller {
             Decision::AbandonUnaccepted,
             Actor::Server,
             Scope::NothingToAbandon,
+            None,
         )
         .await
     }
@@ -305,12 +307,15 @@ impl Controller {
         decision: Decision,
         actor: Actor,
     ) -> Result<ExecutionWindowReconciliation, &'static str> {
-        self.reconcile_planned(browser, window, decision, actor, Scope::Any)
+        self.reconcile_planned(browser, window, decision, actor, Scope::Any, None)
             .await
     }
 
     /// `scope` limits which planned decision may be carried out; a refused
-    /// scope stops before any manager or Core decision.
+    /// scope stops before any manager or Core decision. `refused` is the
+    /// manager's receipt from refusing this very window's admission: the
+    /// failed open then commits locally only if that receipt and Core's plan
+    /// prove it was never admitted, and never through the manager.
     async fn reconcile_planned(
         &self,
         browser: &str,
@@ -318,6 +323,7 @@ impl Controller {
         decision: Decision,
         actor: Actor,
         scope: Scope,
+        refused: Option<&ManagerReceipt>,
     ) -> Result<ExecutionWindowReconciliation, &'static str> {
         let conversation = &window.conversation_id;
         if window.state != ExecutionWindowState::Closed
@@ -399,9 +405,16 @@ impl Controller {
             (None, None) => None,
             _ => return Err("stranded window plan is inconsistent"),
         };
-        self.retire_unretired_predecessor(browser, window, &plan, now_ms())
-            .await;
-        if self.manager_never_admitted(window, &plan, now_ms()).await {
+        let local = match refused {
+            Some(receipt) if unadmitted::refused_commit_allowed(&plan, window, receipt) => true,
+            Some(_) => return Err("refused admission is not a never-admitted open"),
+            None => {
+                self.retire_unretired_predecessor(browser, window, &plan, now_ms())
+                    .await;
+                self.manager_never_admitted(window, &plan, now_ms()).await
+            }
+        };
+        if local {
             // Nothing of the manager's exists to retire: commit Core's failed
             // open locally. Inputs are released exactly as on the manager
             // path; nothing is replayed.

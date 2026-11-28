@@ -23,11 +23,25 @@
 //! hands the manager exactly the retirement Core committed for that
 //! predecessor (`accepted`/`stopped`, its run and terminal event): the manager
 //! then holds it retired and the successor's failed open commits locally.
+//!
+//! A refusal the opener itself received is the same proof, without waiting:
+//! the manager answered `control_refused` with a receipt that excludes the
+//! window (2026-11-27: a timer firing released by a turn reconciliation was
+//! refused as `input_reused`, and its conversation stayed blocked until the
+//! operator reconciled it). `close_refused_admission` commits that failed
+//! open at once, recorded as the server's decision, but only for a code about
+//! the request itself (`manager_admission.rs`); a refusal that may clear by
+//! itself (`window_capacity`), a deadline or an unavailable manager stays
+//! uncertain.
 use super::super::Controller;
-use crate::window_runtime::manager_client::{ManagerReceipt, TerminalOutcome, Window, WindowState};
+use super::{Actor, Decision, Scope};
+use crate::window_runtime::conversation::ConversationController;
+use crate::window_runtime::manager_client::{
+    ManagerReceipt, RefusedAdmission, TerminalOutcome, Window, WindowState,
+};
 use orkestr_v2_contracts::{
-    ExecutionWindowOpenFailureCause as Cause, ExecutionWindowStatus,
-    ExecutionWindowTerminalOutcome as Outcome,
+    ConversationId, ExecutionWindowOpenFailureCause as Cause, ExecutionWindowState,
+    ExecutionWindowStatus, ExecutionWindowTerminalOutcome as Outcome,
 };
 use orkestr_v2_store_sqlite::StrandedExecutionWindow;
 use std::{
@@ -66,14 +80,21 @@ pub(super) fn unadmitted_shape(plan: &StrandedExecutionWindow) -> bool {
 /// The manager's status proves it never admitted `window`: it has nothing
 /// for the conversation, or its latest window is an earlier, retired one.
 pub(super) fn never_admitted(receipt: &ManagerReceipt, window: &ExecutionWindowStatus) -> bool {
-    match receipt {
-        ManagerReceipt::Idle { .. } => true,
-        ManagerReceipt::Window(r) => {
-            r.window_id != window.window_id
-                && r.generation < window.generation
-                && r.state == WindowState::Retired
-        }
-    }
+    receipt.never_admitted(&Window {
+        window_id: window.window_id,
+        generation: window.generation,
+    })
+}
+
+/// The manager's refusal of this very window's admission is the proof: no
+/// admission can still be in flight, so no age applies. The plan must still
+/// be the never-admitted shape.
+pub(super) fn refused_commit_allowed(
+    plan: &StrandedExecutionWindow,
+    window: &ExecutionWindowStatus,
+    refused: &ManagerReceipt,
+) -> bool {
+    unadmitted_shape(plan) && never_admitted(refused, window)
 }
 
 /// Core may commit this plan without the manager call. Any doubt (no
@@ -211,6 +232,66 @@ impl Controller {
                 predecessor.generation,
             ),
             Err(_) => warn_refused("predecessor", window, "manager predecessor retirement refused"),
+        }
+    }
+
+    /// The manager refused this conversation's opening for good, with proof
+    /// that it never admitted the window (kept by `entry`; only a code about
+    /// the request itself counts): close Core's opening as a failed open now,
+    /// as the server's decision, so the conversation does not stay blocked
+    /// until the owner or the hard deadline decides. Its input is released
+    /// (a timer firing gets its one retry) exactly as on every failed open.
+    /// Any doubt leaves the window to the ordinary paths. The caller holds
+    /// `opening`.
+    pub(in crate::window_runtime) async fn close_refused_admission(
+        &self,
+        browser: &str,
+        conversation: &ConversationId,
+        entry: &ConversationController,
+    ) {
+        let Some(refused) = entry
+            .take_refused_admission()
+            .filter(RefusedAdmission::is_definite)
+        else {
+            return;
+        };
+        if self.live_owner(conversation).await {
+            return;
+        }
+        let Ok(Some(status)) = self
+            .store
+            .execution_window_status_authenticated(browser, conversation)
+            .await
+        else {
+            return;
+        };
+        if status.window_id != refused.window.window_id
+            || status.generation != refused.window.generation
+            || status.state == ExecutionWindowState::Closed
+        {
+            return;
+        }
+        // Closed static token or `unknown`: never request values.
+        eprintln!(
+            "ALERT orkestr-v2-server window_admission_refused conversation={} window={} generation={} code={}",
+            conversation,
+            status.window_id,
+            status.generation,
+            refused.refusal.reason.as_deref().unwrap_or("unknown"),
+        );
+        if let Err(cause) = self
+            .reconcile_planned(
+                browser,
+                &status,
+                Decision::AbandonUnaccepted,
+                // Nobody asked for it: the server's decision, never the owner's.
+                Actor::Server,
+                Scope::FailedOpenOnly,
+                Some(&refused.refusal.receipt),
+            )
+            .await
+        {
+            warn_refused("refused_admission", &status, cause);
         }
     }
 

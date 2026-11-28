@@ -520,6 +520,13 @@ class Manager:
                 conversation = request.get("conversation_id") if isinstance(request, dict) else None
                 answer = {"ok": False, "code": "control_refused",
                           "receipt": self.ledger.status(conversation)}
+                # The fixed refusal code lets the server tell an admission this
+                # receipt proves never happened from an uncertain one, and log
+                # why. A closed token only, never request text.
+                code = str(error)
+                if 0 < len(code) <= 64 and code.isascii() and all(
+                        c.islower() or c.isdigit() or c == "_" for c in code):
+                    answer["reason"] = code
             except (OSError, ValueError):
                 answer = {"ok": False, "code": "control_unavailable"}
             finally:

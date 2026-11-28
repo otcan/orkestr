@@ -9,6 +9,10 @@ use std::{path::PathBuf, time::Instant};
 use tokio::net::UnixStream;
 use uuid::Uuid;
 
+#[path = "manager_admission.rs"]
+mod admission;
+use admission::Answer;
+pub(crate) use admission::{AdmitOutcome, RefusedAdmission};
 #[path = "manager_desk.rs"]
 mod desk;
 #[path = "manager_launch_wire.rs"]
@@ -205,6 +209,17 @@ impl ManagerClient {
         self.receipt(&value["receipt"])
     }
     pub async fn admit(&self, admission: &Admission, deadline: Instant) -> Result<AdmissionAck> {
+        match self.admit_or_refused(admission, deadline).await? {
+            AdmitOutcome::Admitted(ack) => Ok(*ack),
+            AdmitOutcome::Refused(_) => Err(ManagerError::Refused),
+        }
+    }
+    /// `admit`, keeping a `control_refused` answer's receipt and code.
+    pub(crate) async fn admit_or_refused(
+        &self,
+        admission: &Admission,
+        deadline: Instant,
+    ) -> Result<AdmitOutcome> {
         let mut request = self.request("admit", &admission.request_id, Some(&admission.window))?;
         if admission.expected_generation >= INTEGER_LIMIT
             || admission.input_message_id.0.is_nil()
@@ -238,7 +253,10 @@ impl ManagerClient {
         ] {
             request[name] = value;
         }
-        let (value, raw) = self.exchange(request, deadline).await?;
+        let (value, raw) = match self.answer(request, deadline, None).await? {
+            Answer::Accepted(value, raw) => (value, raw),
+            Answer::Refused(refusal) => return Ok(AdmitOutcome::Refused(refusal)),
+        };
         success_fields(&value, Some("fresh_window"))?;
         let receipt = self.window_receipt(&value["receipt"], &admission.window)?;
         let fresh_window = boolean(&value, "fresh_window")?;
@@ -249,11 +267,11 @@ impl ManagerClient {
         {
             return Err(ManagerError::Protocol);
         }
-        Ok(AdmissionAck {
+        Ok(AdmitOutcome::Admitted(Box::new(AdmissionAck {
             receipt,
             fresh_window,
             reply_sha256: format!("{:x}", Sha256::digest(raw)),
-        })
+        })))
     }
     pub async fn drain(
         &self,
@@ -406,6 +424,19 @@ impl ManagerClient {
         deadline: Instant,
         descriptors: Option<&[std::os::fd::OwnedFd]>,
     ) -> Result<(Value, Vec<u8>)> {
+        match self.answer(request, deadline, descriptors).await? {
+            Answer::Accepted(value, raw) => Ok((value, raw)),
+            Answer::Refused(_) => Err(ManagerError::Refused),
+        }
+    }
+    /// One exchange. A `control_refused` answer keeps its parsed refusal;
+    /// `control_unavailable` is `Refused` without one, as before.
+    async fn answer(
+        &self,
+        request: Value,
+        deadline: Instant,
+        descriptors: Option<&[std::os::fd::OwnedFd]>,
+    ) -> Result<Answer> {
         if Instant::now() >= deadline {
             return Err(ManagerError::Deadline);
         }
@@ -460,16 +491,12 @@ impl ManagerClient {
                 return Err(ManagerError::Protocol);
             }
             if value.get("ok") == Some(&Value::Bool(false)) {
-                match value.get("code").and_then(Value::as_str) {
-                    Some("control_refused") if fields(&value, &["ok", "code", "receipt"]) => {
-                        self.receipt(&value["receipt"])?;
-                    }
-                    Some("control_unavailable") if fields(&value, &["ok", "code"]) => {}
-                    _ => return Err(ManagerError::Protocol),
-                }
-                return Err(ManagerError::Refused);
+                return match self.refusal(&value)? {
+                    Some(refusal) => Ok(Answer::Refused(refusal)),
+                    None => Err(ManagerError::Refused),
+                };
             }
-            Ok((value, raw))
+            Ok(Answer::Accepted(value, raw))
         })
         .await
         .map_err(|_| ManagerError::Deadline)?;
