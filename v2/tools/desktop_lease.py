@@ -5,15 +5,18 @@ Uses only the conversation desktop grant (never owner credentials) against
 the V2 API, which forwards to V1's lease broker for the bound V1 thread.
 
   list
-  acquire SLUG --ttl-ms N [--purpose TEXT]
+  acquire SLUG --ttl-ms N [--purpose TEXT] [--system-step]
   heartbeat SLUG --fencing-token T [--extend-ttl-ms N]
   release SLUG --fencing-token T [--reason TEXT]
-  hold SLUG --ttl-ms N [--purpose TEXT] -- COMMAND [ARGS...]
+  hold SLUG --ttl-ms N [--purpose TEXT] [--system-step] -- COMMAND [ARGS...]
 
 `hold` acquires, runs COMMAND with ORKESTR_DESKTOP_SLUG,
 ORKESTR_DESKTOP_THREAD_ID, ORKESTR_DESKTOP_FENCING_TOKEN and
 ORKESTR_DESKTOP_FENCING_VERSION, heartbeats (renewing expiry) while it runs,
 stops it if the lease is lost (exit 75) and always releases afterwards.
+`--system-step` marks a system job's step (a sync or token renewal on the
+chat's desk): V2 refuses it on a reserved desk like any step, but it makes
+or extends no desk reservation for the chat.
 The grant comes from ORKESTR_V2_DESKTOP_GRANT or a private --grant-file and
 is never printed. No browser is launched and no profile is touched here.
 """
@@ -84,10 +87,12 @@ class Client:
     def list(self):
         return self.call('GET', '/desktops')
 
-    def acquire(self, slug, ttl_ms, purpose=None):
+    def acquire(self, slug, ttl_ms, purpose=None, system_step=False):
         body = {'ttl_ms': ttl_ms}
         if purpose:
             body['purpose'] = purpose
+        if system_step:
+            body['system_step'] = True
         return self.call('POST', f'/desktops/{parse.quote(slug)}/acquire', body)
 
     def heartbeat(self, slug, token, extend_ttl_ms=None):
@@ -103,9 +108,10 @@ class Client:
         return self.call('POST', f'/desktops/{parse.quote(slug)}/release', body)
 
 
-def hold(client, slug, ttl_ms, command, purpose=None, interval=None, popen=subprocess.Popen):
+def hold(client, slug, ttl_ms, command, purpose=None, interval=None, popen=subprocess.Popen,
+         system_step=False):
     """Run `command` while holding the lease; returns the exit status."""
-    granted = client.acquire(slug, ttl_ms, purpose)
+    granted = client.acquire(slug, ttl_ms, purpose, system_step=system_step)
     token, lease = granted['fencing_token'], granted['lease']
     env = dict(os.environ, ORKESTR_DESKTOP_SLUG=slug, ORKESTR_DESKTOP_THREAD_ID=lease['v1_thread_id'],
                ORKESTR_DESKTOP_FENCING_TOKEN=token,
@@ -159,6 +165,7 @@ def parser():
     acquire.add_argument('slug')
     acquire.add_argument('--ttl-ms', type=int, required=True)
     acquire.add_argument('--purpose')
+    acquire.add_argument('--system-step', action='store_true')
     beat = commands.add_parser('heartbeat')
     beat.add_argument('slug')
     beat.add_argument('--fencing-token', required=True)
@@ -171,6 +178,7 @@ def parser():
     holder.add_argument('slug')
     holder.add_argument('--ttl-ms', type=int, required=True)
     holder.add_argument('--purpose')
+    holder.add_argument('--system-step', action='store_true')
     holder.add_argument('argv', nargs='*')
     return root
 
@@ -191,10 +199,10 @@ def main(argv=None):
             command = held or args.argv
             if not command:
                 raise LeaseError(0, 'command_required')
-            return hold(client, args.slug, args.ttl_ms, command, args.purpose)
+            return hold(client, args.slug, args.ttl_ms, command, args.purpose, system_step=args.system_step)
         result = {
             'list': lambda: client.list(),
-            'acquire': lambda: client.acquire(args.slug, args.ttl_ms, args.purpose),
+            'acquire': lambda: client.acquire(args.slug, args.ttl_ms, args.purpose, args.system_step),
             'heartbeat': lambda: client.heartbeat(args.slug, args.fencing_token, args.extend_ttl_ms),
             'release': lambda: client.release(args.slug, args.fencing_token, args.reason),
         }[args.action]()
