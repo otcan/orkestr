@@ -18,7 +18,9 @@
 //! Automatic recovery (`Actor::Startup`) runs on the first owner-authenticated
 //! window request after start and only for windows past their hard deadline.
 //! Core needs the owner's browser credential for every mutation, so there is
-//! deliberately no credential-less boot-time path.
+//! deliberately no credential-less boot-time path. Before the deadline the
+//! same pass closes a window whose task in this process ended and reaped
+//! every child (`Actor::Server`), when that abandons nothing.
 //!
 //! A window whose open failed (for example a refused broker bind or Fast
 //! setup) never ran anything of its own. The owner's next message to that
@@ -83,6 +85,7 @@ pub(in crate::window_runtime) fn open_failure_alert(
     let actor = match receipt.actor {
         Actor::Startup => "startup",
         Actor::Owner => "owner",
+        Actor::Server => "server",
     };
     Some(format!(
         "ALERT orkestr-v2-server window_open_failed conversation={} window={} generation={} cause={} actor={} released_inputs={} timer_retries={}",
@@ -216,6 +219,8 @@ impl Controller {
     /// lapsed runs settle and its custody check passes; then Core may close it
     /// at once, but only when that abandons nothing the owner could still
     /// accept. Anything else keeps waiting for the owner or the deadline.
+    /// Nobody asked for it: it is recorded as the server's decision
+    /// (`Actor::Server`, `actor=server`), never as the owner's.
     async fn reconcile_released(
         &self,
         browser: &str,
@@ -246,7 +251,7 @@ impl Controller {
             browser,
             window,
             Decision::AbandonUnaccepted,
-            Actor::Owner,
+            Actor::Server,
             Scope::NothingToAbandon,
         )
         .await

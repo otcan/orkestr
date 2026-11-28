@@ -9,6 +9,7 @@ fn actor(row: &SqliteRow) -> Result<Actor> {
     match row.get::<&str, _>("actor") {
         "startup" => Ok(Actor::Startup),
         "owner" => Ok(Actor::Owner),
+        "server" => Ok(Actor::Server),
         _ => Err(RuntimeStoreError::Unavailable),
     }
 }

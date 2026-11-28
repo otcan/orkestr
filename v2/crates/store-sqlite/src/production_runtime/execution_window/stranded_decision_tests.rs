@@ -1,4 +1,4 @@
-//! Owner decisions, deadline gating and refusal of uncertain turns.
+//! Owner and server decisions, deadline gating and refusal of uncertain turns.
 use super::*;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -116,6 +116,62 @@ async fn startup_waits_for_deadline_but_owner_may_abandon_explicitly() {
         .await,
         1
     );
+}
+
+/// The server's immediate recovery of a window whose process is provably
+/// gone may close it before the deadline. It is recorded and read back as the
+/// server's decision, and it never abandons a proposal the owner could accept.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_server_closes_before_the_deadline_but_never_abandons() {
+    let p = pending().await;
+    let w = &p.w;
+    let fresh = restart(w, false).await;
+    let before = fixtures::snapshot(&fresh).await;
+    assert!(matches!(
+        reconcile(&fresh, w, Decision::AbandonUnaccepted, Actor::Server).await,
+        Err(RuntimeStoreError::Fenced)
+    ));
+    assert_eq!(before, fixtures::snapshot(&fresh).await);
+    for (run, done) in [(&p.fast, &p.fast_done), (&p.deep, &p.deep_done)] {
+        let revision: i64 =
+            sqlx::query_scalar("SELECT revision FROM execution_revisions WHERE conversation_id=?")
+                .bind(w.f.conversation.to_string())
+                .fetch_one(&fresh.pool)
+                .await
+                .unwrap();
+        fresh
+            .accept_execution_authenticated(
+                &w.browser_credential,
+                &w.f.conversation,
+                &ExecutionAcceptanceRequest {
+                    run_id: run.run.run_id.clone(),
+                    completion_event_id: done.clone(),
+                    expected_revision: revision,
+                    request_key: format!("owner-accept-{}", run.run.run_id),
+                },
+            )
+            .await
+            .unwrap();
+    }
+    let receipt = reconcile(&fresh, w, Decision::AbandonUnaccepted, Actor::Server)
+        .await
+        .unwrap();
+    assert_eq!(receipt.actor, Actor::Server);
+    assert_eq!(receipt.outcome, Outcome::Accepted);
+    assert!(receipt.abandoned_run_ids.is_empty());
+    assert_eq!(
+        count(
+            &fresh,
+            "SELECT count(*) FROM execution_window_reconciliations WHERE actor='server' AND hard_deadline_passed=0"
+        )
+        .await,
+        1
+    );
+    let replay = reconcile(&fresh, w, Decision::AbandonUnaccepted, Actor::Server)
+        .await
+        .unwrap();
+    assert!(replay.duplicate);
+    assert_eq!(replay.actor, Actor::Server);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

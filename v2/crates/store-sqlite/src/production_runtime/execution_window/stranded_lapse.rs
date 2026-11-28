@@ -61,8 +61,8 @@ impl Store {
         }
         let clock = now(&mut tx).await?;
         // Automatically only once the window could never legitimately produce
-        // more work. The owner side (an explicit decision, or Runtime after
-        // its task ended and every original child was reaped and the manager
+        // more work. The owner (an explicit decision) or the server (Runtime
+        // after its task ended, every original child was reaped and the manager
         // closed the window's egress) may settle earlier: each run's own lease
         // must still have passed, so no live child can still answer.
         if actor == Actor::Startup && w.get::<i64, _>("expires_at_ms") > clock {
