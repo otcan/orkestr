@@ -55,9 +55,15 @@ mod tests {
     fn a_definite_refusal_fails_only_that_delivery() {
         assert_eq!(released(Ok(Ok(()))), Ok(Released::Authorized));
         // 2026-11-27: Core's result fence refused before the frame was sent.
-        for refused in [ResultRefused::Core, ResultRefused::Manager] {
+        for refused in [
+            ResultRefused::Core,
+            ResultRefused::Manager { reason: None },
+            ResultRefused::Manager {
+                reason: Some("managed_result_run_closed".into()),
+            },
+        ] {
             assert_eq!(
-                released(Ok(Err(refused))),
+                released(Ok(Err(refused.clone()))),
                 Ok(Released::Undeliverable(refused))
             );
         }

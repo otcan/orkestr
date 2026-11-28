@@ -305,8 +305,9 @@ impl ManagedTools {
                 result_release::released(release)?
             {
                 eprintln!(
-                    "owned execution managed result undeliverable: {}; run continues",
-                    refused.code()
+                    "owned execution managed result undeliverable: {} reason={}; run continues",
+                    refused.code(),
+                    refused.reason().unwrap_or("none")
                 );
             }
         }

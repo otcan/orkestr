@@ -18,33 +18,67 @@ use orkestr_v2_store_sqlite::{CompletedManagedOperation, Store};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Who definitely refused a result release.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ResultRefused {
     /// Core refused before the frame was written: the workspace preflight or
     /// the result fence (for example a workspace handoff that expired while
     /// the release waited for Core's writer). The manager never saw it.
     Core,
-    /// The manager answered `control_refused`.
-    Manager,
+    /// The manager answered `control_refused`, with its static refusal code
+    /// (for example `managed_result_run_closed`) when it sends one.
+    Manager { reason: Option<String> },
 }
 
 impl ResultRefused {
     /// Static code for the operator log; never request values.
-    pub(crate) fn code(self) -> &'static str {
+    pub(crate) fn code(&self) -> &'static str {
         match self {
             Self::Core => "core_refused",
-            Self::Manager => "manager_refused",
+            Self::Manager { .. } => "manager_refused",
+        }
+    }
+    /// The manager's closed refusal code, if it sent one.
+    pub(crate) fn reason(&self) -> Option<&str> {
+        match self {
+            Self::Core => None,
+            Self::Manager { reason } => reason.as_deref(),
         }
     }
 }
 
-/// The manager's refusal answer, in the exact shape `exchange` accepts. Its
-/// `control_unavailable` answer (an I/O error, possibly after a write) is not
-/// a refusal and stays a protocol error here.
-fn refused_reply(value: &Value) -> bool {
-    value.get("ok") == Some(&Value::Bool(false))
-        && value.get("code").and_then(Value::as_str) == Some("control_refused")
-        && fields(value, &["ok", "code", "receipt"])
+/// The manager's refusal answer, in the shapes `exchange` accepts: with or
+/// without its static refusal code. A malformed code is dropped, never turned
+/// into a protocol error; any other field is. Its `control_unavailable` answer
+/// (an I/O error, possibly after a write) is not a refusal and stays a protocol
+/// error here.
+fn refused_reply(value: &Value) -> Option<ResultRefused> {
+    if value.get("ok") != Some(&Value::Bool(false))
+        || value.get("code").and_then(Value::as_str) != Some("control_refused")
+    {
+        return None;
+    }
+    let reason = if fields(value, &["ok", "code", "receipt"]) {
+        None
+    } else if fields(value, &["ok", "code", "receipt", "reason"]) {
+        closed_code(&value["reason"])
+    } else {
+        return None;
+    };
+    Some(ResultRefused::Manager { reason })
+}
+
+/// A refusal code is a closed static token (the manager sends nothing else).
+fn closed_code(value: &Value) -> Option<String> {
+    value
+        .as_str()
+        .filter(|code| {
+            !code.is_empty()
+                && code.len() <= 64
+                && code
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+        })
+        .map(str::to_owned)
 }
 
 impl ManagerClient {
@@ -106,9 +140,9 @@ impl ManagerClient {
             Err(_) if core_refused.load(Ordering::SeqCst) => return Ok(Err(ResultRefused::Core)),
             exchanged => exchanged?,
         };
-        if refused_reply(&value) {
+        if let Some(refused) = refused_reply(&value) {
             self.receipt(&value["receipt"])?;
-            return Ok(Err(ResultRefused::Manager));
+            return Ok(Err(refused));
         }
         success_fields(&value, Some("managed_result"))?;
         self.window_receipt(&value["receipt"], window)?;
@@ -134,27 +168,66 @@ mod tests {
                "generation": 0, "state": "idle"})
     }
 
+    fn refused(reason: Option<&str>) -> Option<ResultRefused> {
+        Some(ResultRefused::Manager {
+            reason: reason.map(str::to_owned),
+        })
+    }
+
     #[test]
-    fn only_the_managers_refusal_answer_counts_as_its_refusal() {
-        assert!(refused_reply(
-            &json!({"ok": false, "code": "control_refused", "receipt": receipt()})
-        ));
+    fn a_managers_refusal_counts_with_or_without_its_code() {
+        assert_eq!(
+            refused_reply(&json!({"ok": false, "code": "control_refused", "receipt": receipt()})),
+            refused(None)
+        );
+        assert_eq!(
+            refused_reply(
+                &json!({"ok": false, "code": "control_refused", "receipt": receipt(),
+                                  "reason": "managed_result_run_closed"})
+            ),
+            refused(Some("managed_result_run_closed"))
+        );
+        // A malformed code is dropped; the refusal stays definite.
+        for reason in [
+            json!(""),
+            json!("Managed_Result"),
+            json!("managed-result"),
+            json!("x".repeat(65)),
+            json!(7),
+            json!(null),
+        ] {
+            assert_eq!(
+                refused_reply(&json!({"ok": false, "code": "control_refused",
+                                      "receipt": receipt(), "reason": reason})),
+                refused(None),
+                "{reason}"
+            );
+        }
+    }
+
+    #[test]
+    fn nothing_else_counts_as_the_managers_refusal() {
         for other in [
             // An I/O error at the manager may follow its authorization write.
             json!({"ok": false, "code": "control_unavailable"}),
             json!({"ok": false, "code": "control_unavailable", "receipt": receipt()}),
             json!({"ok": false, "code": "control_refused"}),
-            json!({"ok": false, "code": "control_refused", "receipt": receipt(), "reason": "x"}),
+            json!({"ok": false, "code": "control_refused", "receipt": receipt(), "detail": "x"}),
+            json!({"ok": false, "code": "control_refused", "receipt": receipt(),
+                   "reason": "x", "detail": "x"}),
             json!({"ok": true, "code": "control_refused", "receipt": receipt()}),
             json!({"ok": true, "receipt": receipt(), "managed_result": {}}),
         ] {
-            assert!(!refused_reply(&other), "{other}");
+            assert_eq!(refused_reply(&other), None, "{other}");
         }
     }
 
     #[test]
     fn refusal_codes_are_static_and_distinct() {
         assert_eq!(ResultRefused::Core.code(), "core_refused");
-        assert_eq!(ResultRefused::Manager.code(), "manager_refused");
+        assert_eq!(ResultRefused::Core.reason(), None);
+        let manager = refused(Some("managed_result_scope")).unwrap();
+        assert_eq!(manager.code(), "manager_refused");
+        assert_eq!(manager.reason(), Some("managed_result_scope"));
     }
 }
