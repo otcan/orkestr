@@ -126,10 +126,15 @@ async fn child() {
 async fn seed(root: &Path, state: AppState, active: bool) {
     let mut h = headers();
     h.insert("x-orkestr-bootstrap", BOOTSTRAP.parse().unwrap());
-    let response = auth::setup(State(state.clone()), h, Ok(Json(credentials())))
-        .await
-        .unwrap_or_else(|_| panic!("ordinary setup refused"))
-        .into_response();
+    let response = auth::setup(
+        State(state.clone()),
+        Default::default(),
+        h,
+        Ok(Json(credentials())),
+    )
+    .await
+    .unwrap_or_else(|_| panic!("ordinary setup refused"))
+    .into_response();
     let setup: SetupResponse =
         serde_json::from_slice(&to_bytes(response.into_body(), 8192).await.unwrap()).unwrap();
     let conv = setup.global_conversation_id;

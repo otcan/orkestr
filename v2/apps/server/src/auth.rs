@@ -1,4 +1,5 @@
 use super::*;
+use crate::auth_limits::{Key, Peer};
 use argon2::{
     password_hash::{rand_core::OsRng, PasswordHash, SaltString},
     Argon2, PasswordHasher, PasswordVerifier,
@@ -6,21 +7,6 @@ use argon2::{
 use axum::extract::rejection::JsonRejection;
 use sha2::{Digest, Sha256};
 
-pub(crate) async fn rate_limit(state: &AppState) -> Result<(), Error> {
-    let mut window = state.auth_window.lock().await;
-    if window.0.elapsed() >= Duration::from_secs(60) {
-        *window = (Instant::now(), 0);
-    }
-    window.1 += 1;
-    if window.1 > 10 {
-        return Err(Error(
-            StatusCode::TOO_MANY_REQUESTS,
-            "rate_limited",
-            "Authentication rate limit exceeded",
-        ));
-    }
-    Ok(())
-}
 fn credentials(body: Result<Json<Credentials>, JsonRejection>) -> Result<Credentials, Error> {
     let Json(c) = body.map_err(|_| {
         Error(
@@ -42,7 +28,14 @@ fn credentials(body: Result<Json<Credentials>, JsonRejection>) -> Result<Credent
     }
     Ok(c)
 }
-fn bootstrap(state: &AppState, headers: &HeaderMap) -> Result<(), Error> {
+/// Checks the bootstrap token; wrong tokens count against their source.
+fn bootstrap(state: &AppState, peer: Peer, headers: &HeaderMap) -> Result<(), Error> {
+    let attempt = state.auth_limits.begin(&[Key::source(peer), Key::Server])?;
+    bootstrap_token(state, headers)?;
+    attempt.cleared();
+    Ok(())
+}
+fn bootstrap_token(state: &AppState, headers: &HeaderMap) -> Result<(), Error> {
     let supplied = headers
         .get("x-orkestr-bootstrap")
         .and_then(|s| s.to_str().ok())
@@ -64,10 +57,10 @@ fn bootstrap(state: &AppState, headers: &HeaderMap) -> Result<(), Error> {
 /// token nothing is disclosed.
 pub async fn setup_status(
     State(state): State<AppState>,
+    peer: Peer,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, Error> {
-    rate_limit(&state).await?;
-    bootstrap(&state, &headers)?;
+    bootstrap(&state, peer, &headers)?;
     let configured = state.store.owner_configured().await?;
     Ok((
         [(header::CACHE_CONTROL, "no-store")],
@@ -76,11 +69,11 @@ pub async fn setup_status(
 }
 pub async fn setup(
     State(state): State<AppState>,
+    peer: Peer,
     headers: HeaderMap,
     body: Result<Json<Credentials>, JsonRejection>,
 ) -> Result<impl IntoResponse, Error> {
-    rate_limit(&state).await?;
-    bootstrap(&state, &headers)?;
+    bootstrap(&state, peer, &headers)?;
     let c = credentials(body)?;
     let hash = tokio::task::spawn_blocking(move || {
         Argon2::default()
@@ -100,11 +93,12 @@ pub async fn setup(
 }
 pub async fn session(
     State(state): State<AppState>,
+    peer: Peer,
     headers: HeaderMap,
     body: Result<Json<Credentials>, JsonRejection>,
 ) -> Result<Json<SessionResponse>, Error> {
     machine_request(&headers)?;
-    let (owner, verified_hash) = verify_credentials(&state, body).await?;
+    let (owner, verified_hash) = verify_credentials(&state, peer, body).await?;
     let token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
     if !state
         .store
@@ -121,20 +115,32 @@ pub async fn session(
     }))
 }
 
+/// Verifies an owner username and password. Attempts count against the
+/// presented username whether or not it exists, and against their source.
 pub(crate) async fn verify_credentials(
     state: &AppState,
+    peer: Peer,
     body: Result<Json<Credentials>, JsonRejection>,
 ) -> Result<(OwnerId, String), Error> {
-    rate_limit(state).await?;
     let c = credentials(body)?;
-    let record = state.store.credentials(&c.username).await?;
+    let attempt =
+        state
+            .auth_limits
+            .begin(&[Key::username(&c.username), Key::source(peer), Key::Server])?;
+    let record = match state.store.credentials(&c.username).await {
+        Ok(record) => record,
+        Err(error) => {
+            attempt.cleared();
+            return Err(error.into());
+        }
+    };
     // Unknown usernames still pay a password verification cost.
     let fallback = "$argon2id$v=19$m=19456,t=2,p=1$c3ludGhldGljLXNhbHQ$39k+yFfupMCp3G7EwU7iCnDF+J9AR+esb2azcD3zSxI";
     let hash = record
         .as_ref()
         .map(|r| r.1.clone())
         .unwrap_or_else(|| fallback.into());
-    let valid = tokio::task::spawn_blocking(move || {
+    let Ok(valid) = tokio::task::spawn_blocking(move || {
         PasswordHash::new(&hash).ok().is_some_and(|h| {
             Argon2::default()
                 .verify_password(c.password.as_bytes(), &h)
@@ -142,11 +148,14 @@ pub(crate) async fn verify_credentials(
         })
     })
     .await
-    .map_err(|_| Error::from(StoreError::Unavailable))?;
-    if !valid {
-        return Err(unauthorized());
-    }
-    record.ok_or_else(unauthorized)
+    else {
+        attempt.cleared();
+        return Err(StoreError::Unavailable.into());
+    };
+    // A wrong password or an unknown username drops the attempt: a failure.
+    let record = record.filter(|_| valid).ok_or_else(unauthorized)?;
+    attempt.cleared();
+    Ok(record)
 }
 
 #[cfg(test)]
@@ -167,7 +176,7 @@ mod setup_status_tests {
             if !value.is_empty() {
                 headers.insert("x-orkestr-bootstrap", value.parse().unwrap());
             }
-            setup_status(State(state.clone()), headers)
+            setup_status(State(state.clone()), Peer::default(), headers)
         };
         assert!(status("").await.is_err());
         assert!(status("synthetic-wrong-token-of-sufficient-length")

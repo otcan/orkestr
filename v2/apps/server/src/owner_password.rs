@@ -29,6 +29,7 @@ pub async fn status(
 
 pub async fn change(
     State(state): State<AppState>,
+    peer: auth_limits::Peer,
     headers: HeaderMap,
     Json(body): Json<ChangePassword>,
 ) -> Result<impl IntoResponse, Error> {
@@ -57,6 +58,7 @@ pub async fn change(
     }
     let (verified, old_hash) = auth::verify_credentials(
         &state,
+        peer,
         Ok(Json(Credentials {
             username: body.username,
             password: body.current_password,
@@ -119,6 +121,7 @@ mod tests {
         .unwrap();
         let login = browser::login(
             State(state.clone()),
+            auth_limits::Peer::default(),
             HeaderMap::new(),
             Ok(Json(Credentials {
                 username: "synthetic-owner".into(),
@@ -148,23 +151,34 @@ mod tests {
                 new_password: "synthetic-new-password".into(),
             })
         };
-        let missing_csrf = change(State(state.clone()), headers.clone(), body(old))
-            .await
-            .err()
-            .unwrap();
+        let missing_csrf = change(
+            State(state.clone()),
+            auth_limits::Peer::default(),
+            headers.clone(),
+            body(old),
+        )
+        .await
+        .err()
+        .unwrap();
         assert_eq!(missing_csrf.0, StatusCode::FORBIDDEN);
         headers.insert(
             "x-orkestr-csrf",
             projection["csrf_token"].as_str().unwrap().parse().unwrap(),
         );
-        let migration = change(State(state.clone()), headers.clone(), body(old))
-            .await
-            .err()
-            .unwrap();
+        let migration = change(
+            State(state.clone()),
+            auth_limits::Peer::default(),
+            headers.clone(),
+            body(old),
+        )
+        .await
+        .err()
+        .unwrap();
         assert_eq!(migration.1, "automation_credential_migration_required");
         let state = state.with_password_rotation_ready();
         let wrong = change(
             State(state.clone()),
+            auth_limits::Peer::default(),
             headers.clone(),
             body("synthetic-wrong-password"),
         )
@@ -177,15 +191,26 @@ mod tests {
             header::AUTHORIZATION,
             format!("Bearer {}", "a".repeat(64)).parse().unwrap(),
         );
-        assert!(change(State(state.clone()), bearer, body(old))
-            .await
-            .is_err());
-        assert!(change(State(state.clone()), headers.clone(), body(old))
-            .await
-            .is_ok());
+        assert!(change(
+            State(state.clone()),
+            auth_limits::Peer::default(),
+            bearer,
+            body(old)
+        )
+        .await
+        .is_err());
+        assert!(change(
+            State(state.clone()),
+            auth_limits::Peer::default(),
+            headers.clone(),
+            body(old)
+        )
+        .await
+        .is_ok());
         assert!(browser::owner(&state, &headers).await.is_err());
         assert!(auth::verify_credentials(
             &state,
+            auth_limits::Peer::default(),
             Ok(Json(Credentials {
                 username: "synthetic-owner".into(),
                 password: old.into()
@@ -195,6 +220,7 @@ mod tests {
         .is_err());
         assert!(auth::verify_credentials(
             &state,
+            auth_limits::Peer::default(),
             Ok(Json(Credentials {
                 username: "synthetic-owner".into(),
                 password: "synthetic-new-password".into()

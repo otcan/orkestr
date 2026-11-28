@@ -23,9 +23,14 @@ pub(super) async fn login(state: &AppState) -> HeaderMap {
     assert!(browser::guard(state, &Method::POST, SESSION, &h)
         .await
         .is_ok());
-    let response = browser::login(State(state.clone()), h.clone(), Ok(Json(credentials())))
-        .await
-        .unwrap_or_else(|_| panic!("ordinary login refused"));
+    let response = browser::login(
+        State(state.clone()),
+        Default::default(),
+        h.clone(),
+        Ok(Json(credentials())),
+    )
+    .await
+    .unwrap_or_else(|_| panic!("ordinary login refused"));
     let cookie = response
         .headers()
         .get(header::SET_COOKIE)
