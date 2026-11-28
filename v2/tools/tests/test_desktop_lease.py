@@ -159,8 +159,8 @@ class DesktopLeaseClientTests(unittest.TestCase):
 
     def test_hold_accepts_the_documented_and_options_first_orders(self):
         seen = []
-        def fake_hold(client, slug, ttl_ms, command, purpose=None):
-            seen.append((slug, ttl_ms, command, purpose))
+        def fake_hold(client, slug, ttl_ms, command, purpose=None, system_step=False):
+            seen.append((slug, ttl_ms, command, purpose, system_step))
             return 0
         base = ['--v2-url', self.url, '--conversation', CONVERSATION, 'hold']
         with unittest.mock.patch.object(LEASE, 'hold', fake_hold), \
@@ -168,7 +168,35 @@ class DesktopLeaseClientTests(unittest.TestCase):
             for argv in (['sales-nav', '--ttl-ms', '600000', '--purpose', 'x', '--', 'cmd', '--flag'],
                          ['--ttl-ms', '600000', '--purpose', 'x', 'sales-nav', '--', 'cmd', '--flag']):
                 self.assertEqual(LEASE.main(base + argv), 0)
-        self.assertEqual(seen, [('sales-nav', 600000, ['cmd', '--flag'], 'x')] * 2)
+        self.assertEqual(seen, [('sales-nav', 600000, ['cmd', '--flag'], 'x', False)] * 2)
+        with unittest.mock.patch.object(LEASE, 'hold', fake_hold), \
+                unittest.mock.patch.dict(os.environ, {'ORKESTR_V2_DESKTOP_GRANT': GRANT}):
+            self.assertEqual(LEASE.main(base + ['sales-nav', '--ttl-ms', '600000', '--system-step', '--', 'cmd']), 0)
+        self.assertEqual(seen[-1], ('sales-nav', 600000, ['cmd'], None, True))
+
+    def test_a_system_step_says_so_only_when_asked(self):
+        """A sync or renewal on a chat's desk: V2 refuses it on a reserved desk
+        like any step, but it makes no reservation for the chat."""
+
+        class Child:
+            def __init__(self, command, env):
+                pass
+
+            def wait(self):
+                return 0
+
+            def terminate(self):
+                pass
+
+            def send_signal(self, _):
+                pass
+
+        self.assertEqual(LEASE.hold(self.client, 'sales-nav', 600000, ['sync'], purpose='sync',
+                                    interval=60, popen=Child, system_step=True), 0)
+        self.client.acquire('sales-nav', 600000, 'step')
+        acquires = [c[2] for c in FakeV2.calls if c[1].endswith('/acquire')]
+        self.assertEqual(acquires, [{'ttl_ms': 600000, 'purpose': 'sync', 'system_step': True},
+                                    {'ttl_ms': 600000, 'purpose': 'step'}])
 
 
 if __name__ == '__main__':
