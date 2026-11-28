@@ -153,7 +153,7 @@ acquire too: the row is not written and the V1 lease is released.
 | --- | --- | --- |
 | `task` | every recorded acquire of the chat, until 10 minutes past the lease's expiry but at most 120 minutes ahead; `reserve` (default 30, at most 120 minutes) | only that chat |
 | `owner_handoff` | the chat's `handoff` (default 30, at most 120 minutes, or `until_ms`, for example a sign-in link's expiry) | no chat, the handing chat included (`desk_handed_to_owner`), until its `handback` (the desk is then its task for 10 minutes) or the end time |
-| `owner_viewer` | the owner's viewing link: Link on Virtual Desks, or Open in a chat, until the link expires (60 minutes when V1 states no expiry, at most 120) or the owner ends viewing | only the chat that holds the desk's task. Opened from a chat, that chat gets the task for the window unless another chat already holds the desk |
+| `owner_viewer` | the owner's viewing link: Link on Virtual Desks, or Open in a chat, until the link expires (60 minutes when V1 states no expiry, at most 120) or the owner ends viewing | only the chat that holds the desk's task. Opened from a chat, that chat gets the task for the window (kept like an explicit reserve, so its steps' releases do not cut it back) unless another chat already holds the desk |
 
 - **Limits.** A desk has at most one claim (`task` or `owner_handoff`) and at
   most one `owner_viewer` window. A reservation ends at its time; nothing has
@@ -205,7 +205,9 @@ Owner only:
 - `DELETE /api/v2/desktops/{slug}/reservation` frees a desk: the chat's claim
   (task or handoff) ends; the owner's own viewing stays.
 - `DELETE /api/v2/desktops/{slug}/viewing` ends the owner's viewing window and
-  revokes the V1 link it recorded (`link_revoked`).
+  revokes the V1 link it recorded. `link_revoked` is false when the link
+  could not be revoked or none was recorded; the link then works until it
+  expires.
 - On Virtual Desks they are "Free desk" and "End viewing".
 - `GET /api/v2/desktops` adds `reservation` and `owner_viewer` (with the
   holding conversation's id) to each desk, so a desk a chat keeps between

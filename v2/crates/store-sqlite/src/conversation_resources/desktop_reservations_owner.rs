@@ -129,11 +129,16 @@ impl Store {
         if let Some(conversation) = watching {
             owned(&mut tx, owner, conversation).await?;
             let found = desk_reservations(&mut tx, owner, slug, conversation, now).await?;
+            // The window's end counts as an explicit reserve of the chat's
+            // task, so the release of its next step does not cut it back to
+            // 10 minutes while the owner still watches.
             let task = match &found.claim {
-                None => Some((now, until, None)),
-                Some(c) if c.mine && c.kind == DesktopReservationKind::Task => {
-                    Some((c.since_ms, c.until_ms.max(until), c.reserved_until_ms))
-                }
+                None => Some((now, until, Some(until))),
+                Some(c) if c.mine && c.kind == DesktopReservationKind::Task => Some((
+                    c.since_ms,
+                    c.until_ms.max(until),
+                    Some(c.reserved_until_ms.unwrap_or(0).max(until)),
+                )),
                 Some(_) => None,
             };
             if let Some((since_ms, until_ms, reserved_until_ms)) = task {

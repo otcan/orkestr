@@ -104,7 +104,7 @@ pub fn DesktopResourceRow(
                                     if !session_scope.read().is_current(owner) {return;}
                                     busy.set(false);
                                     match result {
-                                        Ok(value) if value["link_revoked"] == false => {status.set("Viewing ended, but the desk link could not be revoked; it works until it expires.".into());onchanged.call(());}
+                                        Ok(value) if value["link_revoked"] == false => {status.set("Viewing ended, but the desk link was not revoked (it could not be, or none was recorded); it works until it expires.".into());onchanged.call(());}
                                         Ok(_) => {status.set("Viewing ended. The desk link no longer works; chats may take this desk again.".into());onchanged.call(());}
                                         Err(error) if error.status == 401 => onexpired.call(()),
                                         Err(error) => status.set(error.message),

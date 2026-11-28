@@ -619,7 +619,21 @@ async fn while_the_owner_views_a_desk_only_the_chat_holding_its_task_goes_on() {
         verdict(&case, &second, "desk-a").await.verdict,
         DeskVerdict::DeskBusy
     );
+    // Its next step's release keeps the task to the window's end: the chat
+    // goes on working while the owner still watches.
     step(&case, &first, "desk-a", 6).await.unwrap();
+    let after = verdict(&case, &first, "desk-a").await;
+    assert_eq!(after.verdict, DeskVerdict::Allowed);
+    let task = after.reservation.unwrap();
+    assert_eq!(
+        (task.kind, task.until_ms, task.reserved_until_ms),
+        (
+            DesktopReservationKind::Task,
+            window.until_ms,
+            Some(window.until_ms)
+        )
+    );
+    step(&case, &first, "desk-a", 7).await.unwrap();
     case.store
         .record_owner_viewer(t, o, "desk-a", (None, None), Some(&second.id))
         .await

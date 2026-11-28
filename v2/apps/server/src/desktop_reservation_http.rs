@@ -239,7 +239,8 @@ async fn clear(
 
 /// The owner ends viewing a desk: the viewing window ends now and the V1 link
 /// it recorded is revoked, so chats may take the desk again and the link no
-/// longer opens it. `link_revoked` is null when no link was recorded.
+/// longer opens it. `link_revoked` is false when the link could not be
+/// revoked or no link was recorded (the link then works until it expires).
 async fn end_viewing(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -255,7 +256,7 @@ async fn end_viewing(
         .await
         .map_err(failure)?;
     let link_revoked = match (share, state.desktop_broker.as_deref()) {
-        (Some(id), Some(broker)) => Some(matches!(
+        (Some(id), Some(broker)) => matches!(
             broker
                 .write_within(
                     std::time::Duration::from_secs(8),
@@ -267,9 +268,8 @@ async fn end_viewing(
                 .await,
             // Already gone at V1 counts as revoked.
             Ok((200 | 201 | 404, _))
-        )),
-        (Some(_), None) => Some(false),
-        (None, _) => None,
+        ),
+        _ => false,
     };
     Ok(Json(json!({"desk": slug, "ended": ended, "link_revoked": link_revoked})).into_response())
 }

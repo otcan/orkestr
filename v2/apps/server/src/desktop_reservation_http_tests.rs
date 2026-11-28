@@ -468,6 +468,16 @@ async fn the_pa4_collision_is_refused_at_the_acquire_for_every_tool() {
         .calls
         .iter()
         .any(|call| call == "POST /api/desktop-shares/share-1/revoke"));
+    // Nothing left to end: no link was revoked, and the answer says so.
+    let (status, again) = send(&c.state, "DELETE", viewing, &[&c.auth()], "").await;
+    assert_eq!(
+        (
+            status,
+            again["ended"].as_bool(),
+            again["link_revoked"].as_bool()
+        ),
+        (200, Some(false), Some(false))
+    );
     assert_eq!(step(&c, &b, "pa-4").await.0, 201);
     c.finish().await;
 }
