@@ -29,11 +29,16 @@
 //! window (2026-11-27: a timer firing released by a turn reconciliation was
 //! refused as `input_reused`, and its conversation stayed blocked until the
 //! operator reconciled it). `close_refused_admission` commits that failed
-//! open at once; a deadline or an unavailable manager stays uncertain.
+//! open at once, recorded as the server's decision, but only for a code about
+//! the request itself (`manager_admission.rs`); a refusal that may clear by
+//! itself (`window_capacity`), a deadline or an unavailable manager stays
+//! uncertain.
 use super::super::Controller;
 use super::{Actor, Decision, Scope};
 use crate::window_runtime::conversation::ConversationController;
-use crate::window_runtime::manager_client::{ManagerReceipt, TerminalOutcome, Window, WindowState};
+use crate::window_runtime::manager_client::{
+    ManagerReceipt, RefusedAdmission, TerminalOutcome, Window, WindowState,
+};
 use orkestr_v2_contracts::{
     ConversationId, ExecutionWindowOpenFailureCause as Cause, ExecutionWindowState,
     ExecutionWindowStatus, ExecutionWindowTerminalOutcome as Outcome,
@@ -230,12 +235,13 @@ impl Controller {
         }
     }
 
-    /// The manager refused this conversation's opening with proof that it
-    /// never admitted the window (kept by `entry`): close Core's opening as
-    /// a failed open now, so the conversation does not stay blocked until
-    /// the owner or the hard deadline decides. Its input is released (a
-    /// timer firing gets its one retry) exactly as on every failed open. Any
-    /// doubt leaves the window to the ordinary paths. The caller holds
+    /// The manager refused this conversation's opening for good, with proof
+    /// that it never admitted the window (kept by `entry`; only a code about
+    /// the request itself counts): close Core's opening as a failed open now,
+    /// as the server's decision, so the conversation does not stay blocked
+    /// until the owner or the hard deadline decides. Its input is released
+    /// (a timer firing gets its one retry) exactly as on every failed open.
+    /// Any doubt leaves the window to the ordinary paths. The caller holds
     /// `opening`.
     pub(in crate::window_runtime) async fn close_refused_admission(
         &self,
@@ -243,7 +249,10 @@ impl Controller {
         conversation: &ConversationId,
         entry: &ConversationController,
     ) {
-        let Some(refused) = entry.take_refused_admission() else {
+        let Some(refused) = entry
+            .take_refused_admission()
+            .filter(RefusedAdmission::is_definite)
+        else {
             return;
         };
         if self.live_owner(conversation).await {
@@ -275,7 +284,8 @@ impl Controller {
                 browser,
                 &status,
                 Decision::AbandonUnaccepted,
-                Actor::Owner,
+                // Nobody asked for it: the server's decision, never the owner's.
+                Actor::Server,
                 Scope::FailedOpenOnly,
                 Some(&refused.refusal.receipt),
             )

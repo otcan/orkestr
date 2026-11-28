@@ -119,6 +119,52 @@ fn only_an_excluding_receipt_proves_the_window_was_never_admitted() {
             reason: Some("input_reused".into()),
         },
     };
-    assert!(refused(latest("retired")).proves_unadmitted());
-    assert!(!refused(latest("reconciliation")).proves_unadmitted());
+    assert!(refused(latest("retired")).is_definite());
+    assert!(!refused(latest("reconciliation")).is_definite());
+}
+
+#[test]
+fn only_a_code_about_the_request_itself_is_definite() {
+    // Review of 2026-11-28: `window_capacity` clears by itself. Failing the
+    // open at once would spend a timer firing's one retry while the manager
+    // is still full, so it keeps the uncertain path like any passing cause.
+    let client = client();
+    let refused = |reason: Option<&str>| RefusedAdmission {
+        window: opening(),
+        refusal: Refusal {
+            receipt: client.receipt(&latest("retired")).unwrap(),
+            reason: reason.map(str::to_owned),
+        },
+    };
+    for code in [
+        "input_reused",
+        "idempotency_conflict",
+        "window_generation",
+        "window_predecessor",
+    ] {
+        assert!(refused(Some(code)).is_definite(), "{code}");
+    }
+    for code in [
+        "window_capacity",
+        "package_inventory",
+        "manager_custody_fault",
+        "qualification_changed",
+        "window_deadlines",
+        "window_reused",
+        "scope",
+        "a_future_code",
+    ] {
+        assert!(!refused(Some(code)).is_definite(), "{code}");
+    }
+    // An older manager sends no code: nothing is proven.
+    assert!(!refused(None).is_definite());
+    // A definite code with a receipt that does not exclude the window.
+    let live = RefusedAdmission {
+        window: opening(),
+        refusal: Refusal {
+            receipt: client.receipt(&latest("active")).unwrap(),
+            reason: Some("input_reused".into()),
+        },
+    };
+    assert!(!live.is_definite());
 }

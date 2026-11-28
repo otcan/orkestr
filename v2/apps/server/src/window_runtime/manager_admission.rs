@@ -36,11 +36,32 @@ pub(crate) struct RefusedAdmission {
     pub window: Window,
     pub refusal: Refusal,
 }
+/// Admission refusal codes about the request itself: the manager refuses this
+/// exact admission again however long it waits, so waiting cannot help.
+/// Every other code may clear by itself (`window_capacity`,
+/// `package_inventory`, `manager_custody_fault`, a qualification hold, the
+/// manager's clock in `window_deadlines`), names a record of this window
+/// (`window_reused`), or is a malformed request; a refusal without a code
+/// (an older manager) proves nothing either. Those keep the uncertain path:
+/// failing the open at once would spend a timer firing's one retry on a
+/// cause that may already have cleared.
+const DEFINITE_CODES: [&str; 4] = [
+    "input_reused",
+    "idempotency_conflict",
+    "window_generation",
+    "window_predecessor",
+];
+
 impl RefusedAdmission {
-    /// The refusal's receipt excludes this window: the manager holds nothing
-    /// of it (no admission, budget or custody).
-    pub(crate) fn proves_unadmitted(&self) -> bool {
-        self.refusal.receipt.never_admitted(&self.window)
+    /// The manager holds nothing of this window (the refusal's receipt
+    /// excludes it: no admission, budget or custody) and would refuse it
+    /// again: its code names the request itself, never a passing condition.
+    pub(crate) fn is_definite(&self) -> bool {
+        self.refusal
+            .reason
+            .as_deref()
+            .is_some_and(|code| DEFINITE_CODES.contains(&code))
+            && self.refusal.receipt.never_admitted(&self.window)
     }
 }
 

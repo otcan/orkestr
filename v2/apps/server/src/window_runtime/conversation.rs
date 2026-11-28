@@ -39,8 +39,9 @@ pub(super) struct ConversationController {
     /// the controller closes it as a failed open.
     refused: std::sync::Mutex<Option<RefusedAdmission>>,
 }
-/// The manager refused the opening and its receipt proves it never admitted
-/// the window. Everything else about an admission failure stays uncertain.
+/// The manager refused the opening for good (a code about the request itself)
+/// and its receipt proves it never admitted the window. Everything else about
+/// an admission failure stays uncertain.
 pub(super) const ADMISSION_REFUSED: &str = "manager admission refused";
 /// Spacing of immediate reconciliation attempts for one released window.
 const RELEASED_RETRY: Duration = Duration::from_secs(10);
@@ -410,8 +411,9 @@ impl ConversationController {
                     refusal,
                 };
                 // A receipt naming this (or a later, or a live) window may
-                // follow a committed admission: that stays uncertain.
-                if !refused.proves_unadmitted() {
+                // follow a committed admission, and a refusal such as
+                // `window_capacity` may clear by itself: both stay uncertain.
+                if !refused.is_definite() {
                     return Err("manager admission uncertain");
                 }
                 if let Ok(mut slot) = self.refused.lock() {
